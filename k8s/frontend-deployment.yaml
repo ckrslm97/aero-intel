@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aerointel-frontend
+  namespace: aerointel
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: aerointel-frontend
+  template:
+    metadata:
+      labels:
+        app: aerointel-frontend
+    spec:
+      containers:
+        - name: frontend
+          # NEXT_PUBLIC_API_URL is baked in at image build time (see
+          # frontend/Dockerfile) -- rebuild the image to point at a different
+          # public API URL rather than trying to override it here.
+          image: aerointel-frontend:latest
+          ports:
+            - containerPort: 3000
+          env:
+            - name: API_INTERNAL_URL
+              value: "http://aerointel-backend:8000/api/v1"
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 15

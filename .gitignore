@@ -1,0 +1,22 @@
+# Python
+backend/.venv/
+__pycache__/
+*.pyc
+backend/.env
+
+# docker-compose
+.env
+
+# Node / Next.js
+frontend/node_modules/
+frontend/.next/
+frontend/.env.local
+frontend/next-env.d.ts
+
+# Runtime artifacts
+outbox/
+storage/
+*.log
+
+# OS
+.DS_Store

@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: aerointel-frontend
+  namespace: aerointel
+spec:
+  selector:
+    app: aerointel-frontend
+  ports:
+    - port: 3000
+      targetPort: 3000

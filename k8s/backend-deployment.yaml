@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aerointel-backend
+  namespace: aerointel
+spec:
+  # Keep this at 1. The scheduler (APScheduler) runs in-process -- every
+  # replica would independently fire the same ingestion/edition/newsletter
+  # jobs, sending duplicate newsletters. Scale horizontally only after moving
+  # scheduled triggers to a single-leader mechanism (a K8s CronJob hitting an
+  # internal endpoint, or Celery Beat with one beat process).
+  replicas: 1
+  selector:
+    matchLabels:
+      app: aerointel-backend
+  template:
+    metadata:
+      labels:
+        app: aerointel-backend
+    spec:
+      containers:
+        - name: backend
+          image: aerointel-backend:latest
+          ports:
+            - containerPort: 8000
+          env:
+            - name: ENVIRONMENT
+              value: "production"
+            - name: DEBUG
+              value: "false"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: aerointel-secrets
+                  key: database-url
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: aerointel-secrets
+                  key: redis-url
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: aerointel-secrets
+                  key: secret-key
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "1"
+              memory: "512Mi"
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health/ready
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 30
