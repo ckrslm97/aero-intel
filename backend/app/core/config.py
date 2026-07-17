@@ -35,8 +35,24 @@ class Settings(BaseSettings):
     # --- LLM provider (optional; falls back to heuristic/no-key pipeline) ---
     llm_provider: Literal["heuristic", "ollama", "openai_compat"] = "heuristic"
     llm_model: str = "llama3.1"
+    # A cheaper/higher-throughput model for the token-heavy classification calls
+    # (categorize/subcategorize send the article body). Empty -> reuse llm_model.
+    # On Groq, llama-3.1-8b-instant has a 500k/day token budget vs 100k for the
+    # 70b, so routing classification here roughly triples daily throughput while
+    # translation (quality-critical) stays on the 70b. See app/llm/factory.py.
+    llm_model_fast: str = ""
     llm_base_url: str | None = None  # e.g. http://localhost:11434 for Ollama
     llm_api_key: str | None = None  # OpenAI or Anthropic-compatible key
+    # False: spend the LLM only on translation + categorisation, and keep the
+    # free local heuristic for summary/sentiment/entities. Even so a live run
+    # costs 4 LLM calls per article (categorize, subcategorize, translate x2);
+    # the model split above keeps that within Groq's free daily budget for
+    # ~140 articles/day. See app/llm/factory.py. Turn on when the key has room.
+    llm_full_pipeline: bool = False
+    # Cap articles enriched per run so a single scheduled job can't exhaust the
+    # LLM's daily budget (see D. jobs-news.yml: 12 runs/day x 12 = ~140/day).
+    # Only the live/LLM path is capped; the local heuristic is free and unbounded.
+    llm_enrich_batch_size: int = 12
 
     # --- Email (optional; falls back to writing to ./outbox instead of sending) ---
     smtp_host: str | None = None

@@ -56,6 +56,12 @@ class ArticleEnrichment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     headline: Mapped[str] = mapped_column(String(500), default="")
     summary: Mapped[str] = mapped_column(Text, default="")
     category: Mapped[str] = mapped_column(String(50), default="general", index=True)
+    # second-level taxonomy slug within `category` -- see app/taxonomy.py; null
+    # for categories that have no subcategories defined (safety, regulatory, ...)
+    subcategory: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
+    # world-region slug detected from country entities, see app/taxonomy.py
+    # COUNTRY_TO_REGION -- null when no country was detected in the article
+    region: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
     importance_score: Mapped[float] = mapped_column(Float, default=0.0)  # 0-1, drives Top-10
     sentiment: Mapped[str] = mapped_column(String(20), default="neutral")  # positive|neutral|negative
     confidence_score: Mapped[float] = mapped_column(Float, default=0.0)  # cross-source verification, 0-1
@@ -63,5 +69,14 @@ class ArticleEnrichment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     llm_provider_used: Mapped[str] = mapped_column(String(30), default="heuristic")
     tags: Mapped[str] = mapped_column(String(500), default="")  # comma-separated for simplicity
+
+    # Turkish translation, populated only when a translation-capable LLM
+    # provider is configured (see app/llm/base.py translate()). Both null when
+    # no LLM ran -- the API then honestly reports is_translated=False and the
+    # frontend falls back to the (English) headline/summary above.
+    headline_tr: Mapped[str | None] = mapped_column(Text, nullable=True)
+    summary_tr: Mapped[str | None] = mapped_column(Text, nullable=True)
+    translated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    translation_provider: Mapped[str | None] = mapped_column(String(30), nullable=True)
 
     article: Mapped["Article"] = relationship(back_populates="enrichment")

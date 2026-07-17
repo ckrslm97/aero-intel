@@ -11,8 +11,11 @@ from app.llm.prompts import (
     entities_prompt,
     headline_prompt,
     sentiment_prompt,
+    subcategorize_prompt,
     summary_prompt,
+    translate_prompt,
 )
+from app.taxonomy import SUBCATEGORY_KEYWORDS
 
 REQUEST_TIMEOUT = httpx.Timeout(60.0)
 
@@ -44,6 +47,16 @@ class OllamaProvider:
         if result not in VALID_CATEGORIES:
             raise ValueError(f"Ollama returned an unrecognized category: {result!r}")
         return result
+
+    async def subcategorize(self, title: str, content: str, category: str) -> str | None:
+        sub_options = SUBCATEGORY_KEYWORDS.get(category)
+        if not sub_options or category == "events":
+            return None
+        result = (await self._generate(subcategorize_prompt(title, content, category))).strip().lower()
+        return result if result in sub_options else None
+
+    async def translate(self, text: str, target: str = "tr") -> str | None:
+        return await self._generate(translate_prompt(text, target))
 
     async def sentiment(self, title: str, content: str) -> str:
         result = (await self._generate(sentiment_prompt(title, content))).strip().lower()

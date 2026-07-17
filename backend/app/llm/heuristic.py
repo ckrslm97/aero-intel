@@ -5,10 +5,12 @@ every other provider falls back to if a live call fails.
 """
 import re
 from collections import Counter
+from functools import lru_cache
 
 from app.llm.base import EntityMention
 from app.llm.gazetteer import AIRLINES, AIRPORTS, COUNTRIES
 from app.pipeline.hashing import normalize_text
+from app.taxonomy import CATEGORY_KEYWORDS, COUNTRY_TO_REGION, GENERAL_CATEGORY, SUBCATEGORY_KEYWORDS
 
 _STOPWORDS = {
     "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "of",
@@ -20,16 +22,23 @@ _STOPWORDS = {
 
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 
-_CATEGORY_KEYWORDS: dict[str, list[str]] = {
-    "safety": ["crash", "incident", "emergency", "mayday", "diverted", "grounded", "investigation"],
-    "finance": ["revenue", "profit", "earnings", "stock", "shares", "ipo", "quarterly", "loss", "margin"],
-    "fleet": ["aircraft order", "delivery", "boeing", "airbus", "fleet", "widebody", "narrowbody"],
-    "routes": ["route", "nonstop", "launch flight", "service between", "network", "frequency"],
-    "regulatory": ["faa", "easa", "icao", "regulation", "certification", "government", "ban"],
-    "sustainability": ["saf", "sustainable aviation fuel", "emissions", "carbon", "net zero"],
-    "labor": ["union", "strike", "pilots", "contract negotiation", "staffing"],
-    "airport": ["airport", "terminal", "runway", "expansion", "slot"],
-}
+# How much louder a keyword in the headline counts than one in the body.
+_TITLE_WEIGHT = 3
+
+
+@lru_cache(maxsize=None)
+def _keyword_pattern(keywords: tuple[str, ...]) -> re.Pattern[str]:
+    """Match keywords as whole words, not substrings.
+
+    Plain `text.count("ask")` also fires on "asked" and "task", and "max" fires
+    on "maximum" -- so short metric names silently mis-categorised articles.
+    Word boundaries make short keywords like ASK and RPK usable at all.
+    """
+    return re.compile("|".join(rf"\b{re.escape(kw)}\b" for kw in keywords))
+
+
+def _score(pattern: re.Pattern[str], title_text: str, body_text: str) -> int:
+    return len(pattern.findall(title_text)) * _TITLE_WEIGHT + len(pattern.findall(body_text))
 
 _POSITIVE_WORDS = {
     "growth", "record", "profit", "expand", "launch", "award", "success", "improve",
@@ -70,15 +79,50 @@ class HeuristicProvider:
         return " ".join(sentences[i] for i in top_indices)
 
     async def categorize(self, title: str, content: str) -> str:
-        text = normalize_text(f"{title} {content}")
-        best_category = "general"
+        # A keyword in the headline says what the story is *about*; the same
+        # word buried in the body is often incidental ("...the airport shuttle
+        # departs hourly"). Weighting the title heavily keeps a long body from
+        # outvoting the headline on sheer word count.
+        title_text = normalize_text(title)
+        body_text = normalize_text(content)
+        best_category = GENERAL_CATEGORY
         best_score = 0
-        for category, keywords in _CATEGORY_KEYWORDS.items():
-            score = sum(text.count(kw) for kw in keywords)
+        for category, keywords in CATEGORY_KEYWORDS.items():
+            score = _score(_keyword_pattern(tuple(keywords)), title_text, body_text)
             if score > best_score:
                 best_score = score
                 best_category = category
         return best_category
+
+    async def subcategorize(self, title: str, content: str, category: str) -> str | None:
+        """Second keyword pass within the chosen category. Returns None for
+        categories with no subcategory taxonomy (safety, regulatory, ...), and
+        for "events" -- that one is decided by enrich.py from the detected
+        region instead (general vs. regional), not by keyword scoring.
+        """
+        if category == "events":
+            return None
+        sub_keywords = SUBCATEGORY_KEYWORDS.get(category)
+        if not sub_keywords:
+            return None
+        title_text = normalize_text(title)
+        body_text = normalize_text(content)
+        best_sub: str | None = None
+        best_score = 0
+        for sub, keywords in sub_keywords.items():
+            if not keywords:
+                continue
+            score = _score(_keyword_pattern(tuple(keywords)), title_text, body_text)
+            if score > best_score:
+                best_score = score
+                best_sub = sub
+        return best_sub
+
+    async def translate(self, text: str, target: str = "tr") -> str | None:
+        """The keyless heuristic engine has no translation capability -- return
+        None so callers know to leave the original text untranslated rather
+        than silently passing it through as if it were Turkish."""
+        return None
 
     async def sentiment(self, title: str, content: str) -> str:
         words = set(normalize_text(f"{title} {content}").split())
@@ -113,3 +157,18 @@ class HeuristicProvider:
                 seen.add(key)
                 unique.append(m)
         return unique
+
+
+def detect_region(entities: list[EntityMention]) -> str | None:
+    """Region detection is entity-based, not LLM-based, so it runs the same way
+    regardless of which provider (heuristic or live) extracted the entities --
+    the first recognized country entity maps to its world-region slug via
+    app.taxonomy.COUNTRY_TO_REGION. Returns None if no mapped country was found.
+    """
+    for mention in entities:
+        if mention.entity_type != "country":
+            continue
+        region = COUNTRY_TO_REGION.get(mention.name.lower())
+        if region:
+            return region
+    return None
