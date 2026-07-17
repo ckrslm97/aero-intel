@@ -62,6 +62,14 @@ async def _re_enrich(days: int | None) -> None:
         print(f"Re-enriched {enriched} articles (batch limit: {batch or 'none'})")
 
 
+async def _translate_backlog(limit: int) -> None:
+    from app.pipeline.enrich import translate_pending_articles
+
+    async with AsyncSessionLocal() as db:
+        translated = await translate_pending_articles(db, limit=limit)
+        print(f"Translated {translated} previously-untranslated articles")
+
+
 async def _seed_events() -> None:
     from app.ingest.events_seed import seed_events
 
@@ -124,6 +132,7 @@ def main() -> None:
             "ingest",
             "full-cycle",
             "re-enrich",
+            "translate-backlog",
             "build-edition",
             "refresh-kpis",
             "seed-kpi-history",
@@ -141,6 +150,12 @@ def main() -> None:
         type=int,
         help="re-enrich: only articles fetched in the last N days (default: all)",
     )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=12,
+        help="translate-backlog: how many articles to translate this run (default: 12)",
+    )
     args = parser.parse_args()
 
     if args.command == "ingest":
@@ -149,6 +164,8 @@ def main() -> None:
         asyncio.run(_full_cycle())
     elif args.command == "re-enrich":
         asyncio.run(_re_enrich(args.days))
+    elif args.command == "translate-backlog":
+        asyncio.run(_translate_backlog(args.limit))
     elif args.command == "build-edition":
         asyncio.run(_build_edition())
     elif args.command == "refresh-kpis":

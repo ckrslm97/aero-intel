@@ -16,9 +16,14 @@ on:
           - seed-events
           - prune-kpi-duplicates
           - re-enrich
+          - translate-backlog
           - create-admin
       days:
         description: "re-enrich only: limit to articles fetched in the last N days (blank = all)"
+        required: false
+        type: string
+      limit:
+        description: "translate-backlog only: how many articles to translate this run (default 12)"
         required: false
         type: string
       admin_email:
@@ -64,6 +69,7 @@ jobs:
           ADMIN_EMAIL: ${{ inputs.admin_email }}
           ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
           DAYS: ${{ inputs.days }}
+          LIMIT: ${{ inputs.limit }}
         run: |
           set -euo pipefail
           case "${{ inputs.task }}" in
@@ -83,6 +89,8 @@ jobs:
               else
                 python -m app.cli re-enrich
               fi ;;
+            translate-backlog)
+              python -m app.cli translate-backlog --limit "${LIMIT:-12}" ;;
             create-admin)
               if [ -z "${ADMIN_EMAIL}" ] || [ -z "${ADMIN_PASSWORD}" ]; then
                 echo "create-admin needs the admin_email input and the ADMIN_PASSWORD secret" >&2

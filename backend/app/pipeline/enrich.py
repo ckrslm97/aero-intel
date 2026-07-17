@@ -105,6 +105,54 @@ async def enrich_pending_articles(db: AsyncSession, limit: int | None = None) ->
     return len(articles)
 
 
+async def translate_pending_articles(db: AsyncSession, limit: int = 12) -> int:
+    """Fill in Turkish translation for already-enriched articles that don't have
+    it yet -- in place, without touching status, category, or anything else.
+
+    The steady-state cron translates new articles as they're ingested, but a
+    backlog enriched before a translator was configured (or by the heuristic,
+    which can't translate) stays English. This backfills it a batch at a time,
+    freshest first, so the site fills with Turkish over successive runs without
+    ever un-publishing an article the way a full re-enrich would.
+
+    Only rows with translated_at IS NULL are touched, which by construction
+    excludes the curated events (they carry translation_provider='curated' and a
+    translated_at) -- their hand-written Turkish is never overwritten.
+    """
+    provider = get_llm_provider()
+
+    result = await db.execute(
+        select(ArticleEnrichment)
+        .join(Article, Article.id == ArticleEnrichment.article_id)
+        .where(
+            Article.is_duplicate.is_(False),
+            Article.status == "enriched",
+            ArticleEnrichment.translated_at.is_(None),
+        )
+        .order_by(Article.published_at.desc().nulls_last())
+        .limit(limit)
+    )
+    enrichments = list(result.scalars().all())
+
+    translated = 0
+    for enrichment in enrichments:
+        headline_tr = await provider.translate(enrichment.headline) if enrichment.headline else None
+        summary_tr = await provider.translate(enrichment.summary) if enrichment.summary else None
+        # translate() returns None when no real translator ran; only mark the row
+        # translated when we actually got Turkish back, so is_translated stays honest.
+        if headline_tr is None and summary_tr is None:
+            continue
+        enrichment.headline_tr = headline_tr
+        enrichment.summary_tr = summary_tr
+        enrichment.translated_at = datetime.now(timezone.utc)
+        enrichment.translation_provider = provider.name
+        translated += 1
+
+    await db.commit()
+    logger.info("translation_backfill_complete", translated=translated, considered=len(enrichments))
+    return translated
+
+
 async def reset_enrichment(db: AsyncSession, days: int | None = None) -> int:
     """Drop existing enrichment so the next run redoes it from scratch.
 
