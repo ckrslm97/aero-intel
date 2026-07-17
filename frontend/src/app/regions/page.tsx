@@ -8,10 +8,10 @@ export default function RegionsPage() {
     <div className="flex flex-col gap-8">
       <div className="flex flex-col gap-1">
         <h1 className="text-2xl font-semibold tracking-tight">
-          Regional Intelligence
+          Bölgesel İstihbarat
         </h1>
         <p className="text-sm text-muted-foreground">
-          News, statistics, and developments by world region.
+          Dünya bölgesine göre haberler, istatistikler ve gelişmeler.
         </p>
       </div>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
@@ -27,8 +27,8 @@ export default function RegionsPage() {
       </div>
       <ComingSoon
         icon={Globe2}
-        title="Region pages are being built"
-        description="Interactive region cards with country/city news, aviation stats, and airport developments land once ingestion is live."
+        title="Bölge sayfaları hazırlanıyor"
+        description="Ülke/şehir haberleri, havacılık istatistikleri ve havalimanı gelişmeleri içeren etkileşimli bölge kartları, veri toplama devreye girdiğinde eklenecek."
       />
     </div>
   );

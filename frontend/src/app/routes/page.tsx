@@ -6,8 +6,8 @@ export default function RoutesPage() {
   return (
     <ComingSoon
       icon={Route}
-      title="Route Intelligence"
-      description="New, cancelled, and seasonal route tracking with an interactive map is coming soon."
+      title="Rota İstihbaratı"
+      description="Etkileşimli haritayla yeni, iptal edilen ve sezonluk rota takibi yakında geliyor."
     />
   );
 }

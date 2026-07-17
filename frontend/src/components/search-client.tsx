@@ -27,7 +27,7 @@ export function SearchClient({ initialQuery }: { initialQuery: string }) {
       setResults(data);
       setSearchedFor(trimmed);
     } catch {
-      setError("Search is unavailable right now. Is the backend running?");
+      setError("Arama şu anda kullanılamıyor. Sunucu çalışıyor mu?");
     } finally {
       setLoading(false);
     }
@@ -56,12 +56,12 @@ export function SearchClient({ initialQuery }: { initialQuery: string }) {
             autoFocus
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search airlines, airports, routes, news…"
+            placeholder="Havayolu, havalimanı, rota, haber ara…"
             className="pl-9"
           />
         </div>
         <Button type="submit" disabled={loading}>
-          {loading ? "Searching…" : "Search"}
+          {loading ? "Aranıyor…" : "Ara"}
         </Button>
       </form>
 
@@ -73,8 +73,7 @@ export function SearchClient({ initialQuery }: { initialQuery: string }) {
 
       {searchedFor && !error && (
         <p className="text-sm text-muted-foreground">
-          {results?.total ?? 0} result{results?.total === 1 ? "" : "s"} for &ldquo;{searchedFor}
-          &rdquo;
+          &ldquo;{searchedFor}&rdquo; için {results?.total ?? 0} sonuç
         </p>
       )}
 

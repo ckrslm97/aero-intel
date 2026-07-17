@@ -6,16 +6,18 @@ import { API_BASE_URL, ApiError, apiFetch } from "@/lib/api";
 import type { EditionOut } from "@/lib/types";
 
 const SECTION_LABELS: Record<string, string> = {
-  top_story: "Top Stories",
-  general: "General",
-  safety: "Safety",
-  finance: "Finance",
-  fleet: "Fleet",
-  routes: "Routes",
-  regulatory: "Regulatory",
-  sustainability: "Sustainability",
-  labor: "Labor",
-  airport: "Airports",
+  top_story: "Öne Çıkanlar",
+  general: "Genel",
+  revenue_management: "Gelir Yönetimi",
+  safety: "Emniyet",
+  finance: "Finans",
+  fleet: "Filo",
+  network: "Ağ & Rota",
+  regulatory: "Regülasyon",
+  sustainability: "Sürdürülebilirlik",
+  labor: "İşgücü",
+  airport: "Havalimanı",
+  events: "Etkinlik",
 };
 
 export default async function EditionPage({
@@ -44,7 +46,7 @@ export default async function EditionPage({
       <div className="flex flex-col gap-2">
         <div className="flex items-center justify-between gap-4">
           <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            {new Date(edition.edition_date).toLocaleDateString("en-GB", {
+            {new Date(edition.edition_date).toLocaleDateString("tr-TR", {
               weekday: "long",
               year: "numeric",
               month: "long",
@@ -57,7 +59,7 @@ export default async function EditionPage({
               className="flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-accent"
             >
               <Download className="size-3.5" />
-              Download PDF
+              PDF İndir
             </a>
           )}
         </div>
@@ -70,7 +72,7 @@ export default async function EditionPage({
       {leadStory && (
         <section className="flex flex-col gap-3">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-            Top story
+            Öne çıkan haber
           </h2>
           <div className="rounded-xl border border-border bg-card">
             <ArticleCard article={leadStory} variant="top" />
@@ -103,7 +105,7 @@ export default async function EditionPage({
 
       {!leadStory && otherSections.length === 0 && (
         <p className="rounded-lg border border-dashed border-border p-6 text-sm text-muted-foreground">
-          No stories in this edition yet.
+          Bu sayıda henüz haber yok.
         </p>
       )}
     </div>

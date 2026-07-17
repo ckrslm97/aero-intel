@@ -18,9 +18,9 @@ export default function BizPage() {
       </span>
       <h1 className="text-4xl font-semibold tracking-tight">BİZ</h1>
       <p className="max-w-md text-sm text-white/60">
-        The premium Turkish Airlines intelligence desk — corporate news, fleet,
-        Miles&amp;Smiles, competitor benchmarking, and executive briefings.
-        This dedicated section is being built next.
+        Türk Hava Yolları için özel istihbarat masası — kurumsal haberler, filo,
+        Miles&amp;Smiles, rakip karşılaştırmaları ve yönetici brifingleri.
+        Bu özel bölüm sırada bekliyor.
       </p>
     </div>
   );

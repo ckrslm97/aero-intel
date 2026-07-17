@@ -17,15 +17,15 @@ export default async function ArchivePage() {
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-col gap-1">
-        <h1 className="text-2xl font-semibold tracking-tight">Historical archive</h1>
-        <p className="text-sm text-muted-foreground">Browse every past daily edition.</p>
+        <h1 className="text-2xl font-semibold tracking-tight">Geçmiş Arşivi</h1>
+        <p className="text-sm text-muted-foreground">Geçmiş tüm günlük sayılara göz atın.</p>
       </div>
 
       {editions.length === 0 ? (
         <ComingSoon
           icon={Newspaper}
-          title="No editions yet"
-          description="Editions appear here once the daily newspaper has been assembled at least once."
+          title="Henüz sayı yok"
+          description="Günlük gazete en az bir kez oluşturulduğunda sayılar burada görünür."
         />
       ) : (
         <ul className="flex flex-col divide-y divide-border rounded-xl border border-border bg-card">
@@ -37,7 +37,7 @@ export default async function ArchivePage() {
               >
                 <div className="flex items-center gap-2">
                   <span className="text-xs font-medium text-muted-foreground">
-                    {new Date(edition.edition_date).toLocaleDateString("en-GB", {
+                    {new Date(edition.edition_date).toLocaleDateString("tr-TR", {
                       weekday: "short",
                       year: "numeric",
                       month: "short",
@@ -45,7 +45,7 @@ export default async function ArchivePage() {
                     })}
                   </span>
                   <Badge variant="secondary" className="text-[10px] uppercase">
-                    {edition.story_count} stories
+                    {edition.story_count} haber
                   </Badge>
                 </div>
                 <span className="truncate text-sm font-medium text-card-foreground">
@@ -55,7 +55,7 @@ export default async function ArchivePage() {
               {edition.pdf_available && (
                 <a
                   href={`${API_BASE_URL}/editions/${edition.edition_date}/pdf`}
-                  title="Download PDF"
+                  title="PDF İndir"
                   className="flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs font-medium text-foreground hover:bg-accent"
                 >
                   <Download className="size-3.5" />

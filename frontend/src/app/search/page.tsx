@@ -10,9 +10,9 @@ export default async function SearchPage({
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-col gap-1">
-        <h1 className="text-2xl font-semibold tracking-tight">Search</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Ara</h1>
         <p className="text-sm text-muted-foreground">
-          Full-text search across every verified article.
+          Doğrulanmış tüm haberlerde tam metin arama.
         </p>
       </div>
       <SearchClient initialQuery={q ?? ""} />

@@ -1,4 +1,4 @@
-const compactFormatter = new Intl.NumberFormat("en-US", {
+const compactFormatter = new Intl.NumberFormat("tr-TR", {
   notation: "compact",
   maximumFractionDigits: 1,
 });

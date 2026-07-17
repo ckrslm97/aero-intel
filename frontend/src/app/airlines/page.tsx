@@ -8,10 +8,10 @@ export default function AirlinesPage() {
     <div className="flex flex-col gap-8">
       <div className="flex flex-col gap-1">
         <h1 className="text-2xl font-semibold tracking-tight">
-          Airline Intelligence
+          Havayolu İstihbaratı
         </h1>
         <p className="text-sm text-muted-foreground">
-          Fleet, financial, and network updates by carrier.
+          Havayoluna göre filo, finansal ve ağ güncellemeleri.
         </p>
       </div>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
@@ -34,8 +34,8 @@ export default function AirlinesPage() {
       </div>
       <ComingSoon
         icon={Plane}
-        title="Airline pages are being built"
-        description="Brand-themed carrier pages with fleet, financials, and route news land once article ingestion is live."
+        title="Havayolu sayfaları hazırlanıyor"
+        description="Filo, finansal veriler ve rota haberleri içeren marka temalı havayolu sayfaları, haber toplama devreye girdiğinde eklenecek."
       />
     </div>
   );

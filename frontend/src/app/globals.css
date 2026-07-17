@@ -47,6 +47,19 @@
   /* Brand highlight (amber "signal") and chart gridline, themed per mode */
   --color-signal: var(--signal);
   --color-gridline: var(--gridline);
+  /* Newspaper category badges -- one distinct hue per taxonomy slug, themed
+     per mode. See frontend/src/lib/taxonomy.ts for the slug -> token mapping. */
+  --color-category-revenue-management: var(--category-revenue-management);
+  --color-category-fleet: var(--category-fleet);
+  --color-category-network: var(--category-network);
+  --color-category-finance: var(--category-finance);
+  --color-category-safety: var(--category-safety);
+  --color-category-regulatory: var(--category-regulatory);
+  --color-category-sustainability: var(--category-sustainability);
+  --color-category-airport: var(--category-airport);
+  --color-category-labor: var(--category-labor);
+  --color-category-events: var(--category-events);
+  --color-category-general: var(--category-general);
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
@@ -92,6 +105,18 @@
   --critical: #d03b3b;
   --signal: #c98500;
   --gridline: #e1e0d9;
+  /* Newspaper category palette (light) -- 11 distinct hues, one per taxonomy slug */
+  --category-revenue-management: #c98500;
+  --category-fleet: #4a3aa7;
+  --category-network: #1baf7a;
+  --category-finance: #eb6834;
+  --category-safety: #d03b3b;
+  --category-regulatory: #4f6b8f;
+  --category-sustainability: #2f8f4e;
+  --category-airport: #8a6d3b;
+  --category-labor: #a63d7a;
+  --category-events: #1a8fa0;
+  --category-general: #6b6a65;
   --radius: 0.5rem;
   --sidebar: #fcfcfb;
   --sidebar-foreground: #0b0b0b;
@@ -133,6 +158,18 @@
   --critical: #e66767;
   --signal: #eda100;
   --gridline: #2c2c2a;
+  /* Newspaper category palette (dark) -- brighter variants of the light hues */
+  --category-revenue-management: #eda100;
+  --category-fleet: #9085e9;
+  --category-network: #199e70;
+  --category-finance: #d95926;
+  --category-safety: #e66767;
+  --category-regulatory: #7fa3cf;
+  --category-sustainability: #4fbf72;
+  --category-airport: #c9a165;
+  --category-labor: #d873b0;
+  --category-events: #4fd0e0;
+  --category-general: #c3c2b7;
   --sidebar: #1a1a19;
   --sidebar-foreground: #ffffff;
   --sidebar-primary: #3987e5;

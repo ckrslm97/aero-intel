@@ -40,14 +40,14 @@ function AdminDashboard() {
         return res.json();
       })
       .then(setStatus)
-      .catch(() => setError("Could not load admin status."));
+      .catch(() => setError("Yönetim durumu yüklenemedi."));
   }, []);
 
   if (error) {
     return <p className="text-sm text-critical">{error}</p>;
   }
   if (!status) {
-    return <p className="text-sm text-muted-foreground">Loading system status…</p>;
+    return <p className="text-sm text-muted-foreground">Sistem durumu yükleniyor…</p>;
   }
 
   const totalArticles = status.articles_by_status.reduce((sum, s) => sum + s.count, 0);
@@ -57,7 +57,7 @@ function AdminDashboard() {
       <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Card>
           <CardHeader>
-            <p className="text-xs font-medium text-muted-foreground">Database</p>
+            <p className="text-xs font-medium text-muted-foreground">Veritabanı</p>
           </CardHeader>
           <CardContent className="flex items-center gap-2">
             {status.database_ok ? (
@@ -65,17 +65,17 @@ function AdminDashboard() {
             ) : (
               <XCircle className="size-5 text-critical" />
             )}
-            <span className="text-sm font-medium">{status.database_ok ? "Healthy" : "Unreachable"}</span>
+            <span className="text-sm font-medium">{status.database_ok ? "Sağlıklı" : "Erişilemiyor"}</span>
           </CardContent>
         </Card>
-        <StatCard label="LLM provider" value={status.llm_provider} />
-        <StatCard label="Sources" value={status.sources_count} />
-        <StatCard label="Entities extracted" value={status.entities_count} />
-        <StatCard label="Total articles" value={totalArticles} />
-        <StatCard label="Editions published" value={status.editions_count} />
-        <StatCard label="Active subscribers" value={status.subscribers_count} />
+        <StatCard label="LLM sağlayıcı" value={status.llm_provider} />
+        <StatCard label="Kaynaklar" value={status.sources_count} />
+        <StatCard label="Çıkarılan varlıklar" value={status.entities_count} />
+        <StatCard label="Toplam haber" value={totalArticles} />
+        <StatCard label="Yayınlanan sayılar" value={status.editions_count} />
+        <StatCard label="Aktif abone" value={status.subscribers_count} />
         <StatCard
-          label="Latest edition"
+          label="Son sayı"
           value={status.latest_edition_date ?? "—"}
         />
       </section>
@@ -83,7 +83,7 @@ function AdminDashboard() {
       <section className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         <div className="flex flex-col gap-2">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-            Articles by status
+            Duruma göre haberler
           </h2>
           <div className="flex flex-col divide-y divide-border rounded-xl border border-border bg-card">
             {status.articles_by_status.map((s) => (
@@ -97,11 +97,11 @@ function AdminDashboard() {
 
         <div className="flex flex-col gap-2">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-            Email deliveries
+            E-posta gönderimleri
           </h2>
           <div className="flex flex-col divide-y divide-border rounded-xl border border-border bg-card">
             {status.email_deliveries_by_status.length === 0 && (
-              <p className="p-3 text-sm text-muted-foreground">No deliveries yet.</p>
+              <p className="p-3 text-sm text-muted-foreground">Henüz gönderim yok.</p>
             )}
             {status.email_deliveries_by_status.map((s) => (
               <div key={s.status} className="flex items-center justify-between p-3 text-sm">
@@ -115,20 +115,20 @@ function AdminDashboard() {
 
       <section className="flex flex-col gap-2">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-          Scheduled jobs
+          Zamanlanmış görevler
         </h2>
         <div className="flex flex-col divide-y divide-border rounded-xl border border-border bg-card">
           {status.scheduler_jobs.map((job) => (
             <div key={job.id} className="flex items-center justify-between p-3 text-sm">
               <span className="font-medium">{job.id}</span>
               <span className="text-muted-foreground">
-                next run:{" "}
+                sonraki çalışma:{" "}
                 {job.next_run_time
-                  ? new Date(job.next_run_time).toLocaleString("en-GB", {
+                  ? new Date(job.next_run_time).toLocaleString("tr-TR", {
                       dateStyle: "medium",
                       timeStyle: "short",
                     })
-                  : "not scheduled"}
+                  : "zamanlanmadı"}
               </span>
             </div>
           ))}
@@ -145,9 +145,9 @@ export default function AdminPage() {
     <div className="flex flex-col gap-6">
       <div className="flex items-center justify-between gap-4">
         <div className="flex flex-col gap-1">
-          <h1 className="text-2xl font-semibold tracking-tight">Admin panel</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Yönetim paneli</h1>
           <p className="text-sm text-muted-foreground">
-            Crawler status, data freshness, and system health.
+            Tarayıcı durumu, veri güncelliği ve sistem sağlığı.
           </p>
         </div>
         {user && (
@@ -155,25 +155,25 @@ export default function AdminPage() {
             onClick={logout}
             className="rounded-md border border-border px-3 py-1.5 text-xs font-medium hover:bg-accent"
           >
-            Sign out ({user.email})
+            Çıkış yap ({user.email})
           </button>
         )}
       </div>
 
-      {loading && <p className="text-sm text-muted-foreground">Checking session…</p>}
+      {loading && <p className="text-sm text-muted-foreground">Oturum kontrol ediliyor…</p>}
 
       {!loading && !user && (
         <div className="flex min-h-[40vh] flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border p-12 text-center">
           <Lock className="size-8 text-muted-foreground" />
-          <h2 className="text-lg font-semibold">Sign in required</h2>
+          <h2 className="text-lg font-semibold">Giriş gerekli</h2>
           <p className="max-w-md text-sm text-muted-foreground">
-            The admin panel is restricted to admin accounts.
+            Yönetim paneli yalnızca yönetici hesaplarına açıktır.
           </p>
           <Link
             href="/login"
             className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
           >
-            Sign in
+            Giriş yap
           </Link>
         </div>
       )}
@@ -181,9 +181,9 @@ export default function AdminPage() {
       {!loading && user && user.role !== "admin" && (
         <div className="flex min-h-[40vh] flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-border p-12 text-center">
           <ShieldAlert className="size-8 text-critical" />
-          <h2 className="text-lg font-semibold">Access denied</h2>
+          <h2 className="text-lg font-semibold">Erişim reddedildi</h2>
           <p className="max-w-md text-sm text-muted-foreground">
-            Signed in as {user.email} ({user.role}). This section requires the admin role.
+            {user.email} ({user.role}) olarak giriş yaptınız. Bu bölüm yönetici rolü gerektirir.
           </p>
         </div>
       )}

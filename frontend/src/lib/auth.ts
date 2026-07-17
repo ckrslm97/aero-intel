@@ -29,7 +29,7 @@ export async function login(email: string, password: string): Promise<string> {
     body: JSON.stringify({ email, password }),
   });
   if (!res.ok) {
-    throw new Error(res.status === 401 ? "Incorrect email or password" : "Login failed");
+    throw new Error(res.status === 401 ? "E-posta veya şifre hatalı" : "Giriş başarısız oldu");
   }
   const data = (await res.json()) as { access_token: string };
   setToken(data.access_token);

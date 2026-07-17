@@ -6,8 +6,8 @@ export default function FinancePage() {
   return (
     <ComingSoon
       icon={BarChart3}
-      title="Financial Intelligence"
-      description="Airline revenues, margins, and market comparisons are coming once financial data adapters are connected."
+      title="Finansal İstihbarat"
+      description="Havayolu gelirleri, marjlar ve piyasa karşılaştırmaları, finansal veri bağlantıları kurulduğunda eklenecek."
     />
   );
 }

@@ -20,19 +20,19 @@ export interface NavItem {
 }
 
 export const primaryNav: NavItem[] = [
-  { href: "/", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/newspaper", label: "Newspaper", icon: Newspaper },
-  { href: "/archive", label: "Archive", icon: BarChart3 },
-  { href: "/regions", label: "Regions", icon: Globe2, scaffold: true },
-  { href: "/airlines", label: "Airlines", icon: Plane, scaffold: true },
-  { href: "/routes", label: "Routes", icon: Route, scaffold: true },
-  { href: "/finance", label: "Finance", icon: BarChart3, scaffold: true },
+  { href: "/", label: "Kontrol Paneli", icon: LayoutDashboard },
+  { href: "/newspaper", label: "Gazete", icon: Newspaper },
+  { href: "/archive", label: "Arşiv", icon: BarChart3 },
+  { href: "/regions", label: "Bölgeler", icon: Globe2, scaffold: true },
+  { href: "/airlines", label: "Havayolları", icon: Plane, scaffold: true },
+  { href: "/routes", label: "Rotalar", icon: Route, scaffold: true },
+  { href: "/finance", label: "Finans", icon: BarChart3, scaffold: true },
   { href: "/biz", label: "BİZ", icon: Star, scaffold: true },
-  { href: "/search", label: "Search", icon: Search },
+  { href: "/search", label: "Ara", icon: Search },
 ];
 
 export const secondaryNav: NavItem[] = [
-  { href: "/admin", label: "Admin", icon: ShieldCheck },
+  { href: "/admin", label: "Yönetim", icon: ShieldCheck },
 ];
 
 export const airlineTabs = [
@@ -48,14 +48,15 @@ export const airlineTabs = [
   { code: "TK", name: "Turkish Airlines", color: "#c70a20" },
 ];
 
+// slugs mirror backend/app/taxonomy.py COUNTRY_TO_REGION values -- keep both in sync.
 export const worldRegions = [
-  { slug: "europe", name: "Europe" },
-  { slug: "middle-east", name: "Middle East" },
-  { slug: "africa", name: "Africa" },
-  { slug: "north-america", name: "North America" },
-  { slug: "south-america", name: "South America" },
-  { slug: "central-america", name: "Central America" },
-  { slug: "asia", name: "Asia" },
-  { slug: "southeast-asia", name: "Southeast Asia" },
-  { slug: "oceania", name: "Oceania" },
+  { slug: "europe", name: "Avrupa" },
+  { slug: "middle-east", name: "Orta Doğu" },
+  { slug: "africa", name: "Afrika" },
+  { slug: "north-america", name: "Kuzey Amerika" },
+  { slug: "south-america", name: "Güney Amerika" },
+  { slug: "central-america", name: "Orta Amerika" },
+  { slug: "asia", name: "Asya" },
+  { slug: "southeast-asia", name: "Güneydoğu Asya" },
+  { slug: "oceania", name: "Okyanusya" },
 ];

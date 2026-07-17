@@ -1,6 +1,5 @@
-import { redirect } from "next/navigation";
+import { NewspaperBrowser } from "@/components/newspaper-browser";
 
-export default function NewspaperIndexPage() {
-  const today = new Date().toISOString().slice(0, 10);
-  redirect(`/newspaper/${today}`);
+export default function NewspaperPage() {
+  return <NewspaperBrowser />;
 }

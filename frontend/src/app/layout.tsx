@@ -19,11 +19,11 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: {
-    default: "AeroIntel — Aviation Intelligence Portal",
+    default: "AeroIntel — Havacılık İstihbarat Portalı",
     template: "%s · AeroIntel",
   },
   description:
-    "Automated daily aviation intelligence: news, KPIs, and market data verified across trusted sources.",
+    "Otomatik günlük havacılık istihbaratı: güvenilir kaynaklardan doğrulanmış haberler, KPI'lar ve piyasa verileri.",
 };
 
 export default function RootLayout({
@@ -33,7 +33,7 @@ export default function RootLayout({
 }>) {
   return (
     <html
-      lang="en"
+      lang="tr"
       suppressHydrationWarning
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >

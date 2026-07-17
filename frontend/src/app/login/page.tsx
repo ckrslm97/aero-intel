@@ -26,7 +26,7 @@ export default function LoginPage() {
       await refresh();
       router.push("/admin");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Login failed");
+      setError(err instanceof Error ? err.message : "Giriş başarısız oldu");
     } finally {
       setLoading(false);
     }
@@ -38,16 +38,16 @@ export default function LoginPage() {
         <span className="flex size-10 items-center justify-center rounded-md bg-primary text-primary-foreground">
           <Plane className="size-5" />
         </span>
-        <h1 className="text-xl font-semibold tracking-tight">Sign in to AeroIntel</h1>
+        <h1 className="text-xl font-semibold tracking-tight">AeroIntel&apos;e giriş yap</h1>
         <p className="text-sm text-muted-foreground">
-          Admin and editor access to the intelligence portal.
+          İstihbarat portalına yönetici ve editör erişimi.
         </p>
       </div>
 
       <form onSubmit={handleSubmit} className="flex flex-col gap-3">
         <Input
           type="email"
-          placeholder="Email"
+          placeholder="E-posta"
           autoFocus
           required
           value={email}
@@ -55,14 +55,14 @@ export default function LoginPage() {
         />
         <Input
           type="password"
-          placeholder="Password"
+          placeholder="Şifre"
           required
           value={password}
           onChange={(e) => setPassword(e.target.value)}
         />
         {error && <p className="text-sm text-critical">{error}</p>}
         <Button type="submit" disabled={loading}>
-          {loading ? "Signing in…" : "Sign in"}
+          {loading ? "Giriş yapılıyor…" : "Giriş yap"}
         </Button>
       </form>
     </div>
