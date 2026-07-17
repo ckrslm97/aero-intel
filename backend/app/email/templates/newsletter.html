@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="tr">
 <head>
 <meta charset="utf-8">
 <title>{{ headline }}</title>
@@ -25,7 +25,7 @@
         <!-- Headline -->
         <tr>
           <td style="padding:32px 32px 8px 32px;">
-            <p style="margin:0 0 8px 0;color:#898781;font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;">Today's Edition</p>
+            <p style="margin:0 0 8px 0;color:#898781;font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;">Günün Sayısı</p>
             <h1 style="margin:0 0 12px 0;color:#0b0b0b;font-size:26px;line-height:1.3;font-weight:700;">{{ headline }}</h1>
             {% if executive_summary %}
             <p style="margin:0;color:#52514e;font-size:14px;line-height:1.6;">{{ executive_summary }}</p>
@@ -47,7 +47,10 @@
                 <td>
                   <p style="margin:0 0 4px 0;">
                     <span style="display:inline-block;background-color:#f0efec;color:#52514e;font-size:10px;font-weight:600;letter-spacing:0.04em;text-transform:uppercase;border-radius:10px;padding:2px 8px;">{{ article.source_name }}</span>
-                    <span style="color:#898781;font-size:11px;margin-left:6px;">{{ article.confidence_pct }}% confidence &middot; {{ article.corroborating_count }} source{{ 's' if article.corroborating_count != 1 else '' }}</span>
+                    <span style="color:#898781;font-size:11px;margin-left:6px;">%{{ article.confidence_pct }} güven &middot; {{ article.corroborating_count }} kaynak</span>
+                    {% if not article.is_translated %}
+                    <span style="display:inline-block;background-color:#f0efec;color:#898781;font-size:9px;font-weight:600;letter-spacing:0.04em;text-transform:uppercase;border-radius:10px;padding:2px 6px;margin-left:6px;">otomatik çeviri yok</span>
+                    {% endif %}
                   </p>
                   <a href="{{ article.url }}" style="color:#0b0b0b;font-size:16px;font-weight:600;text-decoration:none;line-height:1.4;">{{ article.headline }}</a>
                   {% if article.summary %}
@@ -65,8 +68,8 @@
         <tr>
           <td style="padding:24px 32px 32px 32px;border-top:1px solid #e1e0d9;">
             <p style="margin:0;color:#898781;font-size:11px;line-height:1.6;">
-              You're receiving this because you're subscribed to the AeroIntel daily aviation briefing.
-              Every story is cross-verified across trusted sources before publication.
+              Bu bülteni AeroIntel günlük havacılık özetine abone olduğunuz için alıyorsunuz.
+              Her haber yayımlanmadan önce güvenilir kaynaklar arasında çapraz doğrulanır.
             </p>
           </td>
         </tr>

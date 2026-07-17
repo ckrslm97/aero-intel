@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 
 from sqlalchemy import exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,25 +21,83 @@ class ArticleRepository:
         await self.db.flush()
         return article
 
+    @staticmethod
+    def _apply_filters(
+        query,
+        *,
+        category: str | None,
+        subcategory: str | None,
+        region: str | None,
+        since: datetime | None,
+    ):
+        """Shared filter clause for list_recent and count, so the "load more"
+        pagination in the newspaper can trust that total counts the same rows
+        the list returns (rather than every article ever ingested)."""
+        query = query.where(Article.is_duplicate.is_(False))
+        if since is not None:
+            query = query.where(Article.published_at >= since)
+        if category or subcategory or region:
+            query = query.join(ArticleEnrichment)
+            if category:
+                query = query.where(ArticleEnrichment.category == category)
+            if subcategory:
+                query = query.where(ArticleEnrichment.subcategory == subcategory)
+            if region:
+                query = query.where(ArticleEnrichment.region == region)
+        return query
+
     async def list_recent(
-        self, limit: int = 50, offset: int = 0, category: str | None = None
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        category: str | None = None,
+        subcategory: str | None = None,
+        region: str | None = None,
+        since: datetime | None = None,
     ) -> list[Article]:
         query = (
             select(Article)
             .options(selectinload(Article.source), selectinload(Article.enrichment))
-            .where(Article.is_duplicate.is_(False))
             .order_by(Article.published_at.desc().nulls_last(), Article.fetched_at.desc())
             .limit(limit)
             .offset(offset)
         )
-        if category:
-            query = query.join(ArticleEnrichment).where(ArticleEnrichment.category == category)
+        query = self._apply_filters(
+            query, category=category, subcategory=subcategory, region=region, since=since
+        )
         result = await self.db.execute(query)
         return list(result.scalars().unique().all())
 
-    async def count(self) -> int:
-        result = await self.db.execute(select(func.count()).select_from(Article))
+    async def count(
+        self,
+        category: str | None = None,
+        subcategory: str | None = None,
+        region: str | None = None,
+        since: datetime | None = None,
+    ) -> int:
+        query = self._apply_filters(
+            select(func.count(Article.id.distinct())).select_from(Article),
+            category=category,
+            subcategory=subcategory,
+            region=region,
+            since=since,
+        )
+        result = await self.db.execute(query)
         return int(result.scalar_one())
+
+    async def count_by_category(self, since: datetime | None = None) -> dict[str, int]:
+        """One grouped query behind the newspaper's tab badges -- the alternative
+        is a request per category every time the page loads."""
+        query = (
+            select(ArticleEnrichment.category, func.count())
+            .join(Article, Article.id == ArticleEnrichment.article_id)
+            .where(Article.is_duplicate.is_(False))
+            .group_by(ArticleEnrichment.category)
+        )
+        if since is not None:
+            query = query.where(Article.published_at >= since)
+        result = await self.db.execute(query)
+        return {category: count for category, count in result.all()}
 
     async def get_by_id(self, article_id: uuid.UUID) -> Article | None:
         result = await self.db.execute(

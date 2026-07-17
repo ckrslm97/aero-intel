@@ -84,10 +84,10 @@ async def assemble_edition(db: AsyncSession, edition_date: date) -> Edition:
         # "sentence" and can't pick out the top themes.
         headlines_blob = ". ".join((a.enrichment.headline or a.title) for a in top_stories[:5]) + "."
         edition.executive_summary = await provider.generate_summary(
-            "Today's aviation news roundup", headlines_blob
+            "Günün havacılık haberleri özeti", headlines_blob
         )
     else:
-        edition.headline = "No stories yet today"
+        edition.headline = "Bugün henüz haber yok"
         edition.executive_summary = ""
 
     edition.status = "published"

@@ -46,6 +46,56 @@ async def _refresh_kpis() -> None:
         print(f"KPI refresh complete: {recorded} observations recorded")
 
 
+async def _re_enrich(days: int | None) -> None:
+    from app.core.config import get_settings
+    from app.pipeline.enrich import enrich_pending_articles, reset_enrichment
+
+    async with AsyncSessionLocal() as db:
+        reset = await reset_enrichment(db, days=days)
+        print(f"Reset enrichment for {reset} articles; re-enriching…")
+        # On a live LLM, cap each run to the daily-budget batch (freshest first);
+        # re-run the maintenance job to work through the backlog. Heuristic is
+        # free, so it re-enriches everything in one pass.
+        settings = get_settings()
+        batch = settings.llm_enrich_batch_size if settings.llm_provider != "heuristic" else None
+        enriched = await enrich_pending_articles(db, limit=batch)
+        print(f"Re-enriched {enriched} articles (batch limit: {batch or 'none'})")
+
+
+async def _seed_events() -> None:
+    from app.ingest.events_seed import seed_events
+
+    async with AsyncSessionLocal() as db:
+        inserted = await seed_events(db)
+        print(f"Seeded {inserted} curated aviation events")
+
+
+async def _seed_kpi_history() -> None:
+    from app.ingest.historical_seed import seed_kpi_history
+
+    async with AsyncSessionLocal() as db:
+        inserted = await seed_kpi_history(db)
+        print(f"Seeded {inserted} published historical KPI points")
+
+
+async def _prune_kpi_duplicates() -> None:
+    from app.services.kpi_service import prune_duplicate_estimates
+
+    async with AsyncSessionLocal() as db:
+        deleted = await prune_duplicate_estimates(db)
+        print(f"Pruned {deleted} duplicate published-estimate rows")
+
+
+async def _refresh_pdf() -> None:
+    from datetime import date
+
+    from app.services.pdf_service import refresh_pdf_for_date
+
+    async with AsyncSessionLocal() as db:
+        ok = await refresh_pdf_for_date(db, date.today())
+        print("PDF rendered and stored" if ok else "PDF not generated (no edition, or no Chromium here)")
+
+
 async def _send_newsletter() -> None:
     from app.services.daily_cycle import run_daily_edition_and_newsletter
 
@@ -73,24 +123,44 @@ def main() -> None:
         choices=[
             "ingest",
             "full-cycle",
+            "re-enrich",
             "build-edition",
             "refresh-kpis",
+            "seed-kpi-history",
+            "seed-events",
+            "prune-kpi-duplicates",
+            "refresh-pdf",
             "send-newsletter",
             "create-admin",
         ],
     )
     parser.add_argument("--email", help="Required for create-admin")
     parser.add_argument("--password", help="Required for create-admin")
+    parser.add_argument(
+        "--days",
+        type=int,
+        help="re-enrich: only articles fetched in the last N days (default: all)",
+    )
     args = parser.parse_args()
 
     if args.command == "ingest":
         asyncio.run(_ingest())
     elif args.command == "full-cycle":
         asyncio.run(_full_cycle())
+    elif args.command == "re-enrich":
+        asyncio.run(_re_enrich(args.days))
     elif args.command == "build-edition":
         asyncio.run(_build_edition())
     elif args.command == "refresh-kpis":
         asyncio.run(_refresh_kpis())
+    elif args.command == "seed-kpi-history":
+        asyncio.run(_seed_kpi_history())
+    elif args.command == "seed-events":
+        asyncio.run(_seed_events())
+    elif args.command == "prune-kpi-duplicates":
+        asyncio.run(_prune_kpi_duplicates())
+    elif args.command == "refresh-pdf":
+        asyncio.run(_refresh_pdf())
     elif args.command == "send-newsletter":
         asyncio.run(_send_newsletter())
     elif args.command == "create-admin":

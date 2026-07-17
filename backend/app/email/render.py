@@ -5,6 +5,8 @@ from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
+from app.core.tr_dates import format_long_date
+from app.models.article import Article
 from app.models.edition import Edition
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -13,18 +15,47 @@ _env = Environment(
     autoescape=select_autoescape(["html"]),
 )
 
+# Kept identical to the web section labels in
+# frontend/src/app/newspaper/[date]/page.tsx -- a reader who follows the PDF
+# link from the newsletter should land on sections with the same names.
 SECTION_LABELS: dict[str, str] = {
-    "top_story": "Top Stories",
-    "general": "General",
-    "safety": "Safety",
-    "finance": "Finance",
-    "fleet": "Fleet",
-    "routes": "Routes",
-    "regulatory": "Regulatory",
-    "sustainability": "Sustainability",
-    "labor": "Labor",
-    "airport": "Airports",
+    "top_story": "Öne Çıkanlar",
+    "general": "Genel",
+    "revenue_management": "Gelir Yönetimi",
+    "safety": "Emniyet",
+    "finance": "Finans",
+    "fleet": "Filo",
+    "network": "Ağ & Rota",
+    "regulatory": "Regülasyon",
+    "sustainability": "Sürdürülebilirlik",
+    "labor": "İşgücü",
+    "airport": "Havalimanı",
+    "events": "Etkinlik",
 }
+
+
+def _article_context(article: Article) -> dict:
+    enrichment = article.enrichment
+    # Same rule as the web card (frontend/src/components/article-card.tsx):
+    # show Turkish only when a translation-capable LLM actually produced it,
+    # otherwise show the original and label it -- never pass English off as
+    # Turkish by silently falling back.
+    is_translated = enrichment is not None and enrichment.translated_at is not None
+    headline = (is_translated and enrichment.headline_tr) or (
+        enrichment.headline if enrichment else None
+    ) or article.title
+    summary = (is_translated and enrichment.summary_tr) or (
+        enrichment.summary if enrichment else ""
+    )
+    return {
+        "headline": headline,
+        "summary": summary,
+        "is_translated": is_translated,
+        "source_name": article.source.name,
+        "url": article.url,
+        "confidence_pct": round((enrichment.confidence_score if enrichment else 0) * 100),
+        "corroborating_count": enrichment.corroborating_source_count if enrichment else 1,
+    }
 
 
 def render_newsletter_html(edition: Edition) -> str:
@@ -41,17 +72,7 @@ def render_newsletter_html(edition: Edition) -> str:
         sections.append(
             {
                 "label": SECTION_LABELS.get(section_key, section_key.title()),
-                "articles": [
-                    {
-                        "headline": (a.enrichment.headline if a.enrichment else a.title) or a.title,
-                        "summary": a.enrichment.summary if a.enrichment else "",
-                        "source_name": a.source.name,
-                        "url": a.url,
-                        "confidence_pct": round((a.enrichment.confidence_score if a.enrichment else 0) * 100),
-                        "corroborating_count": a.enrichment.corroborating_source_count if a.enrichment else 1,
-                    }
-                    for a in articles
-                ],
+                "articles": [_article_context(a) for a in articles],
             }
         )
 
@@ -59,6 +80,6 @@ def render_newsletter_html(edition: Edition) -> str:
     return template.render(
         headline=edition.headline,
         executive_summary=edition.executive_summary,
-        edition_date=edition.edition_date.strftime("%A, %B %-d, %Y"),
+        edition_date=format_long_date(edition.edition_date),
         sections=sections,
     )
