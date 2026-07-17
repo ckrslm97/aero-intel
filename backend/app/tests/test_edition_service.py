@@ -5,7 +5,9 @@ from app.models.source import Source
 from app.services.edition_service import TOP_STORY_COUNT, assemble_edition
 
 
-async def _make_article(db_session, source, *, title, category, importance, url):
+async def _make_article(
+    db_session, source, *, title, category, importance, url, headline_tr=None
+):
     article = Article(
         source_id=source.id,
         url=url,
@@ -26,6 +28,9 @@ async def _make_article(db_session, source, *, title, category, importance, url)
             importance_score=importance,
             confidence_score=0.7,
             corroborating_source_count=1,
+            headline_tr=headline_tr,
+            translated_at=datetime.now(timezone.utc) if headline_tr else None,
+            translation_provider="openai_compat" if headline_tr else None,
         )
     )
     await db_session.flush()
@@ -59,6 +64,31 @@ async def test_assemble_edition_ranks_top_stories_by_importance(db_session):
     assert other_sections <= {"general", "fleet"}
     assert edition.headline
     assert edition.status == "published"
+
+
+async def test_edition_headline_uses_turkish_when_top_story_is_translated(db_session):
+    source = Source(name="Test Source", url="https://example.com/feed", source_type="rss")
+    db_session.add(source)
+    await db_session.flush()
+
+    # The clear top story is a translated article; the edition masthead must read
+    # its Turkish headline, not the English original.
+    await _make_article(
+        db_session, source, title="Airline posts record profit", category="finance",
+        importance=0.95, url="https://example.com/top", headline_tr="Havayolu rekor kâr açıkladı",
+    )
+    await _make_article(
+        db_session, source, title="Minor fleet update", category="fleet",
+        importance=0.2, url="https://example.com/minor",
+    )
+    await db_session.commit()
+
+    edition = await assemble_edition(db_session, date.today())
+
+    assert edition.headline == "Havayolu rekor kâr açıkladı"
+    # The extractive summary is built from Turkish headlines, so it must not echo
+    # the English original of the top story.
+    assert "Airline posts record profit" not in edition.executive_summary
 
 
 async def test_assemble_edition_is_idempotent_on_rebuild(db_session):

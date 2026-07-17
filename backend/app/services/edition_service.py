@@ -77,12 +77,22 @@ async def assemble_edition(db: AsyncSession, edition_date: date) -> Edition:
         edition.articles = new_edition_articles
 
     if top_stories:
-        edition.headline = top_stories[0].enrichment.headline or top_stories[0].title
+        # Prefer the Turkish headline when the article was translated (same rule
+        # as the web card, frontend/src/components/article-card.tsx) so the
+        # edition masthead and PDF read Turkish regardless of which stories rank
+        # top -- otherwise a top English article would leave the whole edition
+        # header in English.
+        def _tr_headline(article) -> str:
+            e = article.enrichment
+            return (e.headline_tr if e.translated_at else None) or e.headline or article.title
+
+        edition.headline = _tr_headline(top_stories[0])
         provider = get_llm_provider()
         # Headlines carry no terminal punctuation, so join them as explicit
         # sentences -- otherwise the extractive summarizer sees one run-on
-        # "sentence" and can't pick out the top themes.
-        headlines_blob = ". ".join((a.enrichment.headline or a.title) for a in top_stories[:5]) + "."
+        # "sentence" and can't pick out the top themes. Built from the Turkish
+        # headlines so the extractive summary is Turkish too, at no extra LLM cost.
+        headlines_blob = ". ".join(_tr_headline(a) for a in top_stories[:5]) + "."
         edition.executive_summary = await provider.generate_summary(
             "Günün havacılık haberleri özeti", headlines_blob
         )
