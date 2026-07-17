@@ -17,4 +17,9 @@ class KPI(UUIDPrimaryKeyMixin, Base):
     unit: Mapped[str] = mapped_column(String(20), default="")
     as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     source: Mapped[str] = mapped_column(String(100), default="")
+    source_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     is_estimate: Mapped[bool] = mapped_column(Boolean, default=False)  # true = licensed-data placeholder
+    # True for the reading that drives the displayed value/trend; False marks a
+    # corroborating cross-check from a second source (see kpi_service.py) --
+    # kept as its own row rather than a second column so N sources can corroborate.
+    is_primary: Mapped[bool] = mapped_column(Boolean, default=True)
