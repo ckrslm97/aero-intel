@@ -9,16 +9,26 @@ from pathlib import Path
 import aiosmtplib
 
 from app.core.config import get_settings
+from app.core.db import IS_SERVERLESS
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def _outbox_dir(configured: str) -> Path:
+    # Serverless filesystems are read-only apart from /tmp, and this is only the
+    # no-credentials dry-run path, so a scratch dir is the right fallback --
+    # real sends go over SMTP and touch no disk.
+    if IS_SERVERLESS:
+        return Path("/tmp/outbox")
+    return Path(__file__).parent.parent.parent / configured
 
 
 async def send_email(to_email: str, subject: str, html_body: str) -> None:
     settings = get_settings()
 
     if not settings.smtp_host:
-        outbox_dir = Path(__file__).parent.parent.parent / settings.outbox_dir
+        outbox_dir = _outbox_dir(settings.outbox_dir)
         outbox_dir.mkdir(parents=True, exist_ok=True)
         safe_email = to_email.replace("@", "_at_")
         out_path = outbox_dir / f"{subject.replace(' ', '_')}__{safe_email}.html"

@@ -8,6 +8,7 @@ from slowapi.errors import RateLimitExceeded
 
 from app.api.v1.router import api_router
 from app.core.config import get_settings
+from app.core.db import IS_SERVERLESS
 from app.core.limiter import limiter
 from app.core.logging import configure_logging, get_logger
 
@@ -18,8 +19,17 @@ logger = get_logger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("startup", environment=settings.environment, llm_provider=settings.llm_provider)
-    if settings.scheduler_enabled:
+    logger.info(
+        "startup",
+        environment=settings.environment,
+        llm_provider=settings.llm_provider,
+        serverless=IS_SERVERLESS,
+    )
+    # A serverless function is frozen between requests, so an in-process
+    # scheduler would fire unpredictably (or never) and each cold start would
+    # spawn another one. In that deployment the same jobs run as GitHub Actions
+    # cron calling app/cli.py -- see .github/workflows/.
+    if settings.scheduler_enabled and not IS_SERVERLESS:
         from app.scheduler.jobs import start_scheduler, stop_scheduler
 
         start_scheduler()

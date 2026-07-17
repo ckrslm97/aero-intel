@@ -1,11 +1,10 @@
 """Daily edition endpoints. Today's edition auto-assembles on first request if
 it doesn't exist yet; past dates are immutable once built.
 """
-import os
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db
@@ -15,6 +14,7 @@ from app.repositories.edition_repository import EditionRepository
 from app.schemas.article import ArticleOut
 from app.schemas.edition import EditionOut, EditionSectionOut, EditionSummaryOut
 from app.services.edition_service import assemble_edition
+from app.services.pdf_service import get_edition_pdf_bytes
 
 router = APIRouter(prefix="/editions", tags=["editions"])
 
@@ -39,7 +39,7 @@ def _to_edition_out(edition: Edition) -> EditionOut:
         headline=edition.headline,
         executive_summary=edition.executive_summary,
         sections=ordered_sections,
-        pdf_available=bool(edition.pdf_path and os.path.exists(edition.pdf_path)),
+        pdf_available=edition.pdf_generated_at is not None,
     )
 
 
@@ -54,7 +54,7 @@ async def list_editions(db: AsyncSession = Depends(get_db)) -> list[EditionSumma
             status=e.status,
             headline=e.headline,
             story_count=len(e.articles),
-            pdf_available=bool(e.pdf_path and os.path.exists(e.pdf_path)),
+            pdf_available=e.pdf_generated_at is not None,
         )
         for e in editions
     ]
@@ -75,17 +75,24 @@ async def get_edition(edition_date: date, db: AsyncSession = Depends(get_db)) ->
 
 
 @router.get("/{edition_date}/pdf")
-async def download_edition_pdf(edition_date: date, db: AsyncSession = Depends(get_db)) -> FileResponse:
+async def download_edition_pdf(edition_date: date, db: AsyncSession = Depends(get_db)) -> Response:
     repo = EditionRepository(db)
     edition = await repo.get_by_date(edition_date)
+    if edition is None:
+        raise HTTPException(status_code=404, detail="Edition not found")
 
-    if edition is None or not edition.pdf_path or not os.path.exists(edition.pdf_path):
-        raise HTTPException(status_code=404, detail="PDF not available for this edition")
+    pdf_bytes = await get_edition_pdf_bytes(db, edition.id)
+    if pdf_bytes is None:
+        # Rendering needs Chromium, which only the GitHub Actions runner has --
+        # so a PDF that hasn't been generated yet is a "not ready", not an error.
+        raise HTTPException(status_code=404, detail="PDF not generated for this edition yet")
 
-    return FileResponse(
-        edition.pdf_path,
+    return Response(
+        content=pdf_bytes,
         media_type="application/pdf",
-        filename=f"aerointel-{edition_date}.pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="aerointel-gazete-{edition_date}.pdf"'
+        },
     )
 
 

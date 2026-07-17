@@ -1,8 +1,16 @@
 """A daily newspaper edition: an ordered, sectioned snapshot of articles."""
 import uuid
-from datetime import date
+from datetime import date, datetime
 
-from sqlalchemy import Date, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import (
+    Date,
+    DateTime,
+    ForeignKey,
+    Integer,
+    LargeBinary,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -17,11 +25,38 @@ class Edition(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(20), default="draft")  # draft|published
     headline: Mapped[str] = mapped_column(String(500), default="")
     executive_summary: Mapped[str] = mapped_column(String(2000), default="")
-    pdf_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # Set when the PDF bytes land in `edition_pdfs`. Kept here (rather than
+    # joining) so listing editions never has to touch the blob table.
+    pdf_generated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     articles: Mapped[list["EditionArticle"]] = relationship(
         back_populates="edition", cascade="all, delete-orphan", order_by="EditionArticle.rank"
     )
+    pdf: Mapped["EditionPdf | None"] = relationship(
+        back_populates="edition", uselist=False, cascade="all, delete-orphan"
+    )
+
+
+class EditionPdf(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    """The rendered PDF, stored in Postgres rather than on disk.
+
+    The app runs on a serverless platform with a read-only, ephemeral
+    filesystem, and the PDF is produced by a separate GitHub Actions runner --
+    two machines that share nothing but the database. So the database is the
+    only place both sides can meet.
+    """
+
+    __tablename__ = "edition_pdfs"
+
+    edition_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("editions.id", ondelete="CASCADE"), unique=True
+    )
+    data: Mapped[bytes] = mapped_column(LargeBinary)
+    byte_size: Mapped[int] = mapped_column(Integer)
+
+    edition: Mapped["Edition"] = relationship(back_populates="pdf")
 
 
 class EditionArticle(Base):

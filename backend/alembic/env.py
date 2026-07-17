@@ -2,11 +2,11 @@ import asyncio
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import pool
-from sqlalchemy.ext.asyncio import async_engine_from_config
+from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.pool import NullPool
 
 from app.core.config import get_settings
-from app.core.db import Base
+from app.core.db import Base, normalize_database_url
 
 import app.models  # noqa: F401  (imports all models so Alembic's autogenerate can see them)
 
@@ -17,13 +17,24 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 settings = get_settings()
-config.set_main_option("sqlalchemy.url", settings.database_url)
+
+# Managed-Postgres URLs (Neon et al) carry libpq-only params asyncpg rejects, so
+# they go through the same normalization the app uses -- see app/core/db.py.
+# The URL is then used directly rather than via config.set_main_option(), which
+# would run it through configparser interpolation and choke on a '%' in the
+# password.
+DATABASE_URL, _CONNECT_ARGS = normalize_database_url(settings.database_url)
+
+# Migrations are meant to run against the direct (unpooled) endpoint, but a
+# pooled URL is what Neon shows first -- so disable asyncpg's prepared-statement
+# cache, which pgbouncer's transaction mode can't serve. One-shot DDL, so the
+# cache buys nothing anyway.
+_CONNECT_ARGS = {**_CONNECT_ARGS, "statement_cache_size": 0}
 
 
 def run_migrations_offline() -> None:
-    url = config.get_main_option("sqlalchemy.url")
     context.configure(
-        url=url,
+        url=DATABASE_URL,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
@@ -39,10 +50,10 @@ def do_run_migrations(connection) -> None:
 
 
 async def run_migrations_online() -> None:
-    connectable = async_engine_from_config(
-        config.get_section(config.config_ini_section, {}),
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
+    connectable = create_async_engine(
+        DATABASE_URL,
+        poolclass=NullPool,
+        connect_args=_CONNECT_ARGS,
     )
 
     async with connectable.connect() as connection:
