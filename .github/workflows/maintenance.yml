@@ -1,0 +1,95 @@
+name: Maintenance
+
+# Manually-triggered one-off operations: first-time seeding, data cleanup,
+# re-translating the backlog, creating the admin user, or forcing a migration.
+# Pick a task from the dropdown when dispatching.
+on:
+  workflow_dispatch:
+    inputs:
+      task:
+        description: "Which maintenance task to run"
+        required: true
+        type: choice
+        options:
+          - alembic-upgrade
+          - seed-kpi-history
+          - seed-events
+          - prune-kpi-duplicates
+          - re-enrich
+          - create-admin
+      days:
+        description: "re-enrich only: limit to articles fetched in the last N days (blank = all)"
+        required: false
+        type: string
+      admin_email:
+        description: "create-admin only: the admin account email (password comes from the ADMIN_PASSWORD secret)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  # Serialise with itself; do not fight the scheduled jobs' own groups.
+  group: maintenance
+  cancel-in-progress: false
+
+jobs:
+  run-task:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run ${{ inputs.task }}
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          # re-enrich needs the live translator; harmless for the other tasks.
+          LLM_PROVIDER: openai_compat
+          LLM_BASE_URL: https://api.groq.com/openai/v1
+          LLM_MODEL: llama-3.3-70b-versatile
+          LLM_MODEL_FAST: llama-3.1-8b-instant
+          LLM_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          ADMIN_EMAIL: ${{ inputs.admin_email }}
+          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+          DAYS: ${{ inputs.days }}
+        run: |
+          set -euo pipefail
+          case "${{ inputs.task }}" in
+            alembic-upgrade)
+              alembic upgrade head ;;
+            seed-kpi-history)
+              alembic upgrade head
+              python -m app.cli seed-kpi-history ;;
+            seed-events)
+              alembic upgrade head
+              python -m app.cli seed-events ;;
+            prune-kpi-duplicates)
+              python -m app.cli prune-kpi-duplicates ;;
+            re-enrich)
+              if [ -n "${DAYS}" ]; then
+                python -m app.cli re-enrich --days "${DAYS}"
+              else
+                python -m app.cli re-enrich
+              fi ;;
+            create-admin)
+              if [ -z "${ADMIN_EMAIL}" ] || [ -z "${ADMIN_PASSWORD}" ]; then
+                echo "create-admin needs the admin_email input and the ADMIN_PASSWORD secret" >&2
+                exit 1
+              fi
+              python -m app.cli create-admin --email "${ADMIN_EMAIL}" --password "${ADMIN_PASSWORD}" ;;
+            *)
+              echo "Unknown task: ${{ inputs.task }}" >&2
+              exit 1 ;;
+          esac

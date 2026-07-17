@@ -1,0 +1,77 @@
+name: Daily edition + PDF
+
+# Once a day: assemble the day's edition, render it to a PDF with Playwright's
+# Chromium, and store the PDF in Postgres (Vercel has no Chromium and a
+# read-only disk, so the runner produces the PDF and the API serves it from the
+# DB). If SMTP secrets are configured, also send the newsletter.
+on:
+  schedule:
+    - cron: "15 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jobs-daily-edition
+  cancel-in-progress: false
+
+jobs:
+  daily-edition:
+    runs-on: ubuntu-latest
+    # SMTP at job level so the send step's `if` can read env.SMTP_HOST reliably
+    # (step-level env is not guaranteed to be visible in that same step's `if`).
+    # Env var names must match the pydantic Settings fields (app/core/config.py):
+    # smtp_username / email_from, not SMTP_USER / SMTP_FROM.
+    env:
+      SMTP_HOST: ${{ secrets.SMTP_HOST }}
+      SMTP_PORT: ${{ secrets.SMTP_PORT }}
+      SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+      SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+      EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          # Playwright lives in the dev requirements; the edition PDF is the one
+          # job that needs it.
+          cache-dependency-path: backend/requirements-dev.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      # Chromium is large; cache it across runs keyed on the Playwright version.
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('backend/requirements-dev.txt') }}
+
+      - name: Install Chromium
+        run: playwright install --with-deps chromium
+
+      - name: Build edition + render PDF
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          LLM_PROVIDER: openai_compat
+          LLM_BASE_URL: https://api.groq.com/openai/v1
+          LLM_MODEL: llama-3.3-70b-versatile
+          LLM_MODEL_FAST: llama-3.1-8b-instant
+          LLM_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: |
+          alembic upgrade head
+          python -m app.cli build-edition
+          python -m app.cli refresh-pdf
+
+      - name: Send newsletter (only if SMTP is configured)
+        if: ${{ env.SMTP_HOST != '' }}
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python -m app.cli send-newsletter
