@@ -40,6 +40,23 @@ honestly rather than faking it with mock UI.
       GitHub Actions CI (backend lint+test against a real Postgres service,
       frontend typecheck+lint+build); regions/airlines/routes/finance/BİZ
       remain the honest frontend-only scaffolds built in M0.
+- [x] **M7 — Fund/ETF investment intelligence (`/invest`).** A module
+      separate from the aviation content: five US ETFs (XLV, VHT, XLF, XBI,
+      ARKG) and four TEFAS funds (AFS, TBE, TI2, MAC), each with 1-year price
+      history, holdings (with % weights), and sector/asset-class allocation.
+      Data is cross-verified where a second source exists and every row is
+      badged with its `verification_status` — `verified` (two sources agreed),
+      `official_single_source` (TEFAS, the regulator platform), `single_source`
+      (unconfirmed), or `discrepancy` — so unverified data is never shown as
+      verified. An economist-style Turkish analysis per fund and per portfolio
+      is generated on each refresh via the existing LLM provider abstraction,
+      with a deterministic data-grounded fallback and a fixed
+      not-investment-advice disclaimer. Adapters
+      (`backend/app/ingest/funds/`): Yahoo Finance (price/history, reused from
+      the KPI module), SSGA / ARK / Vanguard issuer holdings, TEFAS (new + legacy
+      API), stockanalysis.com (price cross-check). Scheduled twice daily
+      (07:30 UTC for TEFAS NAVs, 22:30 UTC for the US close). See
+      `docs/fund-data-sources.md` for the per-source verification record.
 
 ## Deliberately out of scope / stubbed
 

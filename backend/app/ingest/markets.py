@@ -41,6 +41,7 @@ HISTORY_RANGES: dict[str, tuple[str, str]] = {
     "3m": ("3mo", "1d"),
     "6m": ("6mo", "1wk"),
     "1y": ("1y", "1wk"),
+    "1y_daily": ("1y", "1d"),  # /invest module needs daily granularity for 1-year fund charts
 }
 
 

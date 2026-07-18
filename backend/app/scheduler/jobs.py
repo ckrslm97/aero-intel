@@ -24,6 +24,19 @@ async def _refresh_kpis_job() -> None:
         await refresh_all_kpis(db)
 
 
+async def _refresh_funds_job() -> None:
+    """Fund/ETF data + analysis for the /invest module. Idempotent per day:
+    price backfill is guarded by exists_price_at and analysis regeneration
+    skips when the input fingerprint hasn't changed."""
+    from app.core.db import AsyncSessionLocal
+    from app.services.fund_analysis_service import regenerate_fund_analyses
+    from app.services.fund_service import refresh_all_funds
+
+    async with AsyncSessionLocal() as db:
+        await refresh_all_funds(db)
+        await regenerate_fund_analyses(db)
+
+
 def _register_jobs(scheduler: AsyncIOScheduler) -> None:
     settings = get_settings()
 
@@ -49,6 +62,15 @@ def _register_jobs(scheduler: AsyncIOScheduler) -> None:
         id="refresh_kpis",
         replace_existing=True,
         misfire_grace_time=600,
+    )
+    # 07:30 UTC catches TEFAS's morning publication of previous-day NAVs;
+    # 22:30 UTC catches the US market close.
+    scheduler.add_job(
+        _refresh_funds_job,
+        trigger=CronTrigger(hour="7,22", minute=30),
+        id="refresh_funds",
+        replace_existing=True,
+        misfire_grace_time=3600,
     )
 
 

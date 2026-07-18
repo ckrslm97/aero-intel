@@ -3,6 +3,7 @@ from app.models.edition import Edition, EditionArticle
 from app.models.email_delivery import EmailDelivery
 from app.models.entity import ArticleEntity, Entity
 from app.models.event import AviationEvent
+from app.models.fund import Fund, FundAllocation, FundAnalysis, FundHolding, FundPrice
 from app.models.insight import InsightDigest
 from app.models.kpi import KPI
 from app.models.source import Source
@@ -18,6 +19,11 @@ __all__ = [
     "EditionArticle",
     "EmailDelivery",
     "Entity",
+    "Fund",
+    "FundAllocation",
+    "FundAnalysis",
+    "FundHolding",
+    "FundPrice",
     "InsightDigest",
     "KPI",
     "Source",
