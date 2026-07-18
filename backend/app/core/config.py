@@ -74,6 +74,11 @@ class Settings(BaseSettings):
     # --- External data sources (free) ---
     opensky_base_url: str = "https://opensky-network.org/api"
     yahoo_finance_base_url: str = "https://query1.finance.yahoo.com/v8/finance/chart"
+    yahoo_quote_summary_base_url: str = "https://query1.finance.yahoo.com/v10/finance/quoteSummary"
+    tefas_base_url: str = "https://www.tefas.gov.tr"
+    stockanalysis_base_url: str = "https://stockanalysis.com/api/symbol"
+    ark_holdings_base_url: str = "https://assets.ark-funds.com/fund-documents/funds-etf-csv"
+    ssga_holdings_base_url: str = "https://www.ssga.com/library-content/products/fund-data/etfs/us"
 
     # --- Scheduler ---
     scheduler_enabled: bool = True

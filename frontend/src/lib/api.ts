@@ -42,3 +42,34 @@ export async function apiFetch<T>(
   }
   return res.json() as Promise<T>;
 }
+
+// --- /invest module fetchers (backend/app/api/v1/funds.py) ------------------
+
+import type {
+  FundDetailOut,
+  FundHistoryOut,
+  FundHoldingsOut,
+  FundOut,
+  FundPeriod,
+  PortfoliosOut,
+} from "@/lib/types";
+
+export function getFunds(): Promise<FundOut[]> {
+  return apiFetch<FundOut[]>("/funds");
+}
+
+export function getFundsPortfolio(): Promise<PortfoliosOut> {
+  return apiFetch<PortfoliosOut>("/funds/portfolio");
+}
+
+export function getFundDetail(symbol: string): Promise<FundDetailOut> {
+  return apiFetch<FundDetailOut>(`/funds/${encodeURIComponent(symbol)}`);
+}
+
+export function getFundHistory(symbol: string, period: FundPeriod): Promise<FundHistoryOut> {
+  return apiFetch<FundHistoryOut>(`/funds/${encodeURIComponent(symbol)}/history?period=${period}`);
+}
+
+export function getFundHoldings(symbol: string): Promise<FundHoldingsOut> {
+  return apiFetch<FundHoldingsOut>(`/funds/${encodeURIComponent(symbol)}/holdings`);
+}

@@ -11,6 +11,7 @@ import {
   Search,
   ShieldCheck,
   Star,
+  TrendingUp,
 } from "lucide-react";
 
 export interface NavItem {
@@ -26,6 +27,7 @@ export const primaryNav: NavItem[] = [
   { href: "/newspaper", label: "Gazete", icon: Newspaper },
   { href: "/events", label: "Takvim", icon: CalendarDays },
   { href: "/insights", label: "İçgörüler", icon: Lightbulb },
+  { href: "/invest", label: "Yatırım", icon: TrendingUp },
   { href: "/archive", label: "Arşiv", icon: BarChart3 },
   { href: "/regions", label: "Bölgeler", icon: Globe2, scaffold: true },
   { href: "/airlines", label: "Havayolları", icon: Plane, scaffold: true },
