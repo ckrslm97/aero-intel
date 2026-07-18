@@ -1,11 +1,11 @@
 "use client";
 
-import { ArrowDownRight, ArrowUpRight, CircleDashed, ExternalLink, Minus } from "lucide-react";
+import { ArrowDownRight, ArrowUpRight, CircleDashed, Download, ExternalLink, Minus } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { KpiDetailChart } from "@/components/charts/kpi-detail-chart";
 import { Badge } from "@/components/ui/badge";
-import { apiFetch } from "@/lib/api";
+import { API_BASE_URL, apiFetch } from "@/lib/api";
 import { formatCompactNumber, formatDelta } from "@/lib/format";
 import { KPI_ICONS } from "@/lib/kpi-icons";
 import type { KpiDetailOut, KpiPeriod } from "@/lib/types";
@@ -66,6 +66,9 @@ export function KpiDetailClient({ metricKey }: { metricKey: string }) {
   const isGoodDirection = isPositive === detail.up_is_good;
   const deltaColor = isFlat ? "text-muted-foreground" : isGoodDirection ? "text-good" : "text-critical";
   const Icon = KPI_ICONS[detail.metric_key] ?? CircleDashed;
+  const historyNewestFirst = [...detail.history].sort(
+    (a, b) => new Date(b.as_of).getTime() - new Date(a.as_of).getTime(),
+  );
 
   return (
     <div className="flex flex-col gap-6">
@@ -201,6 +204,74 @@ export function KpiDetailClient({ metricKey }: { metricKey: string }) {
             ? "Geçmiş veriler doğrudan kaynağın kendi arşivinden alınmıştır."
             : "Geçmiş veriler kendi periyodik ölçümlerimizden biriktirilmiştir -- zamanlayıcı çalıştıkça zamanla dolar, geriye dönük doldurulmaz."}
         </p>
+      </div>
+
+      <div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+            Veri Tablosu
+          </h2>
+          <a
+            href={`${API_BASE_URL}/kpis/${metricKey}/observations.csv`}
+            className="flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground hover:bg-accent"
+          >
+            <Download className="size-3.5" />
+            CSV İndir
+          </a>
+        </div>
+
+        {historyNewestFirst.length > 0 ? (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  <th className="px-2 py-2 font-semibold">Tarih</th>
+                  <th className="px-2 py-2 font-semibold">Değer</th>
+                  <th className="px-2 py-2 font-semibold">Kaynak</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {historyNewestFirst.map((point) => (
+                  <tr key={point.as_of}>
+                    <td className="px-2 py-2 text-muted-foreground">
+                      {new Date(point.as_of).toLocaleString("tr-TR", {
+                        dateStyle: "medium",
+                        timeStyle: "short",
+                      })}
+                    </td>
+                    <td className="px-2 py-2 font-medium">
+                      {formatCompactNumber(point.value)}
+                      {detail.unit && (
+                        <span className="ml-1 font-normal text-muted-foreground">
+                          {detail.unit}
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-2 py-2">
+                      {detail.source_url ? (
+                        <a
+                          href={detail.source_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-primary hover:underline"
+                        >
+                          {detail.source}
+                          <ExternalLink className="size-3" />
+                        </a>
+                      ) : (
+                        <span className="text-muted-foreground">{detail.source}</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
+            Bu dönem için henüz kayıtlı gözlem yok.
+          </p>
+        )}
       </div>
     </div>
   );

@@ -21,6 +21,10 @@ export interface KpiCardProps {
   /** True when this metric is a labelled estimate pending a licensed data source. */
   isEstimate?: boolean;
   comparisonLabel?: string;
+  /** Percent change vs LY (2025). Renders a second compact delta line when set. */
+  lyDeltaPct?: number;
+  /** Label for the LY delta line -- backend sends "2025 (LY)'e göre". */
+  lyComparisonLabel?: string;
 }
 
 export function KpiCard({
@@ -33,10 +37,15 @@ export function KpiCard({
   trend,
   isEstimate,
   comparisonLabel = "önceki ölçüme göre",
+  lyDeltaPct,
+  lyComparisonLabel = "2025 (LY)'e göre",
 }: KpiCardProps) {
   const isFlat = (deltaPct ?? 0) === 0;
   const isPositive = (deltaPct ?? 0) >= 0;
   const isGoodDirection = isPositive === upIsGood;
+  const lyIsFlat = (lyDeltaPct ?? 0) === 0;
+  const lyIsPositive = (lyDeltaPct ?? 0) >= 0;
+  const lyIsGoodDirection = lyIsPositive === upIsGood;
   const Icon = KPI_ICONS[metricKey] ?? CircleDashed;
 
   return (
@@ -96,6 +105,37 @@ export function KpiCard({
                 {formatDelta(deltaPct)}
               </span>
               <span className="text-muted-foreground">{comparisonLabel}</span>
+            </div>
+          )}
+
+          {lyDeltaPct !== undefined && (
+            <div className="flex items-center gap-1 text-xs">
+              {lyIsFlat ? (
+                <Minus className="size-3.5 text-muted-foreground" />
+              ) : lyIsPositive ? (
+                <ArrowUpRight
+                  className={cn(
+                    "size-3.5",
+                    lyIsGoodDirection ? "text-good" : "text-critical",
+                  )}
+                />
+              ) : (
+                <ArrowDownRight
+                  className={cn(
+                    "size-3.5",
+                    lyIsGoodDirection ? "text-good" : "text-critical",
+                  )}
+                />
+              )}
+              <span
+                className={cn(
+                  "font-medium",
+                  lyIsFlat ? "text-muted-foreground" : lyIsGoodDirection ? "text-good" : "text-critical",
+                )}
+              >
+                {formatDelta(lyDeltaPct)}
+              </span>
+              <span className="text-muted-foreground">{lyComparisonLabel}</span>
             </div>
           )}
 

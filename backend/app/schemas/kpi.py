@@ -8,11 +8,16 @@ class KpiOut(BaseModel):
     label: str
     value: float
     unit: str
-    delta_pct: float | None
+    delta_pct: float | None  # vs the previous observation (unchanged semantics)
     up_is_good: bool
     trend: list[float]
     is_estimate: bool
     as_of: datetime
+    # Last-year (2025) comparison: the metric's 2025 value where one exists
+    # (IATA's 2025 column, or the market price a year ago), else None.
+    ly_value: float | None
+    ly_delta_pct: float | None  # latest value vs ly_value, rounded to 2dp
+    comparison_label: str  # "2025 (LY)'e göre" when LY exists, else "önceki ölçüme göre"
 
 
 class KpiHistoryPointOut(BaseModel):

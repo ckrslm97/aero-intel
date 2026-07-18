@@ -1,16 +1,21 @@
 """Dashboard KPIs -- returns the latest value + recent trend per metric, in a
 fixed display order. See kpi_service.py for what's real vs. derived/estimated.
 """
-from datetime import datetime, timedelta, timezone
+import csv
+import io
+from datetime import date, datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.db import get_db
+from app.core.logging import get_logger
 from app.ingest.markets import fetch_history
 from app.repositories.kpi_repository import KpiRepository
 from app.schemas.kpi import KpiCorroborationOut, KpiDetailOut, KpiHistoryPointOut, KpiOut
+
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/kpis", tags=["kpis"])
 
@@ -50,6 +55,50 @@ PERIOD_TO_TIMEDELTA: dict[str, timedelta] = {
     "1y": timedelta(days=365),
 }
 
+# Last-year comparison: 2025 is the last completed year in the seeded IATA
+# series (see ingest/historical_seed.py); market metrics compare against the
+# price a year ago instead.
+LY_YEAR = 2025
+LY_COMPARISON_LABEL = "2025 (LY)'e göre"
+PREVIOUS_COMPARISON_LABEL = "önceki ölçüme göre"
+
+# (symbol, UTC date) -> first close of the trailing-1y Yahoo series, or None
+# when Yahoo was unreachable. The LY value moves at most once a day, and the
+# KPI list is hit on every dashboard load -- cache per process so repeated
+# loads don't hammer Yahoo.
+_yahoo_ly_cache: dict[tuple[str, date], float | None] = {}
+
+
+async def _yahoo_ly_value(symbol: str) -> float | None:
+    """The metric's value one year ago, from Yahoo Finance's own archive.
+    Never raises: a Yahoo hiccup must degrade to 'no LY comparison', not 500
+    the dashboard."""
+    cache_key = (symbol, datetime.now(timezone.utc).date())
+    if cache_key in _yahoo_ly_cache:
+        return _yahoo_ly_cache[cache_key]
+
+    settings = get_settings()
+    try:
+        points = await fetch_history(settings.yahoo_finance_base_url, symbol, "1y")
+        value = points[0][1] if points else None
+    except Exception as exc:  # noqa: BLE001 -- any Yahoo failure means "no LY value"
+        logger.warning("kpi_ly_history_fetch_failed", symbol=symbol, error=str(exc))
+        value = None
+
+    _yahoo_ly_cache[cache_key] = value
+    return value
+
+
+async def _ly_value(repo: KpiRepository, metric_key: str) -> float | None:
+    """Last-year value: Yahoo's archive for market metrics, our stored 2025
+    observation (the seeded IATA column) for everything else."""
+    yahoo_symbol = YAHOO_HISTORY_SYMBOLS.get(metric_key)
+    if yahoo_symbol:
+        return await _yahoo_ly_value(yahoo_symbol)
+
+    row = await repo.value_for_year(metric_key, LY_YEAR)
+    return row.value if row else None
+
 
 @router.get("", response_model=list[KpiOut])
 async def list_kpis(db: AsyncSession = Depends(get_db)) -> list[KpiOut]:
@@ -66,6 +115,11 @@ async def list_kpis(db: AsyncSession = Depends(get_db)) -> list[KpiOut]:
         if len(history) >= 2 and history[-2].value:
             delta_pct = round((latest.value - history[-2].value) / history[-2].value * 100, 2)
 
+        ly_value = await _ly_value(repo, metric_key)
+        ly_delta_pct = None
+        if ly_value:  # a zero LY value can't anchor a percent change either
+            ly_delta_pct = round((latest.value - ly_value) / ly_value * 100, 2)
+
         out.append(
             KpiOut(
                 metric_key=metric_key,
@@ -77,10 +131,44 @@ async def list_kpis(db: AsyncSession = Depends(get_db)) -> list[KpiOut]:
                 trend=[h.value for h in history],
                 is_estimate=latest.is_estimate,
                 as_of=latest.as_of,
+                ly_value=ly_value,
+                ly_delta_pct=ly_delta_pct,
+                comparison_label=(
+                    LY_COMPARISON_LABEL if ly_value is not None else PREVIOUS_COMPARISON_LABEL
+                ),
             )
         )
 
     return out
+
+
+# NOTE: registered before GET /{metric_key}. FastAPI would route the two-segment
+# path correctly either way (a path param only matches one segment), but keeping
+# the more specific route first makes the non-collision explicit.
+@router.get("/{metric_key}/observations.csv")
+async def export_kpi_observations_csv(
+    metric_key: str, db: AsyncSession = Depends(get_db)
+) -> Response:
+    """Full stored history for one metric as a CSV download."""
+    rows = await KpiRepository(db).all_observations(metric_key)
+    if not rows:
+        raise HTTPException(status_code=404, detail="No observations recorded yet for this KPI")
+
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, lineterminator="\n")
+    writer.writerow(["date", "value", "unit", "source", "source_url"])
+    for row in rows:
+        writer.writerow(
+            [row.as_of.date().isoformat(), row.value, row.unit, row.source, row.source_url or ""]
+        )
+
+    return Response(
+        content=buffer.getvalue(),
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="aerointel-kpi-{metric_key}.csv"'
+        },
+    )
 
 
 @router.get("/{metric_key}", response_model=KpiDetailOut)

@@ -27,6 +27,8 @@ function KpiGrid({ kpis }: { kpis: KpiOut[] }) {
           upIsGood={kpi.up_is_good}
           trend={kpi.trend}
           isEstimate={kpi.is_estimate}
+          lyDeltaPct={kpi.ly_delta_pct ?? undefined}
+          lyComparisonLabel={kpi.comparison_label}
         />
       ))}
     </section>

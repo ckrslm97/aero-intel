@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -52,6 +52,33 @@ class KpiRepository:
             select(KPI.id).where(KPI.metric_key == metric_key, KPI.as_of == as_of).limit(1)
         )
         return result.scalar_one_or_none() is not None
+
+    async def value_for_year(self, metric_key: str, year: int) -> KPI | None:
+        """The primary observation dated within `year` (the latest one, should
+        several exist) -- backs the dashboard's last-year (LY) comparison
+        against the seeded IATA series (see ingest/historical_seed.py)."""
+        start = datetime(year, 1, 1, tzinfo=timezone.utc)
+        end = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+        result = await self.db.execute(
+            select(KPI)
+            .where(
+                KPI.metric_key == metric_key,
+                KPI.is_primary.is_(True),
+                KPI.as_of >= start,
+                KPI.as_of < end,
+            )
+            .order_by(KPI.as_of.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    async def all_observations(self, metric_key: str) -> list[KPI]:
+        """Every stored observation for this metric (primary and corroborating),
+        oldest first -- backs the CSV export."""
+        result = await self.db.execute(
+            select(KPI).where(KPI.metric_key == metric_key).order_by(KPI.as_of.asc())
+        )
+        return list(result.scalars().all())
 
     async def trend(self, metric_key: str, points: int = 12) -> list[KPI]:
         """Most recent `points` primary observations, oldest first (sparkline order)."""
