@@ -126,3 +126,36 @@ def test_detect_region_maps_country_entity_to_region():
 def test_detect_region_returns_none_without_country():
     entities = [EntityMention("airline", "Turkish Airlines", "TK")]
     assert detect_region(entities) is None
+
+
+async def test_entity_aliases_match_whole_words_only():
+    # Production bug: the substring alias "ana" fired inside "management",
+    # linking All Nippon Airways to 96 revenue-management articles.
+    provider = HeuristicProvider()
+    entities = await provider.extract_entities(
+        "Revenue management strategies for 2027",
+        "Airlines refine revenue management and capacity management practices.",
+    )
+    assert all(e.name != "All Nippon Airways" for e in entities)
+
+
+async def test_region_falls_back_to_airport_country():
+    # Route news often names only an airport ("Heathrow slots"), no country.
+    provider = HeuristicProvider()
+    entities = await provider.extract_entities(
+        "Heathrow slot changes announced",
+        "New slot allocations at Heathrow for the winter season.",
+    )
+    from app.llm.heuristic import detect_region
+
+    assert detect_region(entities) == "europe"
+
+
+async def test_rival_airline_name_lands_rm_article_in_competitor():
+    provider = HeuristicProvider()
+    sub = await provider.subcategorize(
+        "Emirates undercuts fares on Gulf routes",
+        "Emirates lowered fares in a bid for market share.",
+        "revenue_management",
+    )
+    assert sub == "competitor"

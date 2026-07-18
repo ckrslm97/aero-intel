@@ -36,12 +36,20 @@ CATEGORIES: list[CategoryDef] = [
         subcategories=[
             SubcategoryDef(
                 "competitor",
-                ["competitor", "rival", "undercut", "market share", "competition", "compete", "vs ", "battle"],
+                [
+                    "competitor", "rival", "undercut", "market share", "competition",
+                    "compete", "vs ", "battle",
+                    # The user's named main rivals: an RM-category story about any
+                    # of these airlines IS competitor intelligence, whether or not
+                    # it uses the word "competitor".
+                    "emirates", "qatar airways", "etihad", "lufthansa", "air france",
+                    "klm", "british airways", "pegasus", "ajet",
+                ],
             ),
-            SubcategoryDef(
-                "region",
-                ["regional market", "market entry", "expansion into", "new market", "transatlantic", "transpacific"],
-            ),
+            # NOTE: the old "region" subcategory is gone -- keyword matching
+            # almost never assigned it (0 articles in production), and the
+            # newspaper now has a real region filter driven by the entity-derived
+            # enrichment.region field, which covers every category at once.
             SubcategoryDef(
                 "pricing",
                 [

@@ -6,8 +6,10 @@ from app.api.v1 import (
     articles,
     auth,
     editions,
+    events,
     health,
     ingest,
+    insights,
     kpis,
     search,
     subscribers,
@@ -20,6 +22,8 @@ api_router.include_router(auth.router)
 api_router.include_router(articles.router)
 api_router.include_router(ingest.router)
 api_router.include_router(editions.router)
+api_router.include_router(events.router)
+api_router.include_router(insights.router)
 api_router.include_router(search.router)
 api_router.include_router(kpis.router)
 api_router.include_router(subscribers.router)

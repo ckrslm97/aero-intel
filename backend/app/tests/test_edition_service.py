@@ -1,4 +1,4 @@
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 
 from app.models.article import Article, ArticleEnrichment
 from app.models.source import Source
@@ -53,7 +53,7 @@ async def test_assemble_edition_ranks_top_stories_by_importance(db_session):
         )
     await db_session.commit()
 
-    edition = await assemble_edition(db_session, date.today())
+    edition = await assemble_edition(db_session, datetime.now(timezone.utc).date())
 
     top_story_articles = [ea for ea in edition.articles if ea.section == "top_story"]
     assert len(top_story_articles) == TOP_STORY_COUNT
@@ -83,7 +83,7 @@ async def test_edition_headline_uses_turkish_when_top_story_is_translated(db_ses
     )
     await db_session.commit()
 
-    edition = await assemble_edition(db_session, date.today())
+    edition = await assemble_edition(db_session, datetime.now(timezone.utc).date())
 
     assert edition.headline == "Havayolu rekor kâr açıkladı"
     # The extractive summary is built from Turkish headlines, so it must not echo
@@ -107,8 +107,8 @@ async def test_assemble_edition_is_idempotent_on_rebuild(db_session):
         )
     await db_session.commit()
 
-    first = await assemble_edition(db_session, date.today())
-    second = await assemble_edition(db_session, date.today())
+    first = await assemble_edition(db_session, datetime.now(timezone.utc).date())
+    second = await assemble_edition(db_session, datetime.now(timezone.utc).date())
 
     assert first.id == second.id
     assert len(second.articles) == 3

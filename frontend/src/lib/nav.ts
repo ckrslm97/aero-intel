@@ -1,8 +1,10 @@
 import type { LucideIcon } from "lucide-react";
 import {
   BarChart3,
+  CalendarDays,
   Globe2,
   LayoutDashboard,
+  Lightbulb,
   Newspaper,
   Plane,
   Route,
@@ -22,6 +24,8 @@ export interface NavItem {
 export const primaryNav: NavItem[] = [
   { href: "/", label: "Kontrol Paneli", icon: LayoutDashboard },
   { href: "/newspaper", label: "Gazete", icon: Newspaper },
+  { href: "/events", label: "Takvim", icon: CalendarDays },
+  { href: "/insights", label: "İçgörüler", icon: Lightbulb },
   { href: "/archive", label: "Arşiv", icon: BarChart3 },
   { href: "/regions", label: "Bölgeler", icon: Globe2, scaffold: true },
   { href: "/airlines", label: "Havayolları", icon: Plane, scaffold: true },

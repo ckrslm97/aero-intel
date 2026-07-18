@@ -15,6 +15,7 @@ from tenacity import (
 
 from app.core.logging import get_logger
 from app.llm.base import EntityMention
+from app.llm.sanitize import clean_translation
 from app.llm.prompts import (
     VALID_CATEGORIES,
     VALID_SENTIMENTS,
@@ -96,7 +97,11 @@ class OpenAICompatProvider:
         return result if result in sub_options else None
 
     async def translate(self, text: str, target: str = "tr") -> str | None:
-        return await self._generate(translate_prompt(text, target))
+        # Small models sometimes append invented prose or translator commentary
+        # after the actual translation; clean_translation keeps only what can be
+        # trusted, or None so the article stays honestly untranslated.
+        raw = await self._generate(translate_prompt(text, target))
+        return clean_translation(text, raw)
 
     async def sentiment(self, title: str, content: str) -> str:
         result = (await self._generate(sentiment_prompt(title, content))).strip().lower()

@@ -76,6 +76,12 @@ export interface KpiOut {
   trend: number[];
   is_estimate: boolean;
   as_of: string;
+  /** Same-metric value from LY (2025), when the backend has one. */
+  ly_value: number | null;
+  /** Percent change vs LY (2025). */
+  ly_delta_pct: number | null;
+  /** "2025 (LY)'e göre" when LY exists, else "önceki ölçüme göre". */
+  comparison_label: string;
 }
 
 export interface StatusCountOut {
@@ -132,4 +138,18 @@ export interface KpiDetailOut {
   history: KpiHistoryPointOut[];
   history_is_external: boolean;
   period: KpiPeriod;
+}
+
+export interface EventOut {
+  id: string;
+  name: string;
+  starts: string;
+  ends: string;
+  city: string;
+  country: string | null;
+  region: string | null;
+  url: string;
+  summary_tr: string;
+  event_type: "airshow" | "conference" | "sports" | "holiday" | "festival";
+  date_range_tr: string;
 }

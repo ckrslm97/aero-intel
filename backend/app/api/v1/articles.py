@@ -18,6 +18,9 @@ async def list_articles(
     category: str | None = None,
     subcategory: str | None = None,
     region: str | None = None,
+    airline: str | None = Query(
+        None, max_length=3, description="IATA airline code; matches articles mentioning the airline"
+    ),
     days: int | None = Query(
         None, ge=1, le=365, description="Only articles published within the last N days"
     ),
@@ -26,10 +29,13 @@ async def list_articles(
     repo = ArticleRepository(db)
     since = datetime.now(timezone.utc) - timedelta(days=days) if days else None
     items = await repo.list_recent(
-        limit=limit, offset=offset, category=category, subcategory=subcategory, region=region, since=since
+        limit=limit, offset=offset, category=category, subcategory=subcategory,
+        region=region, since=since, airline=airline,
     )
     # Filtered total (same clause as the list) so "load more" knows when to stop.
-    total = await repo.count(category=category, subcategory=subcategory, region=region, since=since)
+    total = await repo.count(
+        category=category, subcategory=subcategory, region=region, since=since, airline=airline
+    )
     return ArticleListOut(total=total, items=[ArticleOut.model_validate(a) for a in items])
 
 

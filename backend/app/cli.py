@@ -29,12 +29,12 @@ async def _full_cycle() -> None:
 
 
 async def _build_edition() -> None:
-    from datetime import date
+    from datetime import datetime, timezone
 
     from app.services.edition_service import assemble_edition
 
     async with AsyncSessionLocal() as db:
-        edition = await assemble_edition(db, date.today())
+        edition = await assemble_edition(db, datetime.now(timezone.utc).date())
         print(f"Edition assembled for {edition.edition_date}: {edition.headline}")
 
 
@@ -60,6 +60,37 @@ async def _re_enrich(days: int | None) -> None:
         batch = settings.llm_enrich_batch_size if settings.llm_provider != "heuristic" else None
         enriched = await enrich_pending_articles(db, limit=batch)
         print(f"Re-enriched {enriched} articles (batch limit: {batch or 'none'})")
+
+
+async def _build_insight() -> None:
+    from app.services.insights_service import build_daily_digest
+
+    async with AsyncSessionLocal() as db:
+        digest = await build_daily_digest(db)
+        print(f"Insight digest built for {digest.digest_date} via {digest.provider}")
+
+
+async def _reclassify() -> None:
+    from app.pipeline.enrich import reclassify_articles
+
+    async with AsyncSessionLocal() as db:
+        result = await reclassify_articles(db)
+        print(
+            f"Reclassified {result['articles']} articles in place: "
+            f"{result['region_changes']} region changes, "
+            f"{result['subcategory_changes']} subcategory changes"
+        )
+
+
+async def _repair_translations() -> None:
+    from app.pipeline.enrich import repair_corrupt_translations
+
+    async with AsyncSessionLocal() as db:
+        result = await repair_corrupt_translations(db)
+        print(
+            f"Repaired {result['repaired']} translations in place; "
+            f"{result['renulled']} sent back to the translate queue"
+        )
 
 
 async def _translate_backlog(limit: int) -> None:
@@ -95,12 +126,12 @@ async def _prune_kpi_duplicates() -> None:
 
 
 async def _refresh_pdf() -> None:
-    from datetime import date
+    from datetime import datetime, timezone
 
     from app.services.pdf_service import refresh_pdf_for_date
 
     async with AsyncSessionLocal() as db:
-        ok = await refresh_pdf_for_date(db, date.today())
+        ok = await refresh_pdf_for_date(db, datetime.now(timezone.utc).date())
         print("PDF rendered and stored" if ok else "PDF not generated (no edition, or no Chromium here)")
 
 
@@ -132,6 +163,9 @@ def main() -> None:
             "ingest",
             "full-cycle",
             "re-enrich",
+            "reclassify",
+            "build-insight",
+            "repair-translations",
             "translate-backlog",
             "build-edition",
             "refresh-kpis",
@@ -164,6 +198,12 @@ def main() -> None:
         asyncio.run(_full_cycle())
     elif args.command == "re-enrich":
         asyncio.run(_re_enrich(args.days))
+    elif args.command == "build-insight":
+        asyncio.run(_build_insight())
+    elif args.command == "reclassify":
+        asyncio.run(_reclassify())
+    elif args.command == "repair-translations":
+        asyncio.run(_repair_translations())
     elif args.command == "translate-backlog":
         asyncio.run(_translate_backlog(args.limit))
     elif args.command == "build-edition":

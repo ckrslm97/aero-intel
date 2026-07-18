@@ -69,6 +69,8 @@ jobs:
           alembic upgrade head
           python -m app.cli build-edition
           python -m app.cli refresh-pdf
+          # One 70b call/day: the Turkish "pattern of the day" for /insights.
+          python -m app.cli build-insight
 
       - name: Send newsletter (only if SMTP is configured)
         if: ${{ env.SMTP_HOST != '' }}

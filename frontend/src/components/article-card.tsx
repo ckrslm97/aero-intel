@@ -107,7 +107,9 @@ export function ArticleCard({
             isTop ? "text-xl leading-snug" : "text-sm",
           )}
         >
-          <span>{headline}</span>
+          {/* Clamp as a safety belt: a runaway "headline" (e.g. a bad LLM
+              translation) must never render as a wall of text. */}
+          <span className="line-clamp-2">{headline}</span>
           <ExternalLink className="mt-1 size-3.5 shrink-0 opacity-0 transition-opacity group-hover:opacity-100" />
         </div>
         <span className="shrink-0 whitespace-nowrap pt-0.5 text-[10px] text-muted-foreground">

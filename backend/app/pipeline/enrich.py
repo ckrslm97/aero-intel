@@ -3,7 +3,7 @@ cross-source confidence for every deduped (canonical) article.
 """
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
@@ -151,6 +151,125 @@ async def translate_pending_articles(db: AsyncSession, limit: int = 12) -> int:
     await db.commit()
     logger.info("translation_backfill_complete", translated=translated, considered=len(enrichments))
     return translated
+
+
+async def reclassify_articles(db: AsyncSession, batch_size: int = 50) -> dict[str, int]:
+    """Recompute entities, region, and subcategory in place with the *current*
+    heuristic -- category, translations, headlines and status stay untouched.
+
+    Exists because those three fields are derived once at ingest: when the
+    gazetteer or keyword tables improve (word-boundary entity matching, rival
+    names as competitor signals, airport->country region fallback), the archive
+    keeps its stale derivations until something recomputes them. `re-enrich`
+    would also wipe the Turkish translations; this doesn't.
+    """
+    from sqlalchemy.orm import selectinload
+
+    from app.llm.heuristic import HeuristicProvider
+
+    provider = HeuristicProvider()
+    entity_repo = EntityRepository(db)
+
+    result = await db.execute(
+        select(Article)
+        .options(selectinload(Article.enrichment))
+        .where(Article.is_duplicate.is_(False), Article.status == "enriched")
+    )
+    articles = list(result.scalars().all())
+
+    region_changes = subcategory_changes = 0
+    for index, article in enumerate(articles, start=1):
+        enrichment = article.enrichment
+        if enrichment is None:
+            continue
+
+        entities = await provider.extract_entities(article.title, article.raw_content)
+        await db.execute(delete(ArticleEntity).where(ArticleEntity.article_id == article.id))
+        for mention in entities:
+            entity = await entity_repo.get_or_create(mention.entity_type, mention.name, mention.code)
+            db.add(ArticleEntity(article_id=article.id, entity_id=entity.id))
+
+        region = detect_region(entities)
+        subcategory = await provider.subcategorize(
+            article.title, article.raw_content, enrichment.category
+        )
+        if enrichment.category == "events":
+            subcategory = "regional" if region else "general"
+
+        if region != enrichment.region:
+            region_changes += 1
+        if subcategory != enrichment.subcategory:
+            subcategory_changes += 1
+        enrichment.region = region
+        enrichment.subcategory = subcategory
+
+        # Periodic commits: a single end-of-run commit over a remote pooled DB
+        # lost entire batches to idle timeouts in production. Small and often.
+        if index % batch_size == 0:
+            await db.commit()
+
+    await db.commit()
+    logger.info(
+        "reclassify_complete",
+        articles=len(articles),
+        region_changes=region_changes,
+        subcategory_changes=subcategory_changes,
+    )
+    return {
+        "articles": len(articles),
+        "region_changes": region_changes,
+        "subcategory_changes": subcategory_changes,
+    }
+
+
+async def repair_corrupt_translations(db: AsyncSession) -> dict[str, int]:
+    """Fix stored translations where the model wrote past the translation.
+
+    llama-3.1-8b appended invented prose / translator meta-commentary after
+    otherwise-correct headline translations (61 rows in production, worst case
+    7,513 chars). The good translation is the first line, so most rows are
+    repaired *in place* by re-running the sanitizer over the stored value -- no
+    LLM calls. Rows the sanitizer can't salvage get their translation fields
+    nulled, which returns them to the translate-backlog queue (and the honest
+    "otomatik çeviri yok" badge) instead of showing junk.
+    """
+    from app.llm.sanitize import clean_translation
+
+    result = await db.execute(
+        select(ArticleEnrichment).where(
+            ArticleEnrichment.translated_at.is_not(None),
+            (
+                func.length(ArticleEnrichment.headline_tr) > 220
+            )
+            | ArticleEnrichment.headline_tr.ilike("%çevir%")
+            | ArticleEnrichment.summary_tr.ilike("%çeviriyorum%"),
+        )
+    )
+    rows = list(result.scalars().all())
+
+    repaired = renulled = 0
+    for enrichment in rows:
+        cleaned_headline = clean_translation(enrichment.headline or "", enrichment.headline_tr)
+        cleaned_summary = (
+            clean_translation(enrichment.summary or "", enrichment.summary_tr)
+            if enrichment.summary_tr
+            else None
+        )
+        if cleaned_headline:
+            enrichment.headline_tr = cleaned_headline
+            enrichment.summary_tr = cleaned_summary
+            repaired += 1
+        else:
+            # Unsalvageable: back to the untranslated queue, honestly badged.
+            enrichment.headline_tr = None
+            enrichment.summary_tr = None
+            enrichment.translated_at = None
+            enrichment.translation_provider = None
+            renulled += 1
+
+    await db.commit()
+    logger.info("translation_repair_complete", repaired=repaired, renulled=renulled)
+    return {"repaired": repaired, "renulled": renulled}
 
 
 async def reset_enrichment(db: AsyncSession, days: int | None = None) -> int:

@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.article import Article, ArticleEnrichment
+from app.models.entity import ArticleEntity, Entity
 
 
 class ArticleRepository:
@@ -29,6 +30,7 @@ class ArticleRepository:
         subcategory: str | None,
         region: str | None,
         since: datetime | None,
+        airline: str | None = None,
     ):
         """Shared filter clause for list_recent and count, so the "load more"
         pagination in the newspaper can trust that total counts the same rows
@@ -44,6 +46,15 @@ class ArticleRepository:
                 query = query.where(ArticleEnrichment.subcategory == subcategory)
             if region:
                 query = query.where(ArticleEnrichment.region == region)
+        if airline:
+            # Entity-based: the "Ana Rakipler" filter matches any article that
+            # *mentions* the airline, regardless of category -- rival news lives
+            # in fleet/network/finance as much as in revenue_management.
+            query = (
+                query.join(ArticleEntity, ArticleEntity.article_id == Article.id)
+                .join(Entity, Entity.id == ArticleEntity.entity_id)
+                .where(Entity.entity_type == "airline", Entity.code == airline)
+            )
         return query
 
     async def list_recent(
@@ -54,6 +65,7 @@ class ArticleRepository:
         subcategory: str | None = None,
         region: str | None = None,
         since: datetime | None = None,
+        airline: str | None = None,
     ) -> list[Article]:
         query = (
             select(Article)
@@ -63,7 +75,12 @@ class ArticleRepository:
             .offset(offset)
         )
         query = self._apply_filters(
-            query, category=category, subcategory=subcategory, region=region, since=since
+            query,
+            category=category,
+            subcategory=subcategory,
+            region=region,
+            since=since,
+            airline=airline,
         )
         result = await self.db.execute(query)
         return list(result.scalars().unique().all())
@@ -74,6 +91,7 @@ class ArticleRepository:
         subcategory: str | None = None,
         region: str | None = None,
         since: datetime | None = None,
+        airline: str | None = None,
     ) -> int:
         query = self._apply_filters(
             select(func.count(Article.id.distinct())).select_from(Article),
@@ -81,6 +99,7 @@ class ArticleRepository:
             subcategory=subcategory,
             region=region,
             since=since,
+            airline=airline,
         )
         result = await self.db.execute(query)
         return int(result.scalar_one())

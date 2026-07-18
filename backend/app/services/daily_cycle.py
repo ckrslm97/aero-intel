@@ -32,7 +32,7 @@ async def run_daily_ingest_and_enrich() -> None:
 
 
 async def run_daily_edition_and_newsletter() -> None:
-    from datetime import date
+    from datetime import datetime, timezone
 
     from app.core.db import AsyncSessionLocal
     from app.repositories.edition_repository import EditionRepository
@@ -41,7 +41,7 @@ async def run_daily_edition_and_newsletter() -> None:
     from app.services.pdf_service import store_edition_pdf
 
     async with AsyncSessionLocal() as db:
-        assembled = await assemble_edition(db, date.today())
+        assembled = await assemble_edition(db, datetime.now(timezone.utc).date())
 
         # assemble_edition's own return only eager-loads Edition.articles, not
         # the nested article.source/article.enrichment that HTML rendering

@@ -44,7 +44,6 @@ export const CATEGORIES: CategoryDef[] = [
     icon: Banknote,
     subcategories: [
       { slug: "competitor", label: "Rakip" },
-      { slug: "region", label: "Bölge" },
       { slug: "pricing", label: "Fiyatlandırma" },
       { slug: "demand_capacity", label: "Talep & Kapasite" },
       { slug: "load_factor", label: "Yük Faktörü" },

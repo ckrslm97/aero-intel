@@ -8,9 +8,13 @@ import { useEffect, useState } from "react";
 import { ArticleCard } from "@/components/article-card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiFetch } from "@/lib/api";
+import { airlineTabs } from "@/lib/nav";
 import { CATEGORIES, EVENT_REGIONS } from "@/lib/taxonomy";
 import type { ArticleListOut, ArticleOut } from "@/lib/types";
 import { cn } from "@/lib/utils";
+
+// The user's named main rivals -- TK is the home carrier, not a rival.
+const RIVALS = airlineTabs.filter((a) => a.code !== "TK");
 
 // Only recent articles -- keeps the browser focused on "what's current"
 // rather than the entire archive, per the freshness feedback on this page.
@@ -23,6 +27,7 @@ export function NewspaperBrowser() {
   const [categorySlug, setCategorySlug] = useState(CATEGORIES[0].slug); // Gelir Yönetimi first
   const [subcategorySlug, setSubcategorySlug] = useState<string | null>(null);
   const [regionSlug, setRegionSlug] = useState<string | null>(null);
+  const [airlineCode, setAirlineCode] = useState<string | null>(null);
 
   const [items, setItems] = useState<ArticleOut[]>([]);
   const [total, setTotal] = useState(0);
@@ -34,13 +39,12 @@ export function NewspaperBrowser() {
   const [counts, setCounts] = useState<Record<string, number>>({});
 
   const category = CATEGORIES.find((c) => c.slug === categorySlug) ?? CATEGORIES[0];
-  const isEvents = categorySlug === "events";
 
   function selectCategory(slug: string) {
     setCategorySlug(slug);
-    // Etkinlik always starts on "Genel"; every other category starts on "Tümü".
-    setSubcategorySlug(slug === "events" ? "general" : null);
-    setRegionSlug(null);
+    setSubcategorySlug(null);
+    // Region and rival filters deliberately survive a category switch: "show me
+    // everything about Emirates" should stay pinned while browsing categories.
     setOffset(0);
   }
 
@@ -71,6 +75,7 @@ export function NewspaperBrowser() {
     });
     if (subcategorySlug) params.set("subcategory", subcategorySlug);
     if (regionSlug) params.set("region", regionSlug);
+    if (airlineCode) params.set("airline", airlineCode);
 
     const isFirstPage = offset === 0;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch driven by filter/offset change; the loading flag must flip synchronously with the dependency change
@@ -95,7 +100,7 @@ export function NewspaperBrowser() {
     return () => {
       cancelled = true;
     };
-  }, [categorySlug, subcategorySlug, regionSlug, offset]);
+  }, [categorySlug, subcategorySlug, regionSlug, airlineCode, offset]);
 
   const today = new Date().toISOString().slice(0, 10);
   const hasMore = items.length < total;
@@ -164,79 +169,115 @@ export function NewspaperBrowser() {
         </div>
       </div>
 
-      {isEvents ? (
+      {category.subcategories.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
           <button
             onClick={() => {
-              setSubcategorySlug("general");
-              setRegionSlug(null);
+              setSubcategorySlug(null);
               setOffset(0);
             }}
             className={cn(
               "rounded-full px-3 py-1 text-xs font-medium transition-colors",
-              !regionSlug
+              !subcategorySlug
                 ? "bg-primary text-primary-foreground"
                 : "border border-border text-muted-foreground hover:bg-accent",
             )}
           >
-            Genel
+            Tümü
           </button>
-          {EVENT_REGIONS.map((r) => (
+          {category.subcategories.map((s) => (
             <button
-              key={r.slug}
+              key={s.slug}
               onClick={() => {
-                setSubcategorySlug("regional");
-                setRegionSlug(r.slug);
+                setSubcategorySlug(s.slug);
                 setOffset(0);
               }}
               className={cn(
                 "rounded-full px-3 py-1 text-xs font-medium transition-colors",
-                regionSlug === r.slug
+                subcategorySlug === s.slug
                   ? "bg-primary text-primary-foreground"
                   : "border border-border text-muted-foreground hover:bg-accent",
               )}
             >
-              {r.name}
+              {s.label}
             </button>
           ))}
         </div>
-      ) : (
-        category.subcategories.length > 0 && (
-          <div className="flex flex-wrap gap-1.5">
+      )}
+
+      {/* Region filter -- available in every category (driven by the
+          entity-derived enrichment.region), not just Etkinlik. */}
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          Bölge
+        </span>
+        <button
+          onClick={() => {
+            setRegionSlug(null);
+            setOffset(0);
+          }}
+          className={cn(
+            "rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
+            !regionSlug
+              ? "bg-primary text-primary-foreground"
+              : "border border-border text-muted-foreground hover:bg-accent",
+          )}
+        >
+          Tümü
+        </button>
+        {EVENT_REGIONS.map((r) => (
+          <button
+            key={r.slug}
+            onClick={() => {
+              setRegionSlug(regionSlug === r.slug ? null : r.slug);
+              setOffset(0);
+            }}
+            className={cn(
+              "rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
+              regionSlug === r.slug
+                ? "bg-primary text-primary-foreground"
+                : "border border-border text-muted-foreground hover:bg-accent",
+            )}
+          >
+            {r.name}
+          </button>
+        ))}
+      </div>
+
+      {/* Main rivals -- entity-based, so a rival's fleet or finance news is
+          caught too, not only stories filed under Rakip. */}
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          Ana Rakipler
+        </span>
+        {RIVALS.map((a) => {
+          const active = airlineCode === a.code;
+          return (
             <button
+              key={a.code}
+              title={a.name}
               onClick={() => {
-                setSubcategorySlug(null);
+                setAirlineCode(active ? null : a.code);
                 setOffset(0);
               }}
+              style={active ? { backgroundColor: a.color, borderColor: a.color } : undefined}
               className={cn(
-                "rounded-full px-3 py-1 text-xs font-medium transition-colors",
-                !subcategorySlug
-                  ? "bg-primary text-primary-foreground"
-                  : "border border-border text-muted-foreground hover:bg-accent",
+                "rounded-full border px-2.5 py-1 text-xs font-semibold tabular-nums transition-colors",
+                active
+                  ? "text-white"
+                  : "border-border text-muted-foreground hover:bg-accent",
               )}
             >
-              Tümü
+              {a.code}
             </button>
-            {category.subcategories.map((s) => (
-              <button
-                key={s.slug}
-                onClick={() => {
-                  setSubcategorySlug(s.slug);
-                  setOffset(0);
-                }}
-                className={cn(
-                  "rounded-full px-3 py-1 text-xs font-medium transition-colors",
-                  subcategorySlug === s.slug
-                    ? "bg-primary text-primary-foreground"
-                    : "border border-border text-muted-foreground hover:bg-accent",
-                )}
-              >
-                {s.label}
-              </button>
-            ))}
-          </div>
-        )
-      )}
+          );
+        })}
+        {airlineCode && (
+          <span className="text-xs text-muted-foreground">
+            {RIVALS.find((a) => a.code === airlineCode)?.name}
+          </span>
+        )}
+      </div>
 
       {error ? (
         <p className="rounded-lg border border-dashed border-border p-6 text-sm text-muted-foreground">

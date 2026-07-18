@@ -71,3 +71,35 @@ def test_calendar_spans_the_major_regions(region):
     # The Etkinlik tab has a region picker; a calendar covering only Europe
     # would leave most of it empty.
     assert any(e.region == region for e in EVENTS), region
+
+
+def test_event_types_are_valid():
+    from app.models.event import EVENT_TYPES
+
+    for event in EVENTS:
+        assert event.event_type in EVENT_TYPES, f"{event.name}: {event.event_type}"
+
+
+def test_calendar_covers_the_year_ahead_with_varied_types():
+    # The user asked for holidays/sports/festivals, not just trade shows.
+    types = {e.event_type for e in EVENTS}
+    assert {"airshow", "conference", "sports", "holiday", "festival"} <= types
+
+
+async def test_seed_writes_structured_calendar_rows(db_session):
+    from sqlalchemy import select as sa_select
+
+    from app.models.event import AviationEvent as Row
+
+    await seed_events(db_session)
+    rows = (await db_session.execute(sa_select(Row))).scalars().all()
+    assert len(rows) == len(EVENTS)
+
+    # Re-run: no duplicates, and a corrected date propagates in place.
+    await seed_events(db_session)
+    rows = (await db_session.execute(sa_select(Row))).scalars().all()
+    assert len(rows) == len(EVENTS)
+    by_url = {r.url: r for r in rows}
+    farnborough = by_url["https://www.farnboroughairshow.com/"]
+    assert farnborough.starts == date(2026, 7, 20)
+    assert farnborough.event_type == "airshow"

@@ -8,7 +8,7 @@ from collections import Counter
 from functools import lru_cache
 
 from app.llm.base import EntityMention
-from app.llm.gazetteer import AIRLINES, AIRPORTS, COUNTRIES
+from app.llm.gazetteer import AIRLINES, AIRPORT_COUNTRY, AIRPORTS, COUNTRIES
 from app.pipeline.hashing import normalize_text
 from app.taxonomy import CATEGORY_KEYWORDS, COUNTRY_TO_REGION, GENERAL_CATEGORY, SUBCATEGORY_KEYWORDS
 
@@ -138,14 +138,17 @@ class HeuristicProvider:
         text = normalize_text(f"{title} {content}")
         mentions: list[EntityMention] = []
 
+        # Whole-word matching, same as categorisation: plain substring search
+        # tagged every article containing "management" with All Nippon ("ana")
+        # -- 96 false links in production.
         for alias, (name, code) in AIRLINES.items():
-            if alias in text:
+            if _keyword_pattern((alias,)).search(text):
                 mentions.append(EntityMention("airline", name, code))
         for alias, (name, code) in AIRPORTS.items():
-            if alias in text:
+            if _keyword_pattern((alias,)).search(text):
                 mentions.append(EntityMention("airport", name, code))
         for country in COUNTRIES:
-            if country in text:
+            if _keyword_pattern((country,)).search(text):
                 mentions.append(EntityMention("country", country.title(), None))
 
         # de-duplicate while preserving order
@@ -163,7 +166,9 @@ def detect_region(entities: list[EntityMention]) -> str | None:
     """Region detection is entity-based, not LLM-based, so it runs the same way
     regardless of which provider (heuristic or live) extracted the entities --
     the first recognized country entity maps to its world-region slug via
-    app.taxonomy.COUNTRY_TO_REGION. Returns None if no mapped country was found.
+    app.taxonomy.COUNTRY_TO_REGION. Articles that name only an airport (very
+    common in route news: "Heathrow slot changes") fall back to that airport's
+    country. Returns None if nothing mapped.
     """
     for mention in entities:
         if mention.entity_type != "country":
@@ -171,4 +176,12 @@ def detect_region(entities: list[EntityMention]) -> str | None:
         region = COUNTRY_TO_REGION.get(mention.name.lower())
         if region:
             return region
+    for mention in entities:
+        if mention.entity_type != "airport" or not mention.code:
+            continue
+        country = AIRPORT_COUNTRY.get(mention.code)
+        if country:
+            region = COUNTRY_TO_REGION.get(country)
+            if region:
+                return region
     return None

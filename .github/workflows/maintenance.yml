@@ -16,7 +16,10 @@ on:
           - seed-events
           - prune-kpi-duplicates
           - re-enrich
+          - reclassify
+          - repair-translations
           - translate-backlog
+          - build-insight
           - create-admin
       days:
         description: "re-enrich only: limit to articles fetched in the last N days (blank = all)"
@@ -89,8 +92,14 @@ jobs:
               else
                 python -m app.cli re-enrich
               fi ;;
+            reclassify)
+              python -m app.cli reclassify ;;
+            repair-translations)
+              python -m app.cli repair-translations ;;
             translate-backlog)
               python -m app.cli translate-backlog --limit "${LIMIT:-12}" ;;
+            build-insight)
+              python -m app.cli build-insight ;;
             create-admin)
               if [ -z "${ADMIN_EMAIL}" ] || [ -z "${ADMIN_PASSWORD}" ]; then
                 echo "create-admin needs the admin_email input and the ADMIN_PASSWORD secret" >&2

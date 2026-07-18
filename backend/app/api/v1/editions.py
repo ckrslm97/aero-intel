@@ -1,7 +1,7 @@
 """Daily edition endpoints. Today's edition auto-assembles on first request if
 it doesn't exist yet; past dates are immutable once built.
 """
-from datetime import date
+from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
@@ -66,7 +66,10 @@ async def get_edition(edition_date: date, db: AsyncSession = Depends(get_db)) ->
     edition = await repo.get_by_date(edition_date)
 
     if edition is None:
-        if edition_date != date.today():
+        # Compare against the UTC day: article timestamps are UTC, so the
+        # local calendar would auto-assemble an empty edition between local
+        # and UTC midnight.
+        if edition_date != datetime.now(timezone.utc).date():
             raise HTTPException(status_code=404, detail="Edition not found")
         edition = await assemble_edition(db, edition_date)
         edition = await repo.get_by_date(edition_date)

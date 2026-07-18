@@ -94,6 +94,34 @@ async def test_count_matches_the_filtered_list_for_load_more(db_session):
     assert await repo.count() == 4
 
 
+async def test_airline_filter_matches_articles_mentioning_the_airline(db_session):
+    from app.models.entity import ArticleEntity, Entity
+
+    source = Source(name="Test Source", url="https://example.com/feed-air", source_type="rss")
+    db_session.add(source)
+    await db_session.flush()
+
+    now = datetime.now(timezone.utc)
+    emirates_story = await _make_article(
+        db_session, source, category="fleet", subcategory=None, region=None, published_at=now,
+    )
+    await _make_article(
+        db_session, source, category="fleet", subcategory=None, region=None, published_at=now,
+    )
+    entity = Entity(entity_type="airline", name="Emirates", code="EK")
+    db_session.add(entity)
+    await db_session.flush()
+    db_session.add(ArticleEntity(article_id=emirates_story.id, entity_id=entity.id))
+    await db_session.commit()
+
+    repo = ArticleRepository(db_session)
+    results = await repo.list_recent(airline="EK")
+    assert {a.id for a in results} == {emirates_story.id}
+    # The rival filter crosses categories -- and total matches the list.
+    assert await repo.count(airline="EK") == 1
+    assert await repo.count(category="fleet", airline="EK") == 1
+
+
 async def test_list_recent_since_filter_excludes_older_articles(db_session):
     source = Source(name="Test Source", url="https://example.com/feed3", source_type="rss")
     db_session.add(source)
