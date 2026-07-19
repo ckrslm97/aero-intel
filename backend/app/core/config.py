@@ -7,7 +7,7 @@ platform boots on a laptop with only Postgres installed.
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -62,6 +62,20 @@ class Settings(BaseSettings):
     smtp_use_tls: bool = True
     email_from: str = "newsroom@aerointel.local"
     outbox_dir: str = "../outbox"
+
+    @field_validator(
+        "smtp_host", "smtp_port", "smtp_username", "smtp_password", "smtp_use_tls",
+        "email_from", mode="before"
+    )
+    @classmethod
+    def _empty_env_means_unset(cls, value: object, info) -> object:  # noqa: ANN001 -- pydantic ValidationInfo
+        """GitHub Actions renders `${{ secrets.X }}` for a missing secret as an
+        EMPTY STRING, not as an unset variable -- which crashed the daily
+        edition cron when pydantic tried to parse smtp_port='' as int. Treat
+        empty as "not configured": fall back to the field's own default."""
+        if isinstance(value, str) and value.strip() == "":
+            return cls.model_fields[info.field_name].default
+        return value
 
     # --- Storage ---
     storage_backend: Literal["local", "s3"] = "local"
