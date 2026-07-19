@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
@@ -21,8 +22,9 @@ logger = get_logger(__name__)
 
 
 async def category_volume_by_week(db: AsyncSession, weeks: int = 8) -> dict:
-    """Article counts per category per ISO week -- the 'what is the news about
-    lately' trendline."""
+    """Article counts per category per ISO week. No longer part of the
+    /insights payload (the page dropped its volume chart) -- kept because the
+    daily digest prompt still feeds on these numbers."""
     since = datetime.now(timezone.utc) - timedelta(weeks=weeks)
     # One shared expression for SELECT and GROUP BY -- Postgres treats
     # to_char(date_trunc(x)) and date_trunc(x) as different expressions and
@@ -92,24 +94,62 @@ async def airline_momentum(db: AsyncSession, window_days: int = 7, limit: int = 
     return movers[:limit]
 
 
-async def new_route_signals(db: AsyncSession, days: int = 30) -> list[dict]:
-    """New-route announcements by world region -- where networks are growing."""
+async def new_route_signals(db: AsyncSession, days: int = 30, per_region: int = 6) -> list[dict]:
+    """New-route announcements grouped by world region, with the articles
+    behind each count. The insights page renders these as a cited list --
+    every signal links back to its source -- so this returns article detail,
+    not bare counts. `count` is the full regional total even when the article
+    list is capped at `per_region`."""
     since = datetime.now(timezone.utc) - timedelta(days=days)
     rows = (
         await db.execute(
-            select(ArticleEnrichment.region, func.count())
-            .join(Article, Article.id == ArticleEnrichment.article_id)
+            select(Article, ArticleEnrichment)
+            .join(ArticleEnrichment, ArticleEnrichment.article_id == Article.id)
+            .options(selectinload(Article.source))
             .where(
                 Article.is_duplicate.is_(False),
                 Article.published_at >= since,
                 ArticleEnrichment.category == "network",
                 ArticleEnrichment.subcategory == "new_route",
             )
-            .group_by(ArticleEnrichment.region)
-            .order_by(func.count().desc())
+            .order_by(Article.published_at.desc().nulls_last())
         )
     ).all()
-    return [{"region": region, "count": count} for region, count in rows]
+
+    article_ids = [article.id for article, _ in rows]
+    airlines_by_article: dict = {}
+    if article_ids:
+        airline_rows = (
+            await db.execute(
+                select(ArticleEntity.article_id, Entity.code, Entity.name)
+                .join(Entity, Entity.id == ArticleEntity.entity_id)
+                .where(
+                    ArticleEntity.article_id.in_(article_ids),
+                    Entity.entity_type == "airline",
+                )
+            )
+        ).all()
+        for article_id, code, name in airline_rows:
+            airlines_by_article.setdefault(article_id, []).append(code or name)
+
+    grouped: dict[str | None, list[dict]] = {}
+    for article, enrichment in rows:
+        grouped.setdefault(enrichment.region, []).append(
+            {
+                "id": str(article.id),
+                "headline": enrichment.headline_tr or enrichment.headline or article.title,
+                "url": article.url,
+                "source_name": article.source.name if article.source else "",
+                "published_at": (
+                    article.published_at.isoformat() if article.published_at else None
+                ),
+                "airlines": airlines_by_article.get(article.id, []),
+            }
+        )
+    return [
+        {"region": region, "count": len(articles), "articles": articles[:per_region]}
+        for region, articles in sorted(grouped.items(), key=lambda kv: -len(kv[1]))
+    ]
 
 
 async def sentiment_by_category(db: AsyncSession, days: int = 30) -> list[dict]:
@@ -135,40 +175,14 @@ async def sentiment_by_category(db: AsyncSession, days: int = 30) -> list[dict]:
     ]
 
 
-async def top_corroborated_stories(db: AsyncSession, days: int = 14, limit: int = 5) -> list[dict]:
-    """The most independently-confirmed stories -- the week's hard signal."""
-    since = datetime.now(timezone.utc) - timedelta(days=days)
-    rows = (
-        await db.execute(
-            select(Article, ArticleEnrichment)
-            .join(ArticleEnrichment, ArticleEnrichment.article_id == Article.id)
-            .where(
-                Article.is_duplicate.is_(False),
-                Article.published_at >= since,
-                ArticleEnrichment.corroborating_source_count > 1,
-            )
-            .order_by(
-                ArticleEnrichment.corroborating_source_count.desc(),
-                ArticleEnrichment.confidence_score.desc(),
-            )
-            .limit(limit)
-        )
-    ).all()
-    return [
-        {
-            "id": str(article.id),
-            "headline": enrichment.headline_tr or enrichment.headline or article.title,
-            "url": article.url,
-            "sources": enrichment.corroborating_source_count,
-            "category": enrichment.category,
-        }
-        for article, enrichment in rows
-    ]
-
-
-async def latest_digest(db: AsyncSession) -> InsightDigest | None:
+async def latest_digest(db: AsyncSession, topic: str = "daily") -> InsightDigest | None:
     return (
-        await db.execute(select(InsightDigest).order_by(InsightDigest.digest_date.desc()).limit(1))
+        await db.execute(
+            select(InsightDigest)
+            .where(InsightDigest.topic == topic)
+            .order_by(InsightDigest.digest_date.desc())
+            .limit(1)
+        )
     ).scalar_one_or_none()
 
 
@@ -194,7 +208,11 @@ async def build_daily_digest(db: AsyncSession) -> InsightDigest:
     """Compute today's aggregates, have the strong model write one Turkish
     paragraph about the pattern, store it (one row per day, upserted)."""
     movers = await airline_momentum(db)
-    routes = await new_route_signals(db)
+    # Compact per-region counts only -- the digest prompt doesn't need the
+    # article detail the insights page renders.
+    routes = [
+        {"region": r["region"], "count": r["count"]} for r in await new_route_signals(db)
+    ]
     volume = await category_volume_by_week(db, weeks=4)
 
     provider_name = "heuristic"
@@ -228,10 +246,16 @@ async def build_daily_digest(db: AsyncSession) -> InsightDigest:
 
     today = datetime.now(timezone.utc).date()
     existing = (
-        await db.execute(select(InsightDigest).where(InsightDigest.digest_date == today))
+        await db.execute(
+            select(InsightDigest).where(
+                InsightDigest.digest_date == today, InsightDigest.topic == "daily"
+            )
+        )
     ).scalar_one_or_none()
     if existing is None:
-        existing = InsightDigest(digest_date=today, body=body, provider=provider_name)
+        existing = InsightDigest(
+            digest_date=today, topic="daily", body=body, provider=provider_name
+        )
         db.add(existing)
     else:
         existing.body = body

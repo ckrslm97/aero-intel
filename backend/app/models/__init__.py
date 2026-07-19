@@ -7,6 +7,7 @@ from app.models.insight import InsightDigest
 from app.models.kpi import KPI
 from app.models.source import Source
 from app.models.subscriber import Subscriber
+from app.models.tk_review import TkReview
 from app.models.user import User
 
 __all__ = [
@@ -22,5 +23,6 @@ __all__ = [
     "KPI",
     "Source",
     "Subscriber",
+    "TkReview",
     "User",
 ]

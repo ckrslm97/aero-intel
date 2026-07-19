@@ -66,7 +66,7 @@ async def test_seeded_metric_with_2025_observation_gets_ly_fields(kpi_app, db_se
     kpi = _kpi(response.json(), "load_factor")
     assert kpi["ly_value"] == 80.0
     assert kpi["ly_delta_pct"] == round((84.0 - 80.0) / 80.0 * 100, 2)  # 5.0
-    assert kpi["comparison_label"] == "2025 (LY)'e göre"
+    assert kpi["comparison_label"] == "2025'e göre"
     # Existing delta_pct semantics are untouched: vs the previous observation.
     assert kpi["delta_pct"] == round((84.0 - 82.0) / 82.0 * 100, 2)
 
@@ -109,7 +109,7 @@ async def test_yahoo_mapped_metric_takes_ly_from_first_history_point(
     kpi = _kpi(response.json(), "oil_price")
     assert kpi["ly_value"] == 64.0  # the FIRST point of the trailing-1y series
     assert kpi["ly_delta_pct"] == round((80.0 - 64.0) / 64.0 * 100, 2)  # 25.0
-    assert kpi["comparison_label"] == "2025 (LY)'e göre"
+    assert kpi["comparison_label"] == "2025'e göre"
     assert calls == [("BZ=F", "1y")]  # reuses the detail endpoint's symbol map
 
 

@@ -58,6 +58,16 @@ CATEGORIES: list[CategoryDef] = [
                 ],
             ),
             SubcategoryDef(
+                "promotion",
+                # Compound phrases only: bare "sale"/"offer" match aircraft
+                # sales and codeshare offers, which are not promotions.
+                [
+                    "promotion", "promo code", "promotional fare", "flash sale", "fare sale",
+                    "seat sale", "special offer", "discount code", "black friday",
+                    "kampanya", "indirim",
+                ],
+            ),
+            SubcategoryDef(
                 "demand_capacity",
                 ["demand", "capacity", "overbooking", "forecast", "bookings", "traffic growth", "seats"],
             ),
@@ -199,6 +209,11 @@ CATEGORIES: list[CategoryDef] = [
         ],
     ),
 ]
+
+# The user's named main rivals (IATA codes) -- powers the newspaper's
+# "Ana Rakipler" filter (airline=RIVALS matches any of these). TK is the home
+# carrier and deliberately not in this list.
+RIVAL_CODES: tuple[str, ...] = ("AF", "BA", "EK", "EY", "KL", "LH", "PC", "QR", "VF")
 
 # "general" is the fallback category: whatever scores zero against every
 # category above lands here. It has no keyword list or subcategories of its own.

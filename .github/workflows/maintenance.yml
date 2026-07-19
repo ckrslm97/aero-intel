@@ -14,6 +14,8 @@ on:
           - alembic-upgrade
           - seed-kpi-history
           - seed-events
+          - seed-tk-reviews
+          - seed-promos
           - prune-kpi-duplicates
           - re-enrich
           - reclassify
@@ -84,6 +86,12 @@ jobs:
             seed-events)
               alembic upgrade head
               python -m app.cli seed-events ;;
+            seed-tk-reviews)
+              alembic upgrade head
+              python -m app.cli seed-tk-reviews ;;
+            seed-promos)
+              alembic upgrade head
+              python -m app.cli seed-promos ;;
             prune-kpi-duplicates)
               python -m app.cli prune-kpi-duplicates ;;
             re-enrich)

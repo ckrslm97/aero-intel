@@ -86,6 +86,21 @@ FREE_RSS_SOURCES: list[SourceSeed] = [
         "https://news.google.com/rss/search?q=%22Emirates%22%20OR%20%22Qatar%20Airways%22%20OR%20%22Etihad%22%20OR%20%22Lufthansa%22%20OR%20%22Air%20France%22%20OR%20%22KLM%22%20OR%20%22British%20Airways%22%20OR%20%22Pegasus%20Airlines%22%20OR%20%22AJet%22&hl=en-US&gl=US&ceid=US:en",
         "rss", "airline", 0.5,
     ),
+    # Round 6, both verified live 2026-07-19 (100 items each):
+    # TK radar feeds the BİZ page's news stream; the promo radar is the
+    # *ongoing* source of rival campaign news (promos_seed.py is only a
+    # point-in-time snapshot -- airline offer pages themselves are
+    # bot-protected and can't be polled).
+    SourceSeed(
+        "Google News · Türk Hava Yolları",
+        "https://news.google.com/rss/search?q=%22Turkish%20Airlines%22%20OR%20%22T%C3%BCrk%20Hava%20Yollar%C4%B1%22&hl=en-US&gl=US&ceid=US:en",
+        "rss", "airline", 0.5,
+    ),
+    SourceSeed(
+        "Google News · Rakip Kampanyalar",
+        "https://news.google.com/rss/search?q=(%22Emirates%22%20OR%20%22Qatar%20Airways%22%20OR%20%22Lufthansa%22%20OR%20%22Air%20France%22%20OR%20%22British%20Airways%22%20OR%20%22Etihad%22%20OR%20%22KLM%22%20OR%20%22Pegasus%20Airlines%22%20OR%20%22AJet%22)%20(%22fare%20sale%22%20OR%20%22promotion%22%20OR%20%22discount%22%20OR%20%22flash%20sale%22)&hl=en-US&gl=US&ceid=US:en",
+        "rss", "airline", 0.5,
+    ),
 ]
 
 # Named systems from the spec that are either licensed data products (IATA,

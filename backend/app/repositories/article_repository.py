@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import date, datetime, time, timedelta, timezone
 
 from sqlalchemy import exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -7,6 +7,12 @@ from sqlalchemy.orm import selectinload
 
 from app.models.article import Article, ArticleEnrichment
 from app.models.entity import ArticleEntity, Entity
+from app.taxonomy import RIVAL_CODES
+
+# Articles are timestamped in UTC but published_at can be missing for feeds
+# that omit dates -- day-based views (the archive) fall back to fetched_at so
+# every article belongs to exactly one day.
+_DAY_EXPR = func.coalesce(Article.published_at, Article.fetched_at)
 
 
 class ArticleRepository:
@@ -31,6 +37,7 @@ class ArticleRepository:
         region: str | None,
         since: datetime | None,
         airline: str | None = None,
+        on_date: date | None = None,
     ):
         """Shared filter clause for list_recent and count, so the "load more"
         pagination in the newspaper can trust that total counts the same rows
@@ -38,6 +45,11 @@ class ArticleRepository:
         query = query.where(Article.is_duplicate.is_(False))
         if since is not None:
             query = query.where(Article.published_at >= since)
+        if on_date is not None:
+            day_start = datetime.combine(on_date, time.min, tzinfo=timezone.utc)
+            query = query.where(
+                _DAY_EXPR >= day_start, _DAY_EXPR < day_start + timedelta(days=1)
+            )
         if category or subcategory or region:
             query = query.join(ArticleEnrichment)
             if category:
@@ -50,11 +62,15 @@ class ArticleRepository:
             # Entity-based: the "Ana Rakipler" filter matches any article that
             # *mentions* the airline, regardless of category -- rival news lives
             # in fleet/network/finance as much as in revenue_management.
-            query = (
-                query.join(ArticleEntity, ArticleEntity.article_id == Article.id)
-                .join(Entity, Entity.id == ArticleEntity.entity_id)
-                .where(Entity.entity_type == "airline", Entity.code == airline)
-            )
+            # Two special values: RIVALS = any of the user's named main rivals,
+            # ALL = any airline entity at all ("Tüm Taşıyıcılar").
+            query = query.join(ArticleEntity, ArticleEntity.article_id == Article.id).join(
+                Entity, Entity.id == ArticleEntity.entity_id
+            ).where(Entity.entity_type == "airline")
+            if airline == "RIVALS":
+                query = query.where(Entity.code.in_(RIVAL_CODES))
+            elif airline != "ALL":
+                query = query.where(Entity.code == airline)
         return query
 
     async def list_recent(
@@ -66,6 +82,7 @@ class ArticleRepository:
         region: str | None = None,
         since: datetime | None = None,
         airline: str | None = None,
+        on_date: date | None = None,
     ) -> list[Article]:
         query = (
             select(Article)
@@ -81,6 +98,7 @@ class ArticleRepository:
             region=region,
             since=since,
             airline=airline,
+            on_date=on_date,
         )
         result = await self.db.execute(query)
         return list(result.scalars().unique().all())
@@ -92,6 +110,7 @@ class ArticleRepository:
         region: str | None = None,
         since: datetime | None = None,
         airline: str | None = None,
+        on_date: date | None = None,
     ) -> int:
         query = self._apply_filters(
             select(func.count(Article.id.distinct())).select_from(Article),
@@ -100,9 +119,31 @@ class ArticleRepository:
             region=region,
             since=since,
             airline=airline,
+            on_date=on_date,
         )
         result = await self.db.execute(query)
         return int(result.scalar_one())
+
+    async def count_by_day(self, days: int = 7) -> dict[str, int]:
+        """Article count per UTC day over the last `days` days -- the archive
+        page's date-strip badges. Keys are ISO dates; days with no articles are
+        simply absent (the frontend fills zeros)."""
+        cutoff = datetime.combine(
+            datetime.now(timezone.utc).date() - timedelta(days=days - 1),
+            time.min,
+            tzinfo=timezone.utc,
+        )
+        # timezone('UTC', ...) first: date_trunc on a bare timestamptz truncates
+        # in the *session* timezone, which shifts every late-evening UTC article
+        # into the wrong day on any non-UTC deployment (bitten by this before).
+        day_col = func.date_trunc("day", func.timezone("UTC", _DAY_EXPR))
+        query = (
+            select(day_col, func.count())
+            .where(Article.is_duplicate.is_(False), _DAY_EXPR >= cutoff)
+            .group_by(day_col)
+        )
+        result = await self.db.execute(query)
+        return {day.date().isoformat(): count for day, count in result.all()}
 
     async def count_by_category(self, since: datetime | None = None) -> dict[str, int]:
         """One grouped query behind the newspaper's tab badges -- the alternative

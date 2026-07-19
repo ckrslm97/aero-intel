@@ -59,7 +59,7 @@ PERIOD_TO_TIMEDELTA: dict[str, timedelta] = {
 # series (see ingest/historical_seed.py); market metrics compare against the
 # price a year ago instead.
 LY_YEAR = 2025
-LY_COMPARISON_LABEL = "2025 (LY)'e göre"
+LY_COMPARISON_LABEL = "2025'e göre"
 PREVIOUS_COMPARISON_LABEL = "önceki ölçüme göre"
 
 # (symbol, UTC date) -> first close of the trailing-1y Yahoo series, or None

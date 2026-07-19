@@ -14,6 +14,7 @@ from app.api.v1 import (
     search,
     subscribers,
     taxonomy,
+    tk,
 )
 
 api_router = APIRouter()
@@ -29,3 +30,4 @@ api_router.include_router(kpis.router)
 api_router.include_router(subscribers.router)
 api_router.include_router(admin.router)
 api_router.include_router(taxonomy.router)
+api_router.include_router(tk.router)

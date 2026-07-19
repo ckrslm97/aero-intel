@@ -9,7 +9,6 @@ from app.services.insights_service import (
     airline_momentum,
     build_daily_digest,
     new_route_signals,
-    top_corroborated_stories,
 )
 
 NOW = datetime.now(timezone.utc)
@@ -69,18 +68,26 @@ async def test_airline_momentum_computes_week_over_week_delta(db_session):
     assert (ek["current"], ek["previous"], ek["delta"]) == (3, 1, 2)
 
 
-async def test_new_route_signals_group_by_region(db_session):
+async def test_new_route_signals_group_by_region_with_cited_articles(db_session):
     from app.models.source import Source
 
     source = Source(name="S2", url="https://example.com/feed2", source_type="rss")
     db_session.add(source)
     await db_session.flush()
+    lufthansa = Entity(entity_type="airline", name="Lufthansa", code="LH")
+    db_session.add(lufthansa)
+    await db_session.flush()
 
+    articles = []
     for i, region in enumerate(["europe", "europe", "asia"]):
-        await _article(
-            db_session, source, url=f"https://example.com/nr{i}", published_at=NOW,
-            category="network", subcategory="new_route", region=region,
+        articles.append(
+            await _article(
+                db_session, source, url=f"https://example.com/nr{i}", published_at=NOW,
+                category="network", subcategory="new_route", region=region,
+                headline_tr=f"Yeni hat {i}",
+            )
         )
+    db_session.add(ArticleEntity(article_id=articles[0].id, entity_id=lufthansa.id))
     # A network article that is NOT a new route must not count.
     await _article(
         db_session, source, url="https://example.com/nr-x", published_at=NOW,
@@ -89,25 +96,16 @@ async def test_new_route_signals_group_by_region(db_session):
     await db_session.commit()
 
     signals = await new_route_signals(db_session)
-    assert signals[0] == {"region": "europe", "count": 2}
-    assert {"region": "asia", "count": 1} in signals
-
-
-async def test_top_corroborated_prefers_turkish_headline(db_session):
-    from app.models.source import Source
-
-    source = Source(name="S3", url="https://example.com/feed3", source_type="rss")
-    db_session.add(source)
-    await db_session.flush()
-    await _article(
-        db_session, source, url="https://example.com/top", published_at=NOW,
-        corroborating=4, headline_tr="Türkçe başlık",
-    )
-    await db_session.commit()
-
-    stories = await top_corroborated_stories(db_session)
-    assert stories[0]["headline"] == "Türkçe başlık"
-    assert stories[0]["sources"] == 4
+    europe = signals[0]
+    assert (europe["region"], europe["count"]) == ("europe", 2)
+    assert len(europe["articles"]) == 2
+    # Every signal is citable: Turkish headline preferred, source named, URL kept.
+    first = next(a for a in europe["articles"] if a["url"] == "https://example.com/nr0")
+    assert first["headline"] == "Yeni hat 0"
+    assert first["source_name"] == "S2"
+    assert first["airlines"] == ["LH"]
+    asia = next(s for s in signals if s["region"] == "asia")
+    assert asia["count"] == 1
 
 
 async def test_digest_falls_back_to_deterministic_turkish_without_llm(db_session, monkeypatch):

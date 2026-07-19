@@ -6,7 +6,7 @@ LLM budget on render, and yesterday's digest survives if today's job fails.
 """
 from datetime import date
 
-from sqlalchemy import Date, String, Text
+from sqlalchemy import Date, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
@@ -15,8 +15,12 @@ from app.models.base import TimestampMixin, UUIDPrimaryKeyMixin
 
 class InsightDigest(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "insight_digests"
+    # One digest per day *per topic*: "daily" is the insights page paragraph,
+    # "tk_reviews" the BİZ page's review synthesis.
+    __table_args__ = (UniqueConstraint("digest_date", "topic"),)
 
-    digest_date: Mapped[date] = mapped_column(Date, unique=True, index=True)
+    digest_date: Mapped[date] = mapped_column(Date, index=True)
+    topic: Mapped[str] = mapped_column(String(20), default="daily", server_default="daily")
     body: Mapped[str] = mapped_column(Text)
     # "openai_compat" when a live model wrote it, "heuristic" for the
     # deterministic fallback template -- surfaced so the UI can label AI text.
