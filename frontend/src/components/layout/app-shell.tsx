@@ -1,9 +1,18 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useEffect, useState } from "react";
 
-import { MobileSidebar, Sidebar } from "@/components/layout/sidebar";
+import { Sidebar } from "@/components/layout/sidebar";
 import { Topbar } from "@/components/layout/topbar";
+
+// The mobile drawer is the only framer-motion user in the shell and is
+// md:hidden -- loading it eagerly put ~124KB of animation library in every
+// desktop route's baseline for markup that never renders.
+const MobileSidebar = dynamic(
+  () => import("@/components/layout/sidebar").then((m) => m.MobileSidebar),
+  { ssr: false },
+);
 
 const COLLAPSE_KEY = "aerointel_sidebar_collapsed";
 

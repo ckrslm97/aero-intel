@@ -532,6 +532,7 @@ async def seed_events(db: AsyncSession) -> int:
             url=event.url,
             title=_headline(event),
             raw_content=body,
+            word_count=len(body.split()),
             author=None,
             # Dated to the seed run, not the event: `published_at` drives the
             # newspaper's recency window, and an event announced for 2027 still

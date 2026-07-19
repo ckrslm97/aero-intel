@@ -1,7 +1,8 @@
 """Aggregated news-pattern data behind the /insights page."""
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.cache_headers import AGGREGATES, public_cache
 from app.core.db import get_db
 from app.services.insights_service import (
     airline_momentum,
@@ -14,7 +15,11 @@ router = APIRouter(prefix="/insights", tags=["insights"])
 
 
 @router.get("")
-async def get_insights(db: AsyncSession = Depends(get_db)) -> dict:
+async def get_insights(
+    response: Response = None,  # type: ignore[assignment]
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    public_cache(response, AGGREGATES)
     digest = await latest_digest(db)
     return {
         "airline_momentum": await airline_momentum(db),

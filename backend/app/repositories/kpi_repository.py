@@ -1,7 +1,8 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.models.kpi import KPI
 
@@ -89,6 +90,66 @@ class KpiRepository:
             .limit(points)
         )
         return list(reversed(result.scalars().all()))
+
+    async def trends_for(
+        self, metric_keys: list[str], points: int = 12
+    ) -> dict[str, list[KPI]]:
+        """`trend` for many metrics in ONE query. The dashboard shows 16 KPIs;
+        calling trend() per metric meant 16 sequential round trips to Neon,
+        which measured ~10s wall time on the /kpis endpoint."""
+        if not metric_keys:
+            return {}
+        ranked = (
+            select(
+                KPI,
+                func.row_number()
+                .over(partition_by=KPI.metric_key, order_by=KPI.as_of.desc())
+                .label("rn"),
+            )
+            .where(KPI.metric_key.in_(metric_keys), KPI.is_primary.is_(True))
+            .subquery()
+        )
+        kpi = aliased(KPI, ranked)
+        result = await self.db.execute(
+            select(kpi).where(ranked.c.rn <= points).order_by(kpi.metric_key, kpi.as_of.asc())
+        )
+        by_metric: dict[str, list[KPI]] = {}
+        for row in result.scalars().all():
+            by_metric.setdefault(row.metric_key, []).append(row)
+        return by_metric
+
+    async def values_for_year(self, metric_keys: list[str], year: int) -> dict[str, float]:
+        """`value_for_year` for many metrics in ONE query -- same reasoning as
+        trends_for. Returns the latest primary observation inside `year`."""
+        if not metric_keys:
+            return {}
+        start = datetime(year, 1, 1, tzinfo=timezone.utc)
+        end = datetime(year + 1, 1, 1, tzinfo=timezone.utc)
+        result = await self.db.execute(
+            select(KPI)
+            .where(
+                KPI.metric_key.in_(metric_keys),
+                KPI.is_primary.is_(True),
+                KPI.as_of >= start,
+                KPI.as_of < end,
+            )
+            .distinct(KPI.metric_key)
+            .order_by(KPI.metric_key, KPI.as_of.desc())
+        )
+        return {row.metric_key: row.value for row in result.scalars().all()}
+
+    async def latest_values(self, metric_keys: list[str]) -> dict[str, float]:
+        """The most recent observation for each key, in one query. Used for the
+        stored market LY prices ("<metric>_ly"), which the KPI cron writes."""
+        if not metric_keys:
+            return {}
+        result = await self.db.execute(
+            select(KPI)
+            .where(KPI.metric_key.in_(metric_keys))
+            .distinct(KPI.metric_key)
+            .order_by(KPI.metric_key, KPI.as_of.desc())
+        )
+        return {row.metric_key: row.value for row in result.scalars().all()}
 
     async def history_since(self, metric_key: str, since: datetime) -> list[KPI]:
         """Our own accumulated primary observations since `since`, oldest first --

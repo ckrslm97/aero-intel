@@ -162,6 +162,7 @@ async def seed_promos(db: AsyncSession) -> int:
             url=promo.url,
             title=promo.headline_tr,
             raw_content=promo.summary_tr,
+            word_count=len(promo.summary_tr.split()),
             author=None,
             published_at=now,
             fetched_at=now,

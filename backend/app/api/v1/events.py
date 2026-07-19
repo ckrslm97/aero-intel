@@ -2,11 +2,12 @@
 import uuid
 from datetime import date
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
 from pydantic import BaseModel, ConfigDict, computed_field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.cache_headers import STATIC, public_cache
 from app.core.db import get_db
 from app.core.tr_dates import format_date_range
 from app.models.event import EVENT_TYPES, AviationEvent
@@ -42,8 +43,10 @@ async def list_events(
     event_type: str | None = Query(None, enum=list(EVENT_TYPES)),
     date_from: date | None = Query(None, description="Only events ending on/after this date"),
     date_to: date | None = Query(None, description="Only events starting on/before this date"),
+    response: Response = None,  # type: ignore[assignment]
     db: AsyncSession = Depends(get_db),
 ) -> list[EventOut]:
+    public_cache(response, STATIC)
     query = select(AviationEvent).order_by(AviationEvent.starts)
     if region:
         query = query.where(AviationEvent.region == region)

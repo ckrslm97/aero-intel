@@ -198,3 +198,94 @@ async def test_front_page_prefers_focus_beats_over_generic_aviation(db_session):
     )
     assert top[0].article_id == rm.id
     assert top[1].article_id == generic.id
+
+
+async def test_airline_filter_pages_without_dropping_or_repeating(db_session):
+    """An article mentioning several airlines must appear ONCE. The old join
+    multiplied rows and LIMIT counted the duplicates, so ?airline=ALL&limit=30
+    returned 21 articles in production and paging skipped stories."""
+    source = await _source(db_session)
+    codes = [("EK", "Emirates"), ("LH", "Lufthansa"), ("QR", "Qatar Airways")]
+    entities = [Entity(entity_type="airline", name=name, code=code) for code, name in codes]
+    db_session.add_all(entities)
+    await db_session.flush()
+
+    # Six articles, each mentioning all three carriers.
+    for i in range(6):
+        article = await _article(db_session, source, f"https://example.com/multi{i}")
+        for entity in entities:
+            db_session.add(ArticleEntity(article_id=article.id, entity_id=entity.id))
+    await db_session.commit()
+
+    repo = ArticleRepository(db_session)
+    assert await repo.count(airline="ALL") == 6
+
+    first = await repo.list_recent(airline="ALL", limit=4, offset=0)
+    second = await repo.list_recent(airline="ALL", limit=4, offset=4)
+    assert len(first) == 4  # a full page really is full
+    assert len(second) == 2
+    ids = [a.id for a in first + second]
+    assert len(set(ids)) == 6  # no repeats across pages, nothing skipped
+
+
+async def test_public_reads_are_edge_cacheable(db_session):
+    """Every filter click used to travel to Postgres because no response was
+    cacheable. Vercel honours s-maxage, so these headers absorb the repeats."""
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+
+    from app.api.v1 import articles as articles_api
+    from app.api.v1 import taxonomy as taxonomy_api
+    from app.core.db import get_db
+
+    app = FastAPI()
+    app.include_router(articles_api.router, prefix="/api/v1")
+    app.include_router(taxonomy_api.router, prefix="/api/v1")
+
+    async def override_get_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_get_db
+
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        for path in ("/api/v1/taxonomy", "/api/v1/articles?limit=1", "/api/v1/articles/counts"):
+            response = await client.get(path)
+            assert response.status_code == 200, path
+            cache_control = response.headers.get("cache-control", "")
+            assert "public" in cache_control, path
+            assert "s-maxage=" in cache_control, path
+            assert "stale-while-revalidate=" in cache_control, path
+
+
+def test_publisher_suffix_is_stripped_only_when_it_is_a_credit():
+    from app.pipeline.headlines import strip_publisher_suffix
+
+    # Aggregator credit: short trailing clause, no sentence punctuation.
+    assert strip_publisher_suffix(
+        "Qatar Airways Launches 2 Major New Long-Haul Routes In 1 Day - Simple Flying",
+        "Google News · Ana Rakipler",
+    ) == "Qatar Airways Launches 2 Major New Long-Haul Routes In 1 Day"
+
+    # Matches the feed's own name.
+    assert strip_publisher_suffix(
+        "Delta Plans New Asia Route - AirlineGeeks", "AirlineGeeks"
+    ) == "Delta Plans New Asia Route"
+
+    # A legitimate dashed clause is longer than a credit and stays put.
+    long_tail = (
+        "Turkish Airlines expands in Africa - a look at what the codeshare means "
+        "for connecting traffic through Istanbul this winter"
+    )
+    assert strip_publisher_suffix(long_tail, "AeroTime") == long_tail
+
+    # Nothing to strip.
+    assert strip_publisher_suffix("Boeing warns of jet shortage", "AeroTime") == (
+        "Boeing warns of jet shortage"
+    )
+
+    # Never leave a stub: the "headline" would be shorter than the credit.
+    assert strip_publisher_suffix("Kısa - Simple Flying", "Simple Flying") == (
+        "Kısa - Simple Flying"
+    )

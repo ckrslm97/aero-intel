@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import defer, selectinload
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
@@ -94,7 +94,9 @@ async def airline_momentum(db: AsyncSession, window_days: int = 7, limit: int = 
     return movers[:limit]
 
 
-async def new_route_signals(db: AsyncSession, days: int = 30, per_region: int = 6) -> list[dict]:
+async def new_route_signals(
+    db: AsyncSession, days: int = 30, per_region: int = 6, max_articles: int = 120
+) -> list[dict]:
     """New-route announcements grouped by world region, with the articles
     behind each count. The insights page renders these as a cited list --
     every signal links back to its source -- so this returns article detail,
@@ -105,7 +107,9 @@ async def new_route_signals(db: AsyncSession, days: int = 30, per_region: int = 
         await db.execute(
             select(Article, ArticleEnrichment)
             .join(ArticleEnrichment, ArticleEnrichment.article_id == Article.id)
-            .options(selectinload(Article.source))
+            # defer: only headlines and links are rendered, but the full scraped
+            # bodies were being pulled out of Postgres for every match.
+            .options(selectinload(Article.source), defer(Article.raw_content))
             .where(
                 Article.is_duplicate.is_(False),
                 Article.published_at >= since,
@@ -113,6 +117,9 @@ async def new_route_signals(db: AsyncSession, days: int = 30, per_region: int = 
                 ArticleEnrichment.subcategory == "new_route",
             )
             .order_by(Article.published_at.desc().nulls_last())
+            # The page shows at most `per_region` per region across ~9 regions;
+            # an unbounded fetch was reading the whole month of route news.
+            .limit(max_articles)
         )
     ).all()
 

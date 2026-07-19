@@ -15,7 +15,6 @@ from app.models.email_delivery import EmailDelivery
 from app.models.entity import Entity
 from app.models.source import Source
 from app.models.subscriber import Subscriber
-from app.scheduler.jobs import get_scheduler_status
 from app.schemas.admin import (
     AdminStatusOut,
     ArticleStatusCountOut,
@@ -69,5 +68,14 @@ async def admin_status(db: AsyncSession = Depends(get_db)) -> AdminStatusOut:
         subscribers_count=subscribers_count,
         email_deliveries_by_status=deliveries_by_status,
         latest_article_fetched_at=latest_article,
-        scheduler_jobs=[SchedulerJobOut(**job) for job in get_scheduler_status()],
+        scheduler_jobs=[SchedulerJobOut(**job) for job in _scheduler_status()],
     )
+
+
+def _scheduler_status() -> list[dict]:
+    """APScheduler imported lazily: main.py refuses to start the scheduler under
+    VERCEL=1, so on serverless the import was pure cold-start cost for every
+    route that shares this module's import chain."""
+    from app.scheduler.jobs import get_scheduler_status
+
+    return get_scheduler_status()

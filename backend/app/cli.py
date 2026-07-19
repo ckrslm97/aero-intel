@@ -109,6 +109,14 @@ async def _seed_events() -> None:
         print(f"Seeded {inserted} curated aviation events")
 
 
+async def _clean_headlines() -> None:
+    from app.pipeline.enrich import clean_stored_headlines
+
+    async with AsyncSessionLocal() as db:
+        result = await clean_stored_headlines(db)
+        print(f"Cleaned {result['cleaned']} of {result['scanned']} stored headlines")
+
+
 async def _seed_tk_reviews() -> None:
     from app.ingest.tk_reviews_seed import seed_tk_reviews
     from app.services.tk_service import build_tk_digest
@@ -185,6 +193,7 @@ def main() -> None:
             "reclassify",
             "build-insight",
             "repair-translations",
+            "clean-headlines",
             "translate-backlog",
             "build-edition",
             "refresh-kpis",
@@ -225,6 +234,8 @@ def main() -> None:
         asyncio.run(_reclassify())
     elif args.command == "repair-translations":
         asyncio.run(_repair_translations())
+    elif args.command == "clean-headlines":
+        asyncio.run(_clean_headlines())
     elif args.command == "translate-backlog":
         asyncio.run(_translate_backlog(args.limit))
     elif args.command == "build-edition":

@@ -1,7 +1,17 @@
+"use client";
+
 import { ArrowDownRight, ArrowUpRight, CircleDashed, Minus } from "lucide-react";
 import Link from "next/link";
 
-import { Sparkline } from "@/components/charts/sparkline";
+import dynamic from "next/dynamic";
+
+// echarts is ~1.16MB and the dashboard's only use of it on first paint is a
+// 36px trend line. Loading it after the cards render keeps the landing page
+// off the charting library entirely.
+const Sparkline = dynamic(
+  () => import("@/components/charts/sparkline").then((m) => m.Sparkline),
+  { ssr: false, loading: () => <div style={{ height: 36 }} /> },
+);
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { formatCompactNumber, formatDelta } from "@/lib/format";
 import { KPI_ICONS } from "@/lib/kpi-icons";

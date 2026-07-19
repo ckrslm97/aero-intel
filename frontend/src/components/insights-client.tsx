@@ -59,7 +59,7 @@ export function InsightsClient() {
 
   useEffect(() => {
     let cancelled = false;
-    apiFetch<InsightsOut>("/insights")
+    apiFetch<InsightsOut>("/insights", { cache: "default" })
       .then((d) => {
         if (!cancelled) setData(d);
       })

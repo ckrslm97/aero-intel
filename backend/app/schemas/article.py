@@ -54,14 +54,15 @@ class ArticleOut(BaseModel):
     status: str
     source: SourceOut
     enrichment: ArticleEnrichmentOut | None
-    # Not part of the public payload -- kept only to compute reading time below.
-    raw_content: str = Field(exclude=True, repr=False)
+    # Stored at ingest. Reading time used to be derived from raw_content, which
+    # meant every list request pulled the full article bodies out of Postgres
+    # only to discard them -- the list queries now defer that column entirely.
+    word_count: int | None = Field(default=None, exclude=True, repr=False)
 
     @computed_field  # type: ignore[prop-decorator]
     @property
     def reading_time_minutes(self) -> int:
-        word_count = len(self.raw_content.split())
-        return max(1, round(word_count / _WORDS_PER_MINUTE))
+        return max(1, round((self.word_count or 0) / _WORDS_PER_MINUTE))
 
 
 class ArticleListOut(BaseModel):

@@ -2,9 +2,10 @@ import uuid
 from datetime import date as date_type
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.cache_headers import AGGREGATES, ARTICLES, public_cache
 from app.core.db import get_db
 from app.repositories.article_repository import ArticleRepository
 from app.schemas.article import ArticleListOut, ArticleOut
@@ -33,8 +34,10 @@ async def list_articles(
     date: date_type | None = Query(
         None, description="Only articles from this UTC day (archive view)"
     ),
+    response: Response = None,  # type: ignore[assignment]  -- FastAPI injects it
     db: AsyncSession = Depends(get_db),
 ) -> ArticleListOut:
+    public_cache(response, ARTICLES)
     repo = ArticleRepository(db)
     since = datetime.now(timezone.utc) - timedelta(days=days) if days else None
     items = await repo.list_recent(
@@ -42,19 +45,27 @@ async def list_articles(
         region=region, since=since, airline=airline, on_date=date,
     )
     # Filtered total (same clause as the list) so "load more" knows when to stop.
-    total = await repo.count(
-        category=category, subcategory=subcategory, region=region, since=since,
-        airline=airline, on_date=date,
-    )
+    # A short page IS the end of the result set, so the count query -- the more
+    # expensive of the two, since it has no LIMIT to stop early -- is skipped
+    # entirely for every filter that fits on one page.
+    if len(items) < limit:
+        total = offset + len(items)
+    else:
+        total = await repo.count(
+            category=category, subcategory=subcategory, region=region, since=since,
+            airline=airline, on_date=date,
+        )
     return ArticleListOut(total=total, items=[ArticleOut.model_validate(a) for a in items])
 
 
 @router.get("/counts")
 async def article_counts(
     days: int | None = Query(None, ge=1, le=365),
+    response: Response = None,  # type: ignore[assignment]
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, int]:
     """Article count per category, for the newspaper's tab badges."""
+    public_cache(response, AGGREGATES)
     since = datetime.now(timezone.utc) - timedelta(days=days) if days else None
     return await ArticleRepository(db).count_by_category(since=since)
 
@@ -62,9 +73,11 @@ async def article_counts(
 @router.get("/daily-counts")
 async def daily_counts(
     days: int = Query(7, ge=1, le=31),
+    response: Response = None,  # type: ignore[assignment]
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, int]:
     """Article count per UTC day, for the archive page's date strip."""
+    public_cache(response, AGGREGATES)
     return await ArticleRepository(db).count_by_day(days=days)
 
 

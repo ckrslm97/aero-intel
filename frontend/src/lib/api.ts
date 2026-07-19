@@ -27,13 +27,20 @@ export class ApiError extends Error {
   }
 }
 
+/** Next's fetch options on top of the standard ones (ISR on server components). */
+type ApiRequestInit = RequestInit & { next?: { revalidate?: number | false } };
+
 export async function apiFetch<T>(
   path: string,
-  init?: RequestInit,
+  init?: ApiRequestInit,
 ): Promise<T> {
   const res = await fetch(`${resolveFetchBaseUrl()}${path}`, {
     ...init,
-    cache: "no-store",
+    // Callers may opt into caching. This used to be an unconditional
+    // "no-store" placed AFTER the spread, which silently overrode any
+    // caller's choice and meant every filter click was a full round trip
+    // even when the browser already had the exact response.
+    cache: init?.cache ?? "no-store",
     headers: { "Content-Type": "application/json", ...init?.headers },
   });
 

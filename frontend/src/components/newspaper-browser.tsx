@@ -8,7 +8,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { ArticleCard } from "@/components/article-card";
 import { EventsCalendar } from "@/components/events-calendar";
-import { TailIcon } from "@/components/tail-icon";
+import { AirlineLogo } from "@/components/airline-logo";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiFetch } from "@/lib/api";
 import { airlineTabs } from "@/lib/nav";
@@ -16,7 +16,7 @@ import { CATEGORIES, EVENT_REGIONS } from "@/lib/taxonomy";
 import type { ArticleListOut, ArticleOut } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-// The map bundles a ~250KB world GeoJSON -- load it only when opened.
+// echarts + the world outline are only needed once the map is opened.
 const RegionMap = dynamic(
   () => import("@/components/region-map").then((m) => m.RegionMap),
   { ssr: false, loading: () => <Skeleton className="h-[320px] w-full rounded-xl" /> },
@@ -76,23 +76,23 @@ export function NewspaperBrowser() {
 
   // Tab badges: one grouped request, refreshed when the window is entered.
   useEffect(() => {
-    let cancelled = false;
-    apiFetch<Record<string, number>>(`/articles/counts?days=${DAYS_WINDOW}`)
-      .then((data) => {
-        if (!cancelled) setCounts(data);
-      })
+    const controller = new AbortController();
+    apiFetch<Record<string, number>>(`/articles/counts?days=${DAYS_WINDOW}`, {
+      cache: "default",
+      signal: controller.signal,
+    })
+      .then(setCounts)
       .catch(() => {
         /* badges are decorative -- a failure here must not break the list */
       });
-    return () => {
-      cancelled = true;
-    };
+    return () => controller.abort();
   }, []);
 
   // Article list. offset===0 replaces (a filter changed); offset>0 appends
   // ("Daha fazla yükle"). Both live in one effect so they can't race.
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
     const params = new URLSearchParams({
       category: categorySlug,
       days: String(DAYS_WINDOW),
@@ -108,15 +108,23 @@ export function NewspaperBrowser() {
     if (isFirstPage) setLoading(true);
     else setLoadingMore(true);
 
-    apiFetch<ArticleListOut>(`/articles?${params.toString()}`)
+    // cache: "default" lets the browser reuse its own copy -- the API now sends
+    // max-age, so returning to a filter you already viewed is instant instead
+    // of a fresh round trip. The abort stops click-spam from leaving a queue of
+    // abandoned requests ahead of the one the reader is actually waiting for.
+    apiFetch<ArticleListOut>(`/articles?${params.toString()}`, {
+      cache: "default",
+      signal: controller.signal,
+    })
       .then((data) => {
         if (cancelled) return;
         setItems((prev) => (isFirstPage ? data.items : [...prev, ...data.items]));
         setTotal(data.total);
         setError(null);
       })
-      .catch(() => {
-        if (!cancelled) setError("Haberler yüklenemedi. Sunucu çalışıyor mu?");
+      .catch((error: unknown) => {
+        if (cancelled || (error as Error)?.name === "AbortError") return;
+        setError("Haberler yüklenemedi. Sunucu çalışıyor mu?");
       })
       .finally(() => {
         if (cancelled) return;
@@ -125,6 +133,7 @@ export function NewspaperBrowser() {
       });
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [categorySlug, subcategorySlug, regionSlug, airlineCode, offset]);
 
@@ -382,11 +391,11 @@ export function NewspaperBrowser() {
             >
               <span
                 className={cn(
-                  "flex size-4 items-center justify-center rounded-full",
+                  "flex size-4 items-center justify-center overflow-hidden rounded-[3px]",
                   active && "bg-white/85",
                 )}
               >
-                <TailIcon code={a.code} className="size-3.5" />
+                <AirlineLogo code={a.code} name={a.name} className="size-4" />
               </span>
               {a.code}
             </button>
@@ -404,11 +413,19 @@ export function NewspaperBrowser() {
         <p className="rounded-lg border border-dashed border-border p-6 text-sm text-muted-foreground">
           {error}
         </p>
-      ) : loading ? (
+      ) : loading && items.length === 0 ? (
+        // Skeleton only on a cold start. Swapping a 30-row list for a 6-row
+        // skeleton on every chip click collapsed the page and threw the scroll
+        // position around; the list now stays put and is replaced in place.
         <ArticleListSkeleton />
       ) : items.length > 0 ? (
         <>
-          <div className="flex flex-col divide-y divide-border rounded-xl border border-border bg-card">
+          <div
+            className={cn(
+              "flex flex-col divide-y divide-border rounded-xl border border-border bg-card transition-opacity",
+              loading && "opacity-60",
+            )}
+          >
             <AnimatePresence initial={false}>
               {items.map((article, index) => (
                 <motion.div
@@ -416,9 +433,12 @@ export function NewspaperBrowser() {
                   initial={reduceMotion ? false : { opacity: 0, y: 8 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{
-                    duration: reduceMotion ? 0 : 0.2,
-                    // Stagger only the first page; appended pages animate at once.
-                    delay: reduceMotion ? 0 : Math.min(index, PAGE_LIMIT) * 0.02,
+                    duration: reduceMotion ? 0 : 0.18,
+                    // Cap the stagger at 8 items (~160ms). It used to cap at
+                    // PAGE_LIMIT, so the last row of a 30-item page only
+                    // finished animating ~800ms after the data had arrived --
+                    // the single most visible part of "the buttons feel slow".
+                    delay: reduceMotion ? 0 : Math.min(index, 8) * 0.02,
                   }}
                 >
                   <ArticleCard article={article} />

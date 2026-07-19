@@ -3,7 +3,7 @@ from datetime import date, datetime, time, timedelta, timezone
 
 from sqlalchemy import exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import defer, selectinload
 
 from app.models.article import Article, ArticleEnrichment
 from app.models.entity import ArticleEntity, Entity
@@ -64,13 +64,21 @@ class ArticleRepository:
             # in fleet/network/finance as much as in revenue_management.
             # Two special values: RIVALS = any of the user's named main rivals,
             # ALL = any airline entity at all ("Tüm Taşıyıcılar").
-            query = query.join(ArticleEntity, ArticleEntity.article_id == Article.id).join(
-                Entity, Entity.id == ArticleEntity.entity_id
-            ).where(Entity.entity_type == "airline")
+            #
+            # A semi-join, NOT a join: joining multiplied rows for articles that
+            # mention several airlines, and since LIMIT/OFFSET apply to the
+            # joined rows, "?airline=ALL&limit=30" returned 21 articles and
+            # paging skipped stories. IN (subquery) matches each article once.
+            mentions = (
+                select(ArticleEntity.article_id)
+                .join(Entity, Entity.id == ArticleEntity.entity_id)
+                .where(Entity.entity_type == "airline")
+            )
             if airline == "RIVALS":
-                query = query.where(Entity.code.in_(RIVAL_CODES))
+                mentions = mentions.where(Entity.code.in_(RIVAL_CODES))
             elif airline != "ALL":
-                query = query.where(Entity.code == airline)
+                mentions = mentions.where(Entity.code == airline)
+            query = query.where(Article.id.in_(mentions))
         return query
 
     async def list_recent(
@@ -86,7 +94,15 @@ class ArticleRepository:
     ) -> list[Article]:
         query = (
             select(Article)
-            .options(selectinload(Article.source), selectinload(Article.enrichment))
+            .options(
+                selectinload(Article.source),
+                selectinload(Article.enrichment),
+                # The scraped body is never rendered in a list and is not part
+                # of the JSON; leaving it in the SELECT moved hundreds of KB per
+                # request out of Postgres for nothing (reading time now comes
+                # from the stored word_count).
+                defer(Article.raw_content),
+            )
             .order_by(Article.published_at.desc().nulls_last(), Article.fetched_at.desc())
             .limit(limit)
             .offset(offset)
@@ -112,8 +128,11 @@ class ArticleRepository:
         airline: str | None = None,
         on_date: date | None = None,
     ) -> int:
+        # Plain COUNT, not COUNT(DISTINCT): the airline filter is a semi-join
+        # now, so no clause can multiply rows, and COUNT(DISTINCT uuid) forces
+        # an extra sort/hash over the whole filtered set.
         query = self._apply_filters(
-            select(func.count(Article.id.distinct())).select_from(Article),
+            select(func.count(Article.id)).select_from(Article),
             category=category,
             subcategory=subcategory,
             region=region,

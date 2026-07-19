@@ -6,6 +6,18 @@ from app.models.kpi import KPI
 from app.repositories.kpi_repository import KpiRepository
 from app.services import kpi_service
 
+# Last-year market prices are fetched by the refresh job (never on the request
+# path), so every test that runs a refresh has to stub the history call too --
+# otherwise the suite quietly reaches out to Yahoo.
+LY_HISTORY = {"BZ=F": 64.0, "TRY=X": 34.0}
+
+
+async def fake_history(base_url, symbol, period):
+    return [
+        (datetime(2025, 7, 18, tzinfo=timezone.utc), LY_HISTORY[symbol]),
+        (datetime(2026, 7, 17, tzinfo=timezone.utc), LY_HISTORY[symbol] + 10),
+    ]
+
 
 async def test_refresh_all_kpis_records_real_and_estimated_metrics(db_session, monkeypatch):
     async def fake_airborne(base_url):
@@ -19,14 +31,16 @@ async def test_refresh_all_kpis_records_real_and_estimated_metrics(db_session, m
 
     monkeypatch.setattr(kpi_service, "fetch_airborne_count", fake_airborne)
     monkeypatch.setattr(kpi_service, "fetch_quote", fake_quote)
+    monkeypatch.setattr(kpi_service, "fetch_history", fake_history)
     monkeypatch.setattr(kpi_service, "fetch_frankfurter_rate", fake_frankfurter)
 
     recorded = await kpi_service.refresh_all_kpis(db_session)
 
-    # 6 live rows -- flights_airborne, flights_today, oil_price, fuel_price,
-    # fx_usd_try (primary) and its Frankfurter cross-check -- plus one row per
-    # published IATA figure, which an empty database has none of yet.
-    assert recorded == 6 + len(kpi_service.latest_published_estimates())
+    # 8 live rows -- flights_airborne, flights_today, oil_price, fuel_price,
+    # fx_usd_try (primary), its Frankfurter cross-check, and the two stored
+    # last-year market prices -- plus one row per published IATA figure,
+    # which an empty database has none of yet.
+    assert recorded == 8 + len(kpi_service.latest_published_estimates())
 
     result = await db_session.execute(select(KPI).where(KPI.metric_key == "flights_airborne"))
     airborne = result.scalar_one()
@@ -77,12 +91,13 @@ async def test_refresh_does_not_rewrite_published_figures_that_have_not_moved(db
 
     monkeypatch.setattr(kpi_service, "fetch_airborne_count", fake_airborne)
     monkeypatch.setattr(kpi_service, "fetch_quote", fake_quote)
+    monkeypatch.setattr(kpi_service, "fetch_history", fake_history)
     monkeypatch.setattr(kpi_service, "fetch_frankfurter_rate", fake_frankfurter)
 
     await kpi_service.refresh_all_kpis(db_session)
     second_run = await kpi_service.refresh_all_kpis(db_session)
 
-    assert second_run == 6  # the live rows, and nothing else
+    assert second_run == 8  # the live rows, and nothing else
 
 
 async def test_refresh_all_kpis_skips_frankfurter_row_when_unavailable(db_session, monkeypatch):
@@ -97,12 +112,13 @@ async def test_refresh_all_kpis_skips_frankfurter_row_when_unavailable(db_sessio
 
     monkeypatch.setattr(kpi_service, "fetch_airborne_count", fake_airborne)
     monkeypatch.setattr(kpi_service, "fetch_quote", fake_quote)
+    monkeypatch.setattr(kpi_service, "fetch_history", fake_history)
     monkeypatch.setattr(kpi_service, "fetch_frankfurter_rate", fake_frankfurter_unavailable)
 
     recorded = await kpi_service.refresh_all_kpis(db_session)
 
     # one fewer than a full run -- no cross-check row
-    assert recorded == 5 + len(kpi_service.latest_published_estimates())
+    assert recorded == 7 + len(kpi_service.latest_published_estimates())
 
     result = await db_session.execute(select(KPI).where(KPI.metric_key == "fx_usd_try"))
     fx_rows = result.scalars().all()
@@ -138,3 +154,60 @@ async def test_kpi_repository_latest_corroborations_dedupes_by_source(db_session
 
     assert len(corroborations) == 1
     assert corroborations[0].value == 40.2  # the more recent of the two Frankfurter rows
+
+
+async def test_refresh_stores_last_year_market_prices_off_the_request_path(db_session, monkeypatch):
+    """The dashboard must never call Yahoo while serving a request, so the
+    refresh job stores each market metric's price a year ago under a
+    "<metric>_ly" key, outside the live series that feeds the sparkline."""
+    async def fake_airborne(base_url):
+        return 100
+
+    async def fake_quote(base_url, symbol):
+        return {"BZ=F": 80.0, "TRY=X": 40.0}[symbol]
+
+    async def fake_frankfurter(base_currency, quote_currency):
+        return 40.2
+
+    monkeypatch.setattr(kpi_service, "fetch_airborne_count", fake_airborne)
+    monkeypatch.setattr(kpi_service, "fetch_quote", fake_quote)
+    monkeypatch.setattr(kpi_service, "fetch_history", fake_history)
+    monkeypatch.setattr(kpi_service, "fetch_frankfurter_rate", fake_frankfurter)
+
+    await kpi_service.refresh_all_kpis(db_session)
+
+    row = (
+        await db_session.execute(select(KPI).where(KPI.metric_key == "oil_price_ly"))
+    ).scalar_one()
+    assert row.value == 64.0  # the FIRST point of the trailing-1y series
+    assert row.is_primary is False  # must not feed the live trend
+
+    # The live series is untouched by the LY bookkeeping.
+    trend = await KpiRepository(db_session).trend("oil_price")
+    assert [p.value for p in trend] == [80.0]
+
+
+async def test_refresh_survives_a_yahoo_history_outage(db_session, monkeypatch):
+    async def fake_airborne(base_url):
+        return 100
+
+    async def fake_quote(base_url, symbol):
+        return {"BZ=F": 80.0, "TRY=X": 40.0}[symbol]
+
+    async def broken_history(base_url, symbol, period):
+        raise RuntimeError("yahoo down")
+
+    async def fake_frankfurter(base_currency, quote_currency):
+        return 40.2
+
+    monkeypatch.setattr(kpi_service, "fetch_airborne_count", fake_airborne)
+    monkeypatch.setattr(kpi_service, "fetch_quote", fake_quote)
+    monkeypatch.setattr(kpi_service, "fetch_history", broken_history)
+    monkeypatch.setattr(kpi_service, "fetch_frankfurter_rate", fake_frankfurter)
+
+    # The live readings still land; only the LY rows are missing.
+    recorded = await kpi_service.refresh_all_kpis(db_session)
+    assert recorded == 6 + len(kpi_service.latest_published_estimates())
+    assert (
+        await db_session.execute(select(KPI).where(KPI.metric_key == "oil_price_ly"))
+    ).scalar_one_or_none() is None

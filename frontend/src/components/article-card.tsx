@@ -1,13 +1,22 @@
 import { ExternalLink, Minus, TrendingDown, TrendingUp } from "lucide-react";
+import { memo } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { getCategory, getSubcategoryLabel } from "@/lib/taxonomy";
 import { cn } from "@/lib/utils";
 import type { ArticleOut } from "@/lib/types";
 
+// One formatter for the whole list. toLocaleString() builds a new
+// Intl.DateTimeFormat on every call, which is genuinely expensive and was
+// paid once per card per render -- 100 instantiations on the archive page.
+const PUBLISHED_FORMAT = new Intl.DateTimeFormat("tr-TR", {
+  dateStyle: "medium",
+  timeStyle: "short",
+});
+
 function formatPublished(iso: string | null): string {
   if (!iso) return "Tarih bilinmiyor";
-  return new Date(iso).toLocaleString("tr-TR", { dateStyle: "medium", timeStyle: "short" });
+  return PUBLISHED_FORMAT.format(new Date(iso));
 }
 
 function SentimentIcon({ sentiment }: { sentiment: string }) {
@@ -20,7 +29,7 @@ function SentimentIcon({ sentiment }: { sentiment: string }) {
   return <Minus className="size-3.5 text-muted-foreground" />;
 }
 
-export function ArticleCard({
+function ArticleCardComponent({
   article,
   variant = "compact",
 }: {
@@ -125,3 +134,7 @@ export function ArticleCard({
     </a>
   );
 }
+
+// Memoised: a parent state change (a loading flag, an appended page) used to
+// re-render every card in the list even though their props hadn't moved.
+export const ArticleCard = memo(ArticleCardComponent);

@@ -37,6 +37,10 @@ export default function RootLayout({
       suppressHydrationWarning
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
+      <head>
+        {/* Carrier logos (see components/airline-logo.tsx) */}
+        <link rel="preconnect" href="https://pics.avs.io" crossOrigin="" />
+      </head>
       <body className="min-h-full flex flex-col">
         <ThemeProvider
           attribute="class"

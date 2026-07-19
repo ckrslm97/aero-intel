@@ -73,14 +73,14 @@ export function BizClient() {
 
   useEffect(() => {
     let cancelled = false;
-    apiFetch<TkOut>("/tk")
+    apiFetch<TkOut>("/tk", { cache: "default" })
       .then((d) => {
         if (!cancelled) setData(d);
       })
       .catch(() => {
         if (!cancelled) setError("TK masası yüklenemedi. Sunucu çalışıyor mu?");
       });
-    apiFetch<ArticleListOut>("/articles?airline=TK&days=60&limit=10")
+    apiFetch<ArticleListOut>("/articles?airline=TK&days=60&limit=10", { cache: "default" })
       .then((d) => {
         if (!cancelled) setArticles(d.items);
       })

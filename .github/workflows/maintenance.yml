@@ -20,6 +20,7 @@ on:
           - re-enrich
           - reclassify
           - repair-translations
+          - clean-headlines
           - translate-backlog
           - build-insight
           - create-admin
@@ -104,6 +105,8 @@ jobs:
               python -m app.cli reclassify ;;
             repair-translations)
               python -m app.cli repair-translations ;;
+            clean-headlines)
+              python -m app.cli clean-headlines ;;
             translate-backlog)
               python -m app.cli translate-backlog --limit "${LIMIT:-12}" ;;
             build-insight)

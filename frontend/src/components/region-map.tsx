@@ -4,21 +4,30 @@ import { useReducedMotion } from "framer-motion";
 import * as echarts from "echarts";
 import ReactECharts from "echarts-for-react";
 import { useTheme } from "next-themes";
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { COUNTRY_REGION } from "@/lib/geo/region-countries";
-import worldJson from "@/lib/geo/world.json";
 import { worldRegions } from "@/lib/nav";
 
-// Register once per module load; echarts natively decodes the compact
-// encodeOffsets coordinate format this world.json (from echarts 4) uses.
-let registered = false;
-function ensureWorldMap() {
-  if (!registered) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the encoded map JSON predates echarts' GeoJSON typings
-    echarts.registerMap("world", worldJson as any);
-    registered = true;
+// The world outline is fetched from /geo/world.json rather than imported.
+// Importing it emitted a ~1MB JavaScript chunk that had to be parsed as code;
+// as a plain asset it is 455KB, cached by the browser like any other file, and
+// never touches the JS graph. Coordinates are rounded to 3 decimals (~110m),
+// which is far below one pixel at this map's zoom.
+let mapPromise: Promise<void> | null = null;
+
+function ensureWorldMap(): Promise<void> {
+  if (!mapPromise) {
+    mapPromise = fetch("/geo/world.json")
+      .then((res) => res.json())
+      .then((geoJson) => {
+        echarts.registerMap("world", geoJson);
+      })
+      .catch(() => {
+        mapPromise = null; // let a later open retry
+      });
   }
+  return mapPromise;
 }
 
 const REGION_NAME: Record<string, string> = Object.fromEntries(
@@ -55,10 +64,20 @@ interface RegionMapProps {
  * blue vs neutral), deliberately not a 9-color categorical scheme: identity
  * comes from the hover tooltip and the click, color only marks selection. */
 export function RegionMap({ value, onChange }: RegionMapProps) {
-  ensureWorldMap();
+  const [mapReady, setMapReady] = useState(false);
   const reduceMotion = useReducedMotion();
   const { resolvedTheme } = useTheme();
   const isDark = resolvedTheme === "dark";
+
+  useEffect(() => {
+    let active = true;
+    ensureWorldMap().then(() => {
+      if (active) setMapReady(true);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   // Same validated blue the site's other charts lead with.
   const accent = isDark ? "#3987e5" : "#2a78d6";
@@ -150,6 +169,14 @@ export function RegionMap({ value, onChange }: RegionMapProps) {
       ],
     };
   }, [value, accent, neutralFill, hoverFill, borderColor, surface, isDark, reduceMotion]);
+
+  if (!mapReady) {
+    return (
+      <div className="flex h-[340px] items-center justify-center rounded-xl border border-border bg-card">
+        <span className="text-xs text-muted-foreground">Harita yükleniyor…</span>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-1.5 rounded-xl border border-border bg-card p-2">

@@ -44,7 +44,9 @@ export function ArchiveClient() {
 
   useEffect(() => {
     let cancelled = false;
-    apiFetch<Record<string, number>>(`/articles/daily-counts?days=${DAYS}`)
+    apiFetch<Record<string, number>>(`/articles/daily-counts?days=${DAYS}`, {
+      cache: "default",
+    })
       .then((data) => {
         if (cancelled) return;
         setCounts(data);
@@ -58,7 +60,7 @@ export function ArchiveClient() {
       .catch(() => {
         if (!cancelled) setCounts({});
       });
-    apiFetch<EditionSummaryOut[]>("/editions")
+    apiFetch<EditionSummaryOut[]>("/editions", { cache: "default" })
       .then((data) => {
         if (!cancelled) setEditions(data);
       })
@@ -73,22 +75,28 @@ export function ArchiveClient() {
 
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
     // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch driven by day selection; the loading flag must flip with it
     setLoading(true);
-    apiFetch<ArticleListOut>(`/articles?date=${selected}&limit=100`)
+    apiFetch<ArticleListOut>(`/articles?date=${selected}&limit=100`, {
+      cache: "default",
+      signal: controller.signal,
+    })
       .then((data) => {
         if (cancelled) return;
         setItems(data.items);
         setError(null);
       })
-      .catch(() => {
-        if (!cancelled) setError("Haberler yüklenemedi. Sunucu çalışıyor mu?");
+      .catch((error: unknown) => {
+        if (cancelled || (error as Error)?.name === "AbortError") return;
+        setError("Haberler yüklenemedi. Sunucu çalışıyor mu?");
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
       });
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [selected]);
 
@@ -176,7 +184,7 @@ export function ArchiveClient() {
         <p className="rounded-lg border border-dashed border-border p-6 text-sm text-muted-foreground">
           {error}
         </p>
-      ) : loading ? (
+      ) : loading && items.length === 0 ? (
         <div className="flex flex-col divide-y divide-border rounded-xl border border-border bg-card">
           {Array.from({ length: 6 }).map((_, i) => (
             <div key={i} className="flex flex-col gap-2 p-4">

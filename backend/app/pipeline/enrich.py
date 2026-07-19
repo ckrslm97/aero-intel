@@ -11,6 +11,7 @@ from app.llm.factory import get_llm_provider
 from app.llm.heuristic import detect_region
 from app.models.article import Article, ArticleEnrichment
 from app.models.entity import ArticleEntity
+from app.pipeline.headlines import strip_publisher_suffix
 from app.pipeline.search_indexing import index_article_text
 from app.pipeline.verify import compute_confidence
 from app.repositories.entity_repository import EntityRepository
@@ -59,6 +60,11 @@ async def enrich_pending_articles(db: AsyncSession, limit: int | None = None) ->
             subcategory = "regional" if region else "general"
 
         headline = headline[:500] or article.title
+        # Aggregator feeds append " - Publisher"; the source is shown beside
+        # the story anyway (see app/pipeline/headlines.py).
+        headline = strip_publisher_suffix(
+            headline, article.source.name if article.source else None
+        )
         # Real Turkish translation only happens when a translation-capable LLM
         # is configured (see app/llm/base.py); the heuristic fallback always
         # returns None here, and both fields stay null -- surfaced honestly by
@@ -301,3 +307,54 @@ async def reset_enrichment(db: AsyncSession, days: int | None = None) -> int:
     await db.commit()
     logger.info("enrichment_reset", articles=len(article_ids), days=days)
     return len(article_ids)
+
+
+async def clean_stored_headlines(db: AsyncSession, batch_size: int = 200) -> dict[str, int]:
+    """Strip aggregator publisher credits from headlines already in the archive.
+
+    Google News rewrites titles as "<headline> - <Publisher>", and the archive
+    kept those suffixes in `headline`, `headline_tr` and the article title, so
+    the newspaper, newsletter and PDF all repeated the outlet name shown beside
+    the story. Only suffixes that look like a credit are removed
+    (app/pipeline/headlines.py). Commits per batch: a single end-of-run commit
+    over a pooled remote database has lost whole runs to idle timeouts here
+    before.
+    """
+    from sqlalchemy.orm import selectinload
+
+    result = await db.execute(
+        select(Article)
+        .options(selectinload(Article.enrichment), selectinload(Article.source))
+        .where(Article.is_duplicate.is_(False))
+    )
+    articles = list(result.scalars().unique().all())
+
+    cleaned = 0
+    for index, article in enumerate(articles, start=1):
+        source_name = article.source.name if article.source else None
+        changed = False
+
+        new_title = strip_publisher_suffix(article.title, source_name)
+        if new_title != article.title:
+            article.title = new_title
+            changed = True
+
+        enrichment = article.enrichment
+        if enrichment is not None:
+            for field in ("headline", "headline_tr"):
+                value = getattr(enrichment, field)
+                if not value:
+                    continue
+                new_value = strip_publisher_suffix(value, source_name)
+                if new_value != value:
+                    setattr(enrichment, field, new_value)
+                    changed = True
+
+        if changed:
+            cleaned += 1
+        if index % batch_size == 0:
+            await db.commit()
+
+    await db.commit()
+    logger.info("headlines_cleaned", cleaned=cleaned, scanned=len(articles))
+    return {"cleaned": cleaned, "scanned": len(articles)}

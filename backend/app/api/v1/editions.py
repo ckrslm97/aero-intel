@@ -14,7 +14,6 @@ from app.repositories.edition_repository import EditionRepository
 from app.schemas.article import ArticleOut
 from app.schemas.edition import EditionOut, EditionSectionOut, EditionSummaryOut
 from app.services.edition_service import assemble_edition
-from app.services.pdf_service import get_edition_pdf_bytes
 
 router = APIRouter(prefix="/editions", tags=["editions"])
 
@@ -83,6 +82,10 @@ async def download_edition_pdf(edition_date: date, db: AsyncSession = Depends(ge
     edition = await repo.get_by_date(edition_date)
     if edition is None:
         raise HTTPException(status_code=404, detail="Edition not found")
+
+    # Lazy: pdf_service -> pdf/render -> email/render builds a Jinja2
+    # Environment at import time, which no other endpoint needs.
+    from app.services.pdf_service import get_edition_pdf_bytes
 
     pdf_bytes = await get_edition_pdf_bytes(db, edition.id)
     if pdf_bytes is None:

@@ -24,7 +24,7 @@ from app.ingest.historical_seed import PUBLISHED_AT as IATA_PUBLISHED_AT
 from app.ingest.historical_seed import SOURCE as IATA_SOURCE
 from app.ingest.historical_seed import SOURCE_URL as IATA_ECONOMICS_URL
 from app.ingest.historical_seed import build_points
-from app.ingest.markets import fetch_frankfurter_rate, fetch_quote
+from app.ingest.markets import fetch_frankfurter_rate, fetch_history, fetch_quote
 from app.ingest.opensky import fetch_airborne_count
 from app.models.kpi import KPI
 from app.repositories.kpi_repository import KpiRepository
@@ -32,6 +32,10 @@ from app.repositories.kpi_repository import KpiRepository
 logger = get_logger(__name__)
 
 OPENSKY_URL = "https://opensky-network.org/"
+# Market metrics keep their last-year price under "<metric_key>_ly" so the API
+# can read it from Postgres instead of calling Yahoo while serving a request.
+LY_SUFFIX = "_ly"
+
 YAHOO_BRENT_URL = "https://finance.yahoo.com/quote/BZ=F"
 YAHOO_FX_URL = "https://finance.yahoo.com/quote/TRY=X"
 FRANKFURTER_URL = "https://www.frankfurter.app/"
@@ -156,6 +160,35 @@ async def refresh_all_kpis(db: AsyncSession) -> int:
                 frankfurter=frankfurter_rate,
                 diff_pct=round(diff_pct, 3),
             )
+
+    # Last-year market prices, stored so the dashboard never calls Yahoo on the
+    # request path. /kpis used to fetch a 1-year history per market metric while
+    # rendering (two calls with a 15s timeout each on any cold container), which
+    # is most of why that endpoint measured ~10s. Written under a "<metric>_ly"
+    # key so these points stay out of the live series and its sparkline.
+    for metric_key, symbol, unit, source_url in (
+        ("oil_price", "BZ=F", "$/bbl", YAHOO_BRENT_URL),
+        ("fx_usd_try", "TRY=X", "TRY", YAHOO_FX_URL),
+    ):
+        try:
+            points = await fetch_history(settings.yahoo_finance_base_url, symbol, "1y")
+        except Exception as exc:  # noqa: BLE001 -- an LY price is nice to have, not critical
+            logger.warning("kpi_ly_history_fetch_failed", symbol=symbol, error=str(exc))
+            continue
+        if points:
+            repo.record(
+                f"{metric_key}{LY_SUFFIX}",
+                points[0][1],
+                unit,
+                f"Yahoo Finance ({symbol}, 1 yıl önce)",
+                False,
+                now,
+                source_url,
+                # Bookkeeping, not an observation of today: kept out of the
+                # primary series so it can never reach a trend line.
+                is_primary=False,
+            )
+            recorded += 1
 
     # The published figures. Normally a no-op: seed_kpi_history() has already
     # stored these at their publication date, and nothing here changes until

@@ -10,7 +10,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.logging import get_logger
 from app.ingest.base import RawArticle, SourceAdapter
 from app.ingest.premium.registry import PREMIUM_ADAPTERS
-from app.ingest.rss import RssSourceAdapter
 from app.models.article import Article
 from app.models.source import Source
 from app.pipeline.hashing import content_hash
@@ -23,6 +22,12 @@ logger = get_logger(__name__)
 
 def _adapter_for(source: Source) -> SourceAdapter | None:
     if source.source_type == "rss":
+        # Imported here, not at module scope: RssSourceAdapter pulls feedparser,
+        # lxml and BeautifulSoup, and this module sits on the import chain of
+        # every API route -- on Vercel that was cold-start weight paid by
+        # /articles, which never ingests anything.
+        from app.ingest.rss import RssSourceAdapter
+
         return RssSourceAdapter(source.name, source.url)
     if source.source_type == "premium":
         return next((a for a in PREMIUM_ADAPTERS if a.source_name == source.name), None)
@@ -60,6 +65,8 @@ async def run_ingestion(db: AsyncSession) -> int:
                 url=raw.url,
                 title=raw.title[:500],
                 raw_content=raw.content,
+                # Counted once here so the list endpoints can defer raw_content.
+                word_count=len(raw.content.split()),
                 author=raw.author[:200] if raw.author else None,
                 published_at=raw.published_at,
                 fetched_at=datetime.now(timezone.utc),

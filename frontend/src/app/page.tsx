@@ -40,7 +40,13 @@ export default async function DashboardPage() {
   let error: string | null = null;
 
   try {
-    kpis = await apiFetch<KpiOut[]>("/kpis");
+    // ISR: the dashboard was rendered on every request against a live,
+    // uncached backend call. KPIs move at most every 15 minutes, so a 60s
+    // revalidation serves the page instantly and still stays current.
+    kpis = await apiFetch<KpiOut[]>("/kpis", {
+      cache: "force-cache",
+      next: { revalidate: 60 },
+    });
   } catch {
     error = "KPI API'sine ulaşılamadı. Sunucu çalışıyor mu?";
   }

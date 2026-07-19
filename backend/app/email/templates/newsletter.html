@@ -22,6 +22,26 @@
           </td>
         </tr>
 
+        <!-- Straight to the site: the newsletter is a doorway, so the links
+             sit above the fold rather than after everything. -->
+        <tr>
+          <td style="padding:18px 28px 0 28px;">
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+              <tr>
+                <td style="background-color:#14130f;border-radius:5px;">
+                  <a href="{{ newspaper_url }}" style="display:inline-block;padding:10px 20px;color:#ffffff;font-size:14px;font-weight:600;text-decoration:none;">Günün gazetesini aç</a>
+                </td>
+              </tr>
+            </table>
+            <p style="margin:12px 0 0 0;color:#79735f;font-size:12px;line-height:1.8;">
+              <a href="{{ site_url }}" style="color:#a86e00;text-decoration:none;">Kontrol Paneli</a> &nbsp;&middot;&nbsp;
+              <a href="{{ insights_url }}" style="color:#a86e00;text-decoration:none;">İçgörüler</a> &nbsp;&middot;&nbsp;
+              <a href="{{ biz_url }}" style="color:#a86e00;text-decoration:none;">BİZ &mdash; TK masası</a> &nbsp;&middot;&nbsp;
+              <a href="{{ archive_url }}" style="color:#a86e00;text-decoration:none;">Arşiv</a>
+            </p>
+          </td>
+        </tr>
+
         <!-- Lead story -->
         {% if lead %}
         <tr>
@@ -86,28 +106,9 @@
         {% endfor %}
         {% endfor %}
 
-        <!-- Read on the site -->
-        <tr>
-          <td style="padding:24px 28px 8px 28px;border-top:1px solid #e1e0d9;">
-            <table role="presentation" cellpadding="0" cellspacing="0" border="0">
-              <tr>
-                <td style="background-color:#14130f;border-radius:5px;">
-                  <a href="{{ newspaper_url }}" style="display:inline-block;padding:11px 22px;color:#ffffff;font-size:14px;font-weight:600;text-decoration:none;">Günün gazetesini aç</a>
-                </td>
-              </tr>
-            </table>
-            <p style="margin:14px 0 0 0;color:#79735f;font-size:12px;line-height:1.8;">
-              <a href="{{ site_url }}" style="color:#a86e00;text-decoration:none;">Kontrol Paneli</a> &nbsp;&middot;&nbsp;
-              <a href="{{ insights_url }}" style="color:#a86e00;text-decoration:none;">İçgörüler</a> &nbsp;&middot;&nbsp;
-              <a href="{{ biz_url }}" style="color:#a86e00;text-decoration:none;">BİZ &mdash; TK masası</a> &nbsp;&middot;&nbsp;
-              <a href="{{ archive_url }}" style="color:#a86e00;text-decoration:none;">Arşiv</a>
-            </p>
-          </td>
-        </tr>
-
         <!-- Footer -->
         <tr>
-          <td style="padding:16px 28px 26px 28px;">
+          <td style="padding:20px 28px 26px 28px;border-top:1px solid #e1e0d9;">
             <p style="margin:0;color:#898781;font-size:11px;line-height:1.6;">
               Bu bülteni AeroIntel günlük havacılık özetine abone olduğunuz için alıyorsunuz.
               Her haber yayımlanmadan önce güvenilir kaynaklar arasında çapraz doğrulanır.

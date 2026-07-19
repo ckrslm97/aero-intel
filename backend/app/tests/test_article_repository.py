@@ -146,15 +146,14 @@ async def test_list_recent_since_filter_excludes_older_articles(db_session):
     assert {a.id for a in results} == {recent.id}
 
 
-def test_article_out_computes_reading_time_minutes():
-    # 400 words at 200 wpm -> 2 minutes.
+def _fake_article(**overrides):
     import uuid
     from types import SimpleNamespace
 
     source = SimpleNamespace(
         id=uuid.uuid4(), name="Src", url="https://example.com", category="other", trust_weight=0.5
     )
-    fake = SimpleNamespace(
+    return SimpleNamespace(
         id=uuid.uuid4(),
         url="https://example.com/a",
         title="Title",
@@ -164,7 +163,19 @@ def test_article_out_computes_reading_time_minutes():
         status="enriched",
         source=source,
         enrichment=None,
-        raw_content=" ".join(["word"] * 400),
+        **overrides,
     )
-    out = ArticleOut.model_validate(fake, from_attributes=True)
+
+
+def test_article_out_computes_reading_time_from_stored_word_count():
+    # 400 words at 200 wpm -> 2 minutes. The count is read from the column, not
+    # from raw_content, which list queries deliberately never load.
+    out = ArticleOut.model_validate(_fake_article(word_count=400), from_attributes=True)
     assert out.reading_time_minutes == 2
+
+
+def test_reading_time_survives_a_deferred_or_missing_word_count():
+    # Rows ingested before the column existed, or a deferred load, must not
+    # raise -- the badge just reports the one-minute floor.
+    out = ArticleOut.model_validate(_fake_article(word_count=None), from_attributes=True)
+    assert out.reading_time_minutes == 1

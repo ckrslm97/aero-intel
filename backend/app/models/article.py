@@ -2,7 +2,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, String, Text
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.dialects.postgresql import TSVECTOR, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -21,6 +21,10 @@ class Article(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     url: Mapped[str] = mapped_column(String(2000), unique=True)
     title: Mapped[str] = mapped_column(String(500))
     raw_content: Mapped[str] = mapped_column(Text, default="")
+    # Computed once at ingest so list endpoints never have to pull the whole
+    # body out of Postgres just to show a reading time (that transfer alone was
+    # hundreds of KB per request).
+    word_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     author: Mapped[str | None] = mapped_column(String(200), nullable=True)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

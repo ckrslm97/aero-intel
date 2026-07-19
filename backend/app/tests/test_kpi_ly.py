@@ -18,14 +18,6 @@ NOW = datetime(2026, 7, 18, 12, 0, tzinfo=timezone.utc)
 LY_DATE = datetime(2025, 12, 31, tzinfo=timezone.utc)
 
 
-@pytest.fixture(autouse=True)
-def clear_yahoo_ly_cache():
-    """The per-process (symbol, date) cache must not leak between tests."""
-    kpis_api._yahoo_ly_cache.clear()
-    yield
-    kpis_api._yahoo_ly_cache.clear()
-
-
 @pytest.fixture
 def kpi_app(db_session):
     """The real kpis router mounted at the real prefix, with the DB dependency
@@ -85,43 +77,49 @@ async def test_metric_without_2025_observation_or_yahoo_mapping_has_no_ly(kpi_ap
     assert kpi["comparison_label"] == "önceki ölçüme göre"
 
 
-async def test_yahoo_mapped_metric_takes_ly_from_first_history_point(
+async def test_market_metric_reads_ly_from_the_stored_row_not_yahoo(
+    kpi_app, db_session, monkeypatch
+):
+    """The list endpoint must not touch Yahoo: two live history calls with a
+    15s timeout each were most of why /kpis measured ~10s in production. The
+    refresh job stores the price a year ago under "<metric>_ly" instead."""
+    repo = KpiRepository(db_session)
+    repo.record("oil_price", 80.0, "$/bbl", "Yahoo Finance (BZ=F)", False, NOW)
+    repo.record(
+        "oil_price_ly", 64.0, "$/bbl", "Yahoo Finance (BZ=F, 1 yıl önce)", False, NOW,
+        is_primary=False,
+    )
+    await db_session.commit()
+
+    calls: list[tuple[str, str]] = []
+
+    async def spy_fetch_history(base_url, symbol, period):
+        calls.append((symbol, period))
+        return [(datetime(2025, 7, 18, tzinfo=timezone.utc), 1.0)]
+
+    monkeypatch.setattr(kpis_api, "fetch_history", spy_fetch_history)
+
+    response = await _get(kpi_app, "/api/v1/kpis")
+
+    assert response.status_code == 200
+    kpi = _kpi(response.json(), "oil_price")
+    assert kpi["ly_value"] == 64.0
+    assert kpi["ly_delta_pct"] == round((80.0 - 64.0) / 64.0 * 100, 2)  # 25.0
+    assert kpi["comparison_label"] == "2025'e göre"
+    assert calls == []  # no network on the request path
+
+
+async def test_market_metric_without_a_stored_ly_row_degrades_honestly(
     kpi_app, db_session, monkeypatch
 ):
     repo = KpiRepository(db_session)
     repo.record("oil_price", 80.0, "$/bbl", "Yahoo Finance (BZ=F)", False, NOW)
     await db_session.commit()
 
-    calls: list[tuple[str, str]] = []
+    async def unexpected_history(base_url, symbol, period):
+        raise AssertionError("the list endpoint must not call Yahoo")
 
-    async def fake_fetch_history(base_url, symbol, period):
-        calls.append((symbol, period))
-        return [
-            (datetime(2025, 7, 18, tzinfo=timezone.utc), 64.0),
-            (datetime(2026, 7, 17, tzinfo=timezone.utc), 79.5),
-        ]
-
-    monkeypatch.setattr(kpis_api, "fetch_history", fake_fetch_history)
-
-    response = await _get(kpi_app, "/api/v1/kpis")
-
-    assert response.status_code == 200
-    kpi = _kpi(response.json(), "oil_price")
-    assert kpi["ly_value"] == 64.0  # the FIRST point of the trailing-1y series
-    assert kpi["ly_delta_pct"] == round((80.0 - 64.0) / 64.0 * 100, 2)  # 25.0
-    assert kpi["comparison_label"] == "2025'e göre"
-    assert calls == [("BZ=F", "1y")]  # reuses the detail endpoint's symbol map
-
-
-async def test_yahoo_failure_degrades_to_no_ly_instead_of_500(kpi_app, db_session, monkeypatch):
-    repo = KpiRepository(db_session)
-    repo.record("oil_price", 80.0, "$/bbl", "Yahoo Finance (BZ=F)", False, NOW)
-    await db_session.commit()
-
-    async def broken_fetch_history(base_url, symbol, period):
-        raise RuntimeError("yahoo down")
-
-    monkeypatch.setattr(kpis_api, "fetch_history", broken_fetch_history)
+    monkeypatch.setattr(kpis_api, "fetch_history", unexpected_history)
 
     response = await _get(kpi_app, "/api/v1/kpis")
 

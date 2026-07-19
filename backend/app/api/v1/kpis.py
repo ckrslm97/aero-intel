@@ -3,17 +3,19 @@ fixed display order. See kpi_service.py for what's real vs. derived/estimated.
 """
 import csv
 import io
-from datetime import date, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.cache_headers import AGGREGATES, public_cache
 from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.logging import get_logger
 from app.ingest.markets import fetch_history
 from app.repositories.kpi_repository import KpiRepository
 from app.schemas.kpi import KpiCorroborationOut, KpiDetailOut, KpiHistoryPointOut, KpiOut
+from app.services.kpi_service import LY_SUFFIX
 
 logger = get_logger(__name__)
 
@@ -62,51 +64,32 @@ LY_YEAR = 2025
 LY_COMPARISON_LABEL = "2025'e göre"
 PREVIOUS_COMPARISON_LABEL = "önceki ölçüme göre"
 
-# (symbol, UTC date) -> first close of the trailing-1y Yahoo series, or None
-# when Yahoo was unreachable. The LY value moves at most once a day, and the
-# KPI list is hit on every dashboard load -- cache per process so repeated
-# loads don't hammer Yahoo.
-_yahoo_ly_cache: dict[tuple[str, date], float | None] = {}
-
-
-async def _yahoo_ly_value(symbol: str) -> float | None:
-    """The metric's value one year ago, from Yahoo Finance's own archive.
-    Never raises: a Yahoo hiccup must degrade to 'no LY comparison', not 500
-    the dashboard."""
-    cache_key = (symbol, datetime.now(timezone.utc).date())
-    if cache_key in _yahoo_ly_cache:
-        return _yahoo_ly_cache[cache_key]
-
-    settings = get_settings()
-    try:
-        points = await fetch_history(settings.yahoo_finance_base_url, symbol, "1y")
-        value = points[0][1] if points else None
-    except Exception as exc:  # noqa: BLE001 -- any Yahoo failure means "no LY value"
-        logger.warning("kpi_ly_history_fetch_failed", symbol=symbol, error=str(exc))
-        value = None
-
-    _yahoo_ly_cache[cache_key] = value
-    return value
-
-
-async def _ly_value(repo: KpiRepository, metric_key: str) -> float | None:
-    """Last-year value: Yahoo's archive for market metrics, our stored 2025
-    observation (the seeded IATA column) for everything else."""
-    yahoo_symbol = YAHOO_HISTORY_SYMBOLS.get(metric_key)
-    if yahoo_symbol:
-        return await _yahoo_ly_value(yahoo_symbol)
-
-    row = await repo.value_for_year(metric_key, LY_YEAR)
-    return row.value if row else None
-
-
 @router.get("", response_model=list[KpiOut])
-async def list_kpis(db: AsyncSession = Depends(get_db)) -> list[KpiOut]:
+async def list_kpis(
+    response: Response = None,  # type: ignore[assignment]
+    db: AsyncSession = Depends(get_db),
+) -> list[KpiOut]:
+    public_cache(response, AGGREGATES)
     repo = KpiRepository(db)
     out: list[KpiOut] = []
 
+    # Three queries for the whole dashboard. This used to be a per-metric loop:
+    # 16 trend queries + 14 last-year lookups + up to two live Yahoo calls,
+    # ~30 sequential round trips against a pooled Neon endpoint, which measured
+    # ~10s on production.
+    metric_keys = list(KPI_DISPLAY)
+    trends = await repo.trends_for(metric_keys, points=12)
+    stored_ly = await repo.values_for_year(
+        [k for k in metric_keys if k not in YAHOO_HISTORY_SYMBOLS], LY_YEAR
+    )
+    # Market LY prices are written by the KPI cron under "<metric>_ly"
+    # (app/services/kpi_service.py) precisely so no request touches Yahoo.
+    market_ly = await repo.latest_values(
+        [f"{k}{LY_SUFFIX}" for k in metric_keys if k in YAHOO_HISTORY_SYMBOLS]
+    )
+
     for metric_key, (label, up_is_good) in KPI_DISPLAY.items():
-        history = await repo.trend(metric_key, points=12)
+        history = trends.get(metric_key) or []
         if not history:
             continue
 
@@ -115,7 +98,11 @@ async def list_kpis(db: AsyncSession = Depends(get_db)) -> list[KpiOut]:
         if len(history) >= 2 and history[-2].value:
             delta_pct = round((latest.value - history[-2].value) / history[-2].value * 100, 2)
 
-        ly_value = await _ly_value(repo, metric_key)
+        ly_value = (
+            market_ly.get(f"{metric_key}{LY_SUFFIX}")
+            if metric_key in YAHOO_HISTORY_SYMBOLS
+            else stored_ly.get(metric_key)
+        )
         ly_delta_pct = None
         if ly_value:  # a zero LY value can't anchor a percent change either
             ly_delta_pct = round((latest.value - ly_value) / ly_value * 100, 2)
