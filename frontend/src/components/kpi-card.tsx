@@ -23,7 +23,7 @@ export interface KpiCardProps {
   comparisonLabel?: string;
   /** Percent change vs LY (2025). Renders a second compact delta line when set. */
   lyDeltaPct?: number;
-  /** Label for the LY delta line -- backend sends "2025 (LY)'e göre". */
+  /** Label for the LY delta line -- backend sends "2025'e göre". */
   lyComparisonLabel?: string;
 }
 
@@ -38,7 +38,7 @@ export function KpiCard({
   isEstimate,
   comparisonLabel = "önceki ölçüme göre",
   lyDeltaPct,
-  lyComparisonLabel = "2025 (LY)'e göre",
+  lyComparisonLabel = "2025'e göre",
 }: KpiCardProps) {
   const isFlat = (deltaPct ?? 0) === 0;
   const isPositive = (deltaPct ?? 0) >= 0;

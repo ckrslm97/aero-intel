@@ -45,6 +45,7 @@ export const CATEGORIES: CategoryDef[] = [
     subcategories: [
       { slug: "competitor", label: "Rakip" },
       { slug: "pricing", label: "Fiyatlandırma" },
+      { slug: "promotion", label: "Kampanya" },
       { slug: "demand_capacity", label: "Talep & Kapasite" },
       { slug: "load_factor", label: "Yük Faktörü" },
       { slug: "ancillary", label: "Ek Gelir" },

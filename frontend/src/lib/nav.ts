@@ -1,13 +1,9 @@
 import type { LucideIcon } from "lucide-react";
 import {
-  BarChart3,
-  CalendarDays,
-  Globe2,
+  Archive,
   LayoutDashboard,
   Lightbulb,
   Newspaper,
-  Plane,
-  Route,
   Search,
   ShieldCheck,
   Star,
@@ -17,21 +13,17 @@ export interface NavItem {
   href: string;
   label: string;
   icon: LucideIcon;
-  /** Sections still scaffolded per the M0-M6 roadmap -- shown with a "soon" hint. */
-  scaffold?: boolean;
 }
 
+// The five pages of the product (user-decided structure), plus Ara as a
+// utility. The old Takvim page folded into Gazete's Etkinlik category; the
+// former scaffold sections (Bölgeler/Havayolları/Rotalar/Finans) are gone.
 export const primaryNav: NavItem[] = [
   { href: "/", label: "Kontrol Paneli", icon: LayoutDashboard },
   { href: "/newspaper", label: "Gazete", icon: Newspaper },
-  { href: "/events", label: "Takvim", icon: CalendarDays },
   { href: "/insights", label: "İçgörüler", icon: Lightbulb },
-  { href: "/archive", label: "Arşiv", icon: BarChart3 },
-  { href: "/regions", label: "Bölgeler", icon: Globe2, scaffold: true },
-  { href: "/airlines", label: "Havayolları", icon: Plane, scaffold: true },
-  { href: "/routes", label: "Rotalar", icon: Route, scaffold: true },
-  { href: "/finance", label: "Finans", icon: BarChart3, scaffold: true },
-  { href: "/biz", label: "BİZ", icon: Star, scaffold: true },
+  { href: "/biz", label: "BİZ", icon: Star },
+  { href: "/archive", label: "Arşiv", icon: Archive },
   { href: "/search", label: "Ara", icon: Search },
 ];
 

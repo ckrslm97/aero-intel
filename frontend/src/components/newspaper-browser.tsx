@@ -1,11 +1,14 @@
 "use client";
 
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { Download } from "lucide-react";
+import { CalendarDays, Download, List, Map as MapIcon } from "lucide-react";
+import dynamic from "next/dynamic";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { ArticleCard } from "@/components/article-card";
+import { EventsCalendar } from "@/components/events-calendar";
+import { TailIcon } from "@/components/tail-icon";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiFetch } from "@/lib/api";
 import { airlineTabs } from "@/lib/nav";
@@ -13,8 +16,21 @@ import { CATEGORIES, EVENT_REGIONS } from "@/lib/taxonomy";
 import type { ArticleListOut, ArticleOut } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
+// The map bundles a ~250KB world GeoJSON -- load it only when opened.
+const RegionMap = dynamic(
+  () => import("@/components/region-map").then((m) => m.RegionMap),
+  { ssr: false, loading: () => <Skeleton className="h-[320px] w-full rounded-xl" /> },
+);
+
 // The user's named main rivals -- TK is the home carrier, not a rival.
 const RIVALS = airlineTabs.filter((a) => a.code !== "TK");
+const TK = airlineTabs.find((a) => a.code === "TK")!;
+
+// Filter-row summary for the two aggregate chips.
+const AIRLINE_FILTER_LABEL: Record<string, string> = {
+  RIVALS: "9 ana rakibin tümü",
+  ALL: "haberde geçen tüm havayolları",
+};
 
 // Only recent articles -- keeps the browser focused on "what's current"
 // rather than the entire archive, per the freshness feedback on this page.
@@ -24,10 +40,20 @@ const PAGE_LIMIT = 30;
 export function NewspaperBrowser() {
   const reduceMotion = useReducedMotion();
 
-  const [categorySlug, setCategorySlug] = useState(CATEGORIES[0].slug); // Gelir Yönetimi first
+  const [categorySlug, setCategorySlug] = useState(CATEGORIES[0].slug); // Gelir Yönetimi default
   const [subcategorySlug, setSubcategorySlug] = useState<string | null>(null);
   const [regionSlug, setRegionSlug] = useState<string | null>(null);
+  // An IATA code, or the aggregate values "RIVALS" / "ALL" the API understands.
   const [airlineCode, setAirlineCode] = useState<string | null>(null);
+  const [eventView, setEventView] = useState<"news" | "calendar">("news");
+  const [showMap, setShowMap] = useState(false);
+
+  // Display order is alphabetical (Turkish collation) per user request; the
+  // backend mirror keeps its own canonical order, so sort at render only.
+  const sortedCategories = useMemo(
+    () => [...CATEGORIES].sort((a, b) => a.label.localeCompare(b.label, "tr")),
+    [],
+  );
 
   const [items, setItems] = useState<ArticleOut[]>([]);
   const [total, setTotal] = useState(0);
@@ -127,17 +153,24 @@ export function NewspaperBrowser() {
           content reads through it while scrolling. */}
       <div className="sticky top-0 z-10 -mx-2 border-b border-border bg-background/80 px-2 pb-3 pt-2 backdrop-blur supports-[backdrop-filter]:bg-background/60">
         <div className="flex gap-1.5 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          {CATEGORIES.map((c) => {
+          {sortedCategories.map((c) => {
             const Icon = c.icon;
             const active = c.slug === categorySlug;
             const count = counts[c.slug];
+            // Gelir Yönetimi is the portal's focus category -- it keeps its
+            // amber identity even when inactive so it stands apart in the row.
+            const isFocus = c.slug === "revenue_management";
             return (
               <button
                 key={c.slug}
                 onClick={() => selectCategory(c.slug)}
                 className={cn(
                   "relative flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold transition-colors",
-                  active ? c.textClass : "text-muted-foreground hover:bg-accent",
+                  active
+                    ? c.textClass
+                    : isFocus
+                      ? "border border-category-revenue-management/50 bg-category-revenue-management/10 text-category-revenue-management hover:bg-category-revenue-management/20"
+                      : "text-muted-foreground hover:bg-accent",
                 )}
               >
                 {active && (
@@ -169,6 +202,37 @@ export function NewspaperBrowser() {
         </div>
       </div>
 
+      {/* The old standalone Takvim page lives here now: Etkinlik gets a
+          news/calendar view switch, everything else goes straight to news. */}
+      {categorySlug === "events" && (
+        <div className="flex items-center gap-1 self-start rounded-lg border border-border p-0.5">
+          {(
+            [
+              ["news", "Haberler", List],
+              ["calendar", "Takvim", CalendarDays],
+            ] as const
+          ).map(([view, label, Icon]) => (
+            <button
+              key={view}
+              onClick={() => setEventView(view)}
+              className={cn(
+                "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
+                eventView === view
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:bg-accent",
+              )}
+            >
+              <Icon className="size-3.5" />
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {categorySlug === "events" && eventView === "calendar" ? (
+        <EventsCalendar />
+      ) : (
+        <>
       {category.subcategories.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
           <button
@@ -242,15 +306,63 @@ export function NewspaperBrowser() {
             {r.name}
           </button>
         ))}
+        <button
+          onClick={() => setShowMap((open) => !open)}
+          className={cn(
+            "ml-1 flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
+            showMap
+              ? "bg-primary text-primary-foreground"
+              : "border border-border text-muted-foreground hover:bg-accent",
+          )}
+        >
+          <MapIcon className="size-3.5" />
+          Harita
+        </button>
       </div>
 
-      {/* Main rivals -- entity-based, so a rival's fleet or finance news is
-          caught too, not only stories filed under Rakip. */}
+      {showMap && (
+        <RegionMap
+          value={regionSlug}
+          onChange={(slug) => {
+            setRegionSlug(slug);
+            setOffset(0);
+          }}
+        />
+      )}
+
+      {/* Carrier filter -- entity-based, so a rival's fleet or finance news is
+          caught too, not only stories filed under Rakip. "Ana Rakipler" is
+          itself a button (all 9 rivals at once), "Tüm Taşıyıcılar" matches any
+          airline mentioned in the news, TK sits first among the carriers in
+          THY red, and each carrier chip wears its stylized tail fin. */}
       <div className="flex flex-wrap items-center gap-1.5">
-        <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-          Ana Rakipler
-        </span>
-        {RIVALS.map((a) => {
+        {(
+          [
+            ["RIVALS", "Ana Rakipler"],
+            ["ALL", "Tüm Taşıyıcılar"],
+          ] as const
+        ).map(([value, label]) => {
+          const active = airlineCode === value;
+          return (
+            <button
+              key={value}
+              onClick={() => {
+                setAirlineCode(active ? null : value);
+                setOffset(0);
+              }}
+              className={cn(
+                "rounded-full border px-3 py-1 text-xs font-semibold transition-colors",
+                active
+                  ? "border-primary bg-primary text-primary-foreground"
+                  : "border-border text-muted-foreground hover:bg-accent",
+              )}
+            >
+              {label}
+            </button>
+          );
+        })}
+        <span aria-hidden className="mx-0.5 h-4 w-px bg-border" />
+        {[TK, ...RIVALS].map((a) => {
           const active = airlineCode === a.code;
           return (
             <button
@@ -262,19 +374,28 @@ export function NewspaperBrowser() {
               }}
               style={active ? { backgroundColor: a.color, borderColor: a.color } : undefined}
               className={cn(
-                "rounded-full border px-2.5 py-1 text-xs font-semibold tabular-nums transition-colors",
+                "flex items-center gap-1 rounded-full border px-2 py-1 text-xs font-semibold tabular-nums transition-colors",
                 active
                   ? "text-white"
                   : "border-border text-muted-foreground hover:bg-accent",
               )}
             >
+              <span
+                className={cn(
+                  "flex size-4 items-center justify-center rounded-full",
+                  active && "bg-white/85",
+                )}
+              >
+                <TailIcon code={a.code} className="size-3.5" />
+              </span>
               {a.code}
             </button>
           );
         })}
         {airlineCode && (
           <span className="text-xs text-muted-foreground">
-            {RIVALS.find((a) => a.code === airlineCode)?.name}
+            {AIRLINE_FILTER_LABEL[airlineCode] ??
+              airlineTabs.find((a) => a.code === airlineCode)?.name}
           </span>
         )}
       </div>
@@ -326,6 +447,8 @@ export function NewspaperBrowser() {
             veya alt başlık deneyin.
           </p>
         </div>
+      )}
+        </>
       )}
     </div>
   );

@@ -1,9 +1,7 @@
-import { EventsCalendar } from "@/components/events-calendar";
+import { redirect } from "next/navigation";
 
-export const metadata = {
-  title: "Etkinlik Takvimi — AeroIntel",
-};
-
+// The standalone Takvim page folded into the Gazete (Etkinlik category's
+// "Takvim" view) in round 6 -- keep the old URL working.
 export default function EventsPage() {
-  return <EventsCalendar />;
+  redirect("/newspaper");
 }

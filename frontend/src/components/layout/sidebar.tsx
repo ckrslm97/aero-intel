@@ -81,11 +81,6 @@ function NavLinks({
         >
           <Icon className="size-4 shrink-0" />
           {!collapsed && <span className="flex-1 truncate">{item.label}</span>}
-          {!collapsed && item.scaffold && (
-            <span className="rounded-full border border-sidebar-border px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
-              yakında
-            </span>
-          )}
         </Link>
       );
     });
