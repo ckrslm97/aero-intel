@@ -254,9 +254,13 @@ async def test_public_reads_are_edge_cacheable(db_session):
             response = await client.get(path)
             assert response.status_code == 200, path
             cache_control = response.headers.get("cache-control", "")
+            cdn_control = response.headers.get("cdn-cache-control", "")
+            # Browser gets a real max-age; Vercel's edge is steered separately,
+            # because it rewrites Cache-Control when it sees s-maxage there.
             assert "public" in cache_control, path
-            assert "s-maxage=" in cache_control, path
-            assert "stale-while-revalidate=" in cache_control, path
+            assert "max-age=" in cache_control and "max-age=0" not in cache_control, path
+            assert "s-maxage=" in cdn_control, path
+            assert "stale-while-revalidate=" in cdn_control, path
 
 
 def test_publisher_suffix_is_stripped_only_when_it_is_a_credit():
