@@ -76,4 +76,8 @@ jobs:
         if: ${{ env.SMTP_HOST != '' }}
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          # Where the newsletter's "read on the site" links point. Without this
+          # the runner has no CORS origin to infer from and every link in the
+          # email would fall back to localhost.
+          PUBLIC_SITE_URL: https://aero-intel-3qt1.vercel.app
         run: python -m app.cli send-newsletter

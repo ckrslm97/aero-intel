@@ -5,6 +5,7 @@ from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
+from app.core.config import get_settings
 from app.core.tr_dates import format_long_date
 from app.models.article import Article
 from app.models.edition import Edition
@@ -58,9 +59,25 @@ def _article_context(article: Article) -> dict:
     }
 
 
-def render_newsletter_html(edition: Edition, digest: str | None = None) -> str:
-    """`digest` is the İçgörüler page's "pattern of the day" paragraph. Optional
-    so the PDF path (which has no DB session at render time) can omit it."""
+LEAD_SUMMARY_CHARS = 260
+# The newsletter is a doorway, not an archive: a lead with a short summary,
+# then headline links. Everything else lives one click away on the site.
+HEADLINE_LINK_COUNT = 7
+PER_SECTION_LINKS = 3
+MAX_SECTIONS = 5
+
+
+def _site_url() -> str:
+    settings = get_settings()
+    if settings.public_site_url:
+        return settings.public_site_url.rstrip("/")
+    for origin in settings.cors_origins:
+        if origin.startswith("https://"):
+            return origin.rstrip("/")
+    return "http://localhost:3000"
+
+
+def _sections_with_all_articles(edition: Edition) -> list[dict]:
     by_section: dict[str, list] = {}
     for edition_article in sorted(edition.articles, key=lambda ea: (ea.section, ea.rank)):
         by_section.setdefault(edition_article.section, []).append(edition_article.article)
@@ -77,12 +94,60 @@ def render_newsletter_html(edition: Edition, digest: str | None = None) -> str:
                 "articles": [_article_context(a) for a in articles],
             }
         )
+    return sections
 
+
+def render_edition_full_html(edition: Edition) -> str:
+    """The complete edition -- every article with its summary. This is what the
+    PDF is rendered from; the emailed newsletter is deliberately a short
+    headline digest instead (see render_newsletter_html)."""
+    template = _env.get_template("edition_full.html")
+    return template.render(
+        headline=edition.headline,
+        executive_summary=edition.executive_summary,
+        edition_date=format_long_date(edition.edition_date),
+        sections=_sections_with_all_articles(edition),
+    )
+
+
+def render_newsletter_html(edition: Edition, digest: str | None = None) -> str:
+    """`digest` is the İçgörüler page's "pattern of the day" paragraph. Optional
+    so the PDF path (which has no DB session at render time) can omit it."""
+    by_section: dict[str, list] = {}
+    for edition_article in sorted(edition.articles, key=lambda ea: (ea.section, ea.rank)):
+        by_section.setdefault(edition_article.section, []).append(edition_article.article)
+
+    top_articles = [_article_context(a) for a in by_section.get("top_story", [])]
+    lead = top_articles[0] if top_articles else None
+    if lead and len(lead["summary"]) > LEAD_SUMMARY_CHARS:
+        lead = {**lead, "summary": lead["summary"][:LEAD_SUMMARY_CHARS].rsplit(" ", 1)[0] + "…"}
+
+    sections = []
+    for section_key, articles in by_section.items():
+        if section_key == "top_story":
+            continue
+        sections.append(
+            {
+                "label": SECTION_LABELS.get(section_key, section_key.title()),
+                "articles": [_article_context(a) for a in articles[:PER_SECTION_LINKS]],
+                "total": len(articles),
+            }
+        )
+    sections.sort(key=lambda s: -s["total"])
+
+    site_url = _site_url()
     template = _env.get_template("newsletter.html")
     return template.render(
         headline=edition.headline,
         executive_summary=edition.executive_summary,
         edition_date=format_long_date(edition.edition_date),
-        sections=sections,
+        lead=lead,
+        headlines=top_articles[1 : HEADLINE_LINK_COUNT + 1],
+        sections=sections[:MAX_SECTIONS],
         digest=digest,
+        site_url=site_url,
+        newspaper_url=f"{site_url}/newspaper/{edition.edition_date.isoformat()}",
+        insights_url=f"{site_url}/insights",
+        biz_url=f"{site_url}/biz",
+        archive_url=f"{site_url}/archive",
     )

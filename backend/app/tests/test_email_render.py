@@ -114,11 +114,14 @@ async def test_render_is_turkish_and_lists_the_article(db_session):
     html = render_newsletter_html(edition)
 
     assert 'lang="tr"' in html
-    assert "Günün Sayısı" in html
-    assert "Öne Çıkanlar" in html  # top_story section label
+    assert "Günün Manşeti" in html
     assert "%90 güven" in html
     assert "2 kaynak" in html
     assert "12 Temmuz 2026, Pazar" in html  # masthead date, TR
+    # Every story is a link out to its source -- the email is a doorway.
+    assert 'href="https://example.com/story"' in html
+    # ...and the site itself is reachable from the footer links.
+    assert "/newspaper/2026-07-12" in html
     # No English chrome left behind.
     assert "confidence" not in html
     assert "Top Stories" not in html

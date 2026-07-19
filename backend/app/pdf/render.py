@@ -1,10 +1,10 @@
-"""Renders an Edition to PDF bytes by feeding the same newsletter HTML through
+"""Renders an Edition to PDF bytes by feeding the full-edition HTML through
 headless Chromium. Degrades gracefully (returns None) if Playwright's browser
 isn't installed -- PDF export is a nice-to-have, not a hard dependency, and the
 serverless API deliberately ships without it (see app/services/pdf_service.py).
 """
 from app.core.logging import get_logger
-from app.email.render import render_newsletter_html
+from app.email.render import render_edition_full_html
 from app.models.edition import Edition
 
 logger = get_logger(__name__)
@@ -23,7 +23,7 @@ async def render_edition_pdf(edition: Edition) -> bytes | None:
         logger.warning("pdf_generation_skipped_playwright_not_installed")
         return None
 
-    html_body = render_newsletter_html(edition)
+    html_body = render_edition_full_html(edition)
 
     try:
         async with async_playwright() as p:

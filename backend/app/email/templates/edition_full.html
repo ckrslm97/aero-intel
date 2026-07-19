@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<title>{{ headline }}</title>
+</head>
+<body style="margin:0;padding:0;background-color:#f9f9f7;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:#f9f9f7;padding:24px 0;">
+  <tr>
+    <td align="center">
+      <table role="presentation" width="640" cellpadding="0" cellspacing="0" style="background-color:#fcfcfb;border-radius:12px;overflow:hidden;border:1px solid #e1e0d9;">
+
+        <!-- Masthead -->
+        <tr>
+          <td style="background-color:#0d0d0d;padding:20px 32px;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+              <tr>
+                <td style="color:#ffffff;font-size:18px;font-weight:700;letter-spacing:-0.02em;">AeroIntel</td>
+                <td align="right" style="color:#c3c2b7;font-size:12px;">{{ edition_date }}</td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+
+        <!-- Headline -->
+        <tr>
+          <td style="padding:32px 32px 8px 32px;">
+            <p style="margin:0 0 8px 0;color:#898781;font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;">Günün Sayısı</p>
+            <h1 style="margin:0 0 12px 0;color:#0b0b0b;font-size:26px;line-height:1.3;font-weight:700;">{{ headline }}</h1>
+            {% if executive_summary %}
+            <p style="margin:0;color:#52514e;font-size:14px;line-height:1.6;">{{ executive_summary }}</p>
+            {% endif %}
+          </td>
+        </tr>
+
+        {% if digest %}
+        <!-- The day's pattern: the same paragraph the İçgörüler page shows, so the
+             newsletter carries the analysis and not only the headlines. -->
+        <tr>
+          <td style="padding:20px 32px 0 32px;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#fdf8ec;border-left:3px solid #c98500;">
+              <tr>
+                <td style="padding:16px 18px;">
+                  <p style="margin:0 0 6px 0;color:#8a6d3b;font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;">Günün Örüntüsü</p>
+                  <p style="margin:0;color:#52514e;font-size:14px;line-height:1.6;">{{ digest }}</p>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+        {% endif %}
+
+        {% for section in sections %}
+        <tr>
+          <td style="padding:24px 32px 0 32px;">
+            <p style="margin:0 0 12px 0;color:#898781;font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;border-top:1px solid #e1e0d9;padding-top:20px;">{{ section.label }}</p>
+          </td>
+        </tr>
+        {% for article in section.articles %}
+        <tr>
+          <td style="padding:0 32px 20px 32px;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+              <tr>
+                <td>
+                  <p style="margin:0 0 4px 0;">
+                    <span style="display:inline-block;background-color:#f0efec;color:#52514e;font-size:10px;font-weight:600;letter-spacing:0.04em;text-transform:uppercase;border-radius:10px;padding:2px 8px;">{{ article.source_name }}</span>
+                    <span style="color:#898781;font-size:11px;margin-left:6px;">%{{ article.confidence_pct }} güven &middot; {{ article.corroborating_count }} kaynak</span>
+                    {% if not article.is_translated %}
+                    <span style="display:inline-block;background-color:#f0efec;color:#898781;font-size:9px;font-weight:600;letter-spacing:0.04em;text-transform:uppercase;border-radius:10px;padding:2px 6px;margin-left:6px;">otomatik çeviri yok</span>
+                    {% endif %}
+                  </p>
+                  <a href="{{ article.url }}" style="color:#0b0b0b;font-size:16px;font-weight:600;text-decoration:none;line-height:1.4;">{{ article.headline }}</a>
+                  {% if article.summary %}
+                  <p style="margin:6px 0 0 0;color:#52514e;font-size:13px;line-height:1.6;">{{ article.summary }}</p>
+                  {% endif %}
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+        {% endfor %}
+        {% endfor %}
+
+        <!-- Footer -->
+        <tr>
+          <td style="padding:24px 32px 32px 32px;border-top:1px solid #e1e0d9;">
+            <p style="margin:0;color:#898781;font-size:11px;line-height:1.6;">
+              Bu bülteni AeroIntel günlük havacılık özetine abone olduğunuz için alıyorsunuz.
+              Her haber yayımlanmadan önce güvenilir kaynaklar arasında çapraz doğrulanır.
+            </p>
+          </td>
+        </tr>
+
+      </table>
+    </td>
+  </tr>
+</table>
+</body>
+</html>

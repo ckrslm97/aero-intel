@@ -22,6 +22,10 @@ class Settings(BaseSettings):
     secret_key: str = Field(default="dev-insecure-secret-change-me")
     access_token_expire_minutes: int = 60 * 12
     cors_origins: list[str] = ["http://localhost:3000"]
+    # Where the newsletter's "read on the site" links point. Defaults to the
+    # first configured CORS origin at use time (app/email/render.py) so a
+    # deployment that already declares its frontend needs no extra setting.
+    public_site_url: str | None = None
 
     # --- Database ---
     database_url: str = "postgresql+asyncpg://localhost:5432/aerointel"
