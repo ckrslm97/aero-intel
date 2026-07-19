@@ -21,12 +21,16 @@ STATIC = 3600  # taxonomy, event calendar
 def public_cache(response: Response, max_age: int, stale_for: int | None = None) -> None:
     """Mark `response` publicly cacheable for `max_age` seconds.
 
-    Two headers on purpose. Vercel consumes `s-maxage` from Cache-Control and
-    then rewrites the browser-facing header to `max-age=0, must-revalidate`
-    (verified against production), which would leave the client revalidating on
-    every filter click. Targeted caching (RFC 9213) splits the audiences:
-    CDN-Cache-Control steers Vercel's edge, Cache-Control is passed through to
-    the browser untouched.
+    Two headers on purpose. CDN-Cache-Control (RFC 9213) is what Vercel's edge
+    reads -- verified in production: repeat requests come back
+    `x-vercel-cache: HIT` in ~0.3s without touching Python or Neon.
+
+    Measured caveat: Vercel rewrites the *browser-facing* Cache-Control on
+    function responses to `public, max-age=0, must-revalidate` no matter what
+    we send, so clients always revalidate; they just revalidate against a warm
+    edge instead of the database. The plain Cache-Control below is therefore
+    for other deployments (the Docker image behind any standard CDN), not for
+    Vercel.
     """
     stale = stale_for if stale_for is not None else max_age * 5
     response.headers["Cache-Control"] = (
