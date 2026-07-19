@@ -20,6 +20,17 @@ const SECTION_LABELS: Record<string, string> = {
   events: "Etkinlik",
 };
 
+/** What the card will actually print for this article -- the same rule
+ * ArticleCard uses (Turkish only when a translator really produced it). */
+function displayHeadline(article: EditionOut["sections"][number]["articles"][number] | undefined) {
+  if (!article) return null;
+  const enrichment = article.enrichment;
+  const translated = enrichment?.translated_at != null;
+  return (
+    (translated ? enrichment?.headline_tr : null) ?? enrichment?.headline ?? article.title
+  );
+}
+
 export default async function EditionPage({
   params,
 }: {
@@ -40,6 +51,18 @@ export default async function EditionPage({
   const topSection = edition.sections.find((s) => s.section === "top_story");
   const [leadStory, ...restTopStories] = topSection?.articles ?? [];
   const otherSections = edition.sections.filter((s) => s.section !== "top_story");
+
+  // The masthead headline IS the lead story's headline, so rendering the lead
+  // as a big "top" card printed the same sentence twice at display size --
+  // with an aggregator title of 20+ words that filled the screen before any
+  // news appeared. When they match, the lead joins the other top stories as a
+  // normal card and the masthead carries it alone.
+  const leadHeadline = displayHeadline(leadStory);
+  const leadRepeatsMasthead =
+    leadHeadline !== null && leadHeadline.trim() === edition.headline.trim();
+  const topStoryCards = leadRepeatsMasthead && leadStory
+    ? [leadStory, ...restTopStories]
+    : restTopStories;
 
   return (
     <div className="flex flex-col gap-8">
@@ -63,24 +86,30 @@ export default async function EditionPage({
             </a>
           )}
         </div>
-        <h1 className="text-3xl font-semibold tracking-tight">{edition.headline}</h1>
+        <h1 className="max-w-4xl text-balance text-xl font-semibold leading-tight tracking-tight sm:text-2xl lg:text-[28px]">
+          {edition.headline}
+        </h1>
         {edition.executive_summary && (
-          <p className="max-w-3xl text-sm text-muted-foreground">{edition.executive_summary}</p>
+          <p className="line-clamp-3 max-w-3xl text-sm text-muted-foreground">
+            {edition.executive_summary}
+          </p>
         )}
       </div>
 
       {leadStory && (
         <section className="flex flex-col gap-3">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-            Öne çıkan haber
+            {leadRepeatsMasthead ? "Öne çıkan haberler" : "Öne çıkan haber"}
           </h2>
-          <div className="rounded-xl border border-border bg-card">
-            <ArticleCard article={leadStory} variant="top" />
-          </div>
+          {!leadRepeatsMasthead && (
+            <div className="rounded-xl border border-border bg-card">
+              <ArticleCard article={leadStory} variant="top" />
+            </div>
+          )}
 
-          {restTopStories.length > 0 && (
+          {topStoryCards.length > 0 && (
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-              {restTopStories.map((article) => (
+              {topStoryCards.map((article) => (
                 <div key={article.id} className="rounded-xl border border-border bg-card">
                   <ArticleCard article={article} />
                 </div>
