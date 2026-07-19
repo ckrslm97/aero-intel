@@ -34,7 +34,12 @@ async def send_newsletter_for_edition(db: AsyncSession, edition: Edition) -> dic
     # the block rather than delaying the send.
     digest_row = await latest_digest(db)
     html_body = render_newsletter_html(edition, digest=digest_row.body if digest_row else None)
-    subject = f"AeroIntel Günlük — {edition.headline}"
+    # Aggregator headlines run long (Google News appends " - Publisher"), and a
+    # 200-character subject is truncated mid-word by every mail client.
+    headline = edition.headline
+    if len(headline) > 78:
+        headline = headline[:77].rsplit(" ", 1)[0] + "…"
+    subject = f"AeroIntel Günlük — {headline}"
 
     retriable = await delivery_repo.list_retriable_for_edition(edition.id)
     sent, failed, skipped = 0, 0, 0
