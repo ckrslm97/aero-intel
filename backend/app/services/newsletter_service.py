@@ -13,6 +13,7 @@ from app.email.sender import send_email
 from app.models.edition import Edition
 from app.repositories.email_delivery_repository import EmailDeliveryRepository
 from app.repositories.subscriber_repository import SubscriberRepository
+from app.services.insights_service import latest_digest
 
 logger = get_logger(__name__)
 
@@ -28,8 +29,12 @@ async def send_newsletter_for_edition(db: AsyncSession, edition: Edition) -> dic
         await delivery_repo.get_or_create(subscriber.id, edition.id)
     await db.commit()
 
-    html_body = render_newsletter_html(edition)
-    subject = f"AeroIntel Daily — {edition.headline}"
+    # The digest is written by the build-insight step that runs just before the
+    # newsletter in the daily job; if it hasn't run yet the email simply omits
+    # the block rather than delaying the send.
+    digest_row = await latest_digest(db)
+    html_body = render_newsletter_html(edition, digest=digest_row.body if digest_row else None)
+    subject = f"AeroIntel Günlük — {edition.headline}"
 
     retriable = await delivery_repo.list_retriable_for_edition(edition.id)
     sent, failed, skipped = 0, 0, 0

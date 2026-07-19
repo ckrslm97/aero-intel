@@ -58,7 +58,9 @@ def _article_context(article: Article) -> dict:
     }
 
 
-def render_newsletter_html(edition: Edition) -> str:
+def render_newsletter_html(edition: Edition, digest: str | None = None) -> str:
+    """`digest` is the İçgörüler page's "pattern of the day" paragraph. Optional
+    so the PDF path (which has no DB session at render time) can omit it."""
     by_section: dict[str, list] = {}
     for edition_article in sorted(edition.articles, key=lambda ea: (ea.section, ea.rank)):
         by_section.setdefault(edition_article.section, []).append(edition_article.article)
@@ -82,4 +84,5 @@ def render_newsletter_html(edition: Edition) -> str:
         executive_summary=edition.executive_summary,
         edition_date=format_long_date(edition.edition_date),
         sections=sections,
+        digest=digest,
     )

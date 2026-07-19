@@ -162,3 +162,39 @@ async def test_promos_seed_idempotent_and_links_airline(db_session):
     pc_promos = [p for p in PROMOS if p.airline_code == "PC"]
     # The entity link is what makes the Ana Rakipler chip find these.
     assert await repo.count(airline="PC") == len(pc_promos)
+
+
+async def test_front_page_prefers_focus_beats_over_generic_aviation(db_session):
+    """A mid-scoring revenue-management story must outrank a high-scoring
+    general-interest one -- the front page is an RM desk's, not a hobbyist's."""
+    from app.services.edition_service import assemble_edition
+
+    source = await _source(db_session)
+    today = NOW.date()
+
+    async def _scored(url, category, importance):
+        article = Article(
+            source_id=source.id, url=url, title="t", raw_content="body",
+            published_at=NOW, fetched_at=NOW, content_hash=url, status="enriched",
+        )
+        db_session.add(article)
+        await db_session.flush()
+        db_session.add(
+            ArticleEnrichment(
+                article_id=article.id, headline=url, category=category,
+                importance_score=importance,
+            )
+        )
+        await db_session.flush()
+        return article
+
+    generic = await _scored("https://example.com/bomber", "general", 0.90)
+    rm = await _scored("https://example.com/yield", "revenue_management", 0.70)
+    await db_session.commit()
+
+    edition = await assemble_edition(db_session, today)
+    top = sorted(
+        [ea for ea in edition.articles if ea.section == "top_story"], key=lambda ea: ea.rank
+    )
+    assert top[0].article_id == rm.id
+    assert top[1].article_id == generic.id

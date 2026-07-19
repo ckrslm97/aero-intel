@@ -18,6 +18,26 @@ logger = get_logger(__name__)
 
 TOP_STORY_COUNT = 10
 
+# Editorial weighting for the front page. Raw importance alone let generic
+# aviation-enthusiast copy (military tankers, aircraft trivia) outrank the
+# beats this portal exists for, because those pieces score well on keyword
+# density. The bonus is additive on a 0-1 importance scale: a mid-scoring
+# revenue-management story now beats a high-scoring bomber feature, while a
+# genuinely major story in any category still makes the page.
+FOCUS_BONUS: dict[str, float] = {
+    "revenue_management": 0.30,
+    "network": 0.18,
+    "finance": 0.10,
+    "events": 0.08,
+}
+
+
+def _front_page_score(article: Article) -> float:
+    enrichment = article.enrichment
+    if enrichment is None:
+        return 0.0
+    return (enrichment.importance_score or 0.0) + FOCUS_BONUS.get(enrichment.category, 0.0)
+
 
 async def assemble_edition(db: AsyncSession, edition_date: date) -> Edition:
     day_start = datetime.combine(edition_date, time.min, tzinfo=timezone.utc)
@@ -36,6 +56,9 @@ async def assemble_edition(db: AsyncSession, edition_date: date) -> Edition:
         .order_by(ArticleEnrichment.importance_score.desc())
     )
     articles = list(result.scalars().unique().all())
+    # DB order (importance desc) is the tiebreaker; the focus weighting is
+    # applied here because it is an editorial rule, not a stored score.
+    articles.sort(key=_front_page_score, reverse=True)
 
     top_stories = articles[:TOP_STORY_COUNT]
     remaining = articles[TOP_STORY_COUNT:]

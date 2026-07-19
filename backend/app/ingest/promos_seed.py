@@ -184,7 +184,7 @@ async def seed_promos(db: AsyncSession) -> int:
                 category="revenue_management",
                 subcategory=promo.subcategory,
                 region=promo.region,
-                importance_score=0.5,
+                importance_score=0.3,  # below news: a campaign should never outrank the day's reporting
                 sentiment="neutral",
                 confidence_score=0.8,
                 corroborating_source_count=1,
