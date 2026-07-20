@@ -188,6 +188,13 @@ class ArticleRepository:
 
     async def list_by_status(self, status: str, limit: int = 200) -> list[Article]:
         result = await self.db.execute(
-            select(Article).where(Article.status == status).limit(limit)
+            select(Article)
+            # The enrichment pipeline reads article.source.name to strip the
+            # aggregator's " - Publisher" suffix. Without this eager load that
+            # attribute access is a lazy SELECT, which under asyncio raises
+            # MissingGreenlet and killed every scheduled ingest run for a day.
+            .options(selectinload(Article.source))
+            .where(Article.status == status)
+            .limit(limit)
         )
         return list(result.scalars().all())

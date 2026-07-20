@@ -135,3 +135,43 @@ async def test_batch_limit_enriches_only_the_freshest_articles(db_session):
         await db_session.execute(select(Article).where(Article.status == "deduped"))
     ).scalars().all()
     assert [a.title for a in still_pending] == ["Airline news 0"]
+
+
+async def test_enrich_works_on_articles_loaded_fresh_from_the_database(db_session):
+    """Regression: the pipeline reads article.source.name to strip aggregator
+    suffixes. The existing tests never caught the lazy load because the objects
+    they create are still in the session's identity map -- in production the
+    articles come back from a fresh SELECT, the attribute access became a lazy
+    query, and asyncio raised MissingGreenlet. That killed every scheduled
+    ingest run for a full day (243 articles stranded at status 'deduped').
+    Expiring the session here reproduces production's loading conditions.
+    """
+    source = Source(
+        name="Simple Flying", url="https://example.com/sf", source_type="rss", trust_weight=0.8
+    )
+    db_session.add(source)
+    await db_session.flush()
+
+    db_session.add(
+        Article(
+            source_id=source.id,
+            url="https://example.com/fresh",
+            title="Delta adds new nonstop Tokyo flights - Simple Flying",
+            raw_content="Delta will launch a new nonstop route to Tokyo next winter.",
+            fetched_at=datetime.now(timezone.utc),
+            content_hash="hash-fresh",
+            status="deduped",
+        )
+    )
+    await db_session.commit()
+    # Nothing may be served from memory: force real SELECTs, like a cron run.
+    db_session.expunge_all()
+
+    enriched = await enrich_pending_articles(db_session)
+    assert enriched == 1
+
+    enrichment = (
+        await db_session.execute(select(ArticleEnrichment))
+    ).scalar_one()
+    # ...and the publisher suffix really is gone.
+    assert enrichment.headline == "Delta adds new nonstop Tokyo flights"

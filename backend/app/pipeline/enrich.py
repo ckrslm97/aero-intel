@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.logging import get_logger
 from app.llm.factory import get_llm_provider
@@ -37,7 +38,15 @@ async def enrich_pending_articles(db: AsyncSession, limit: int | None = None) ->
     provider = get_llm_provider()
     entity_repo = EntityRepository(db)
 
-    query = select(Article).where(Article.status == "deduped")
+    # selectinload: the loop below reads article.source.name to strip the
+    # aggregator's " - Publisher" suffix. Left lazy, that attribute access is a
+    # SELECT issued mid-iteration, which asyncio SQLAlchemy rejects with
+    # MissingGreenlet -- it took down every scheduled ingest run for a day.
+    query = (
+        select(Article)
+        .options(selectinload(Article.source))
+        .where(Article.status == "deduped")
+    )
     if limit is not None:
         query = query.order_by(Article.published_at.desc().nulls_last()).limit(limit)
     result = await db.execute(query)
@@ -169,8 +178,6 @@ async def reclassify_articles(db: AsyncSession, batch_size: int = 50) -> dict[st
     keeps its stale derivations until something recomputes them. `re-enrich`
     would also wipe the Turkish translations; this doesn't.
     """
-    from sqlalchemy.orm import selectinload
-
     from app.llm.heuristic import HeuristicProvider
 
     provider = HeuristicProvider()
@@ -320,8 +327,6 @@ async def clean_stored_headlines(db: AsyncSession, batch_size: int = 200) -> dic
     over a pooled remote database has lost whole runs to idle timeouts here
     before.
     """
-    from sqlalchemy.orm import selectinload
-
     result = await db.execute(
         select(Article)
         .options(selectinload(Article.enrichment), selectinload(Article.source))
