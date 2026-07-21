@@ -33,6 +33,12 @@ def public_cache(response: Response, max_age: int, stale_for: int | None = None)
     Vercel.
     """
     stale = stale_for if stale_for is not None else max_age * 5
+    # Vary on Origin, or the edge serves one visitor's CORS answer to everyone.
+    # Caught in production: a curl request carrying no Origin header populated
+    # the cache for /pivot/dimensions, and every browser afterwards got that
+    # copy back -- no Access-Control-Allow-Origin on it, because CORSMiddleware
+    # never saw an Origin to answer, so the Analiz page failed to load.
+    response.headers["Vary"] = "Origin"
     response.headers["Cache-Control"] = (
         f"public, max-age={max_age}, stale-while-revalidate={stale}"
     )

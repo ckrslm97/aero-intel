@@ -261,6 +261,12 @@ async def test_public_reads_are_edge_cacheable(db_session):
             assert "max-age=" in cache_control and "max-age=0" not in cache_control, path
             assert "s-maxage=" in cdn_control, path
             assert "stale-while-revalidate=" in cdn_control, path
+            # Without this the edge serves one visitor's CORS answer to
+            # everyone: a curl request with no Origin header populated the
+            # cache for /pivot/dimensions, and every browser after it got that
+            # copy -- no Access-Control-Allow-Origin on it -- so the Analiz
+            # page failed to load while /insights was fine.
+            assert "Origin" in response.headers.get("vary", ""), path
 
 
 def test_publisher_suffix_is_stripped_only_when_it_is_a_credit():
