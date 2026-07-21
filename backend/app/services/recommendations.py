@@ -29,12 +29,15 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer, selectinload
 
+from app.core.logging import get_logger
 from app.core.tr_dates import format_date_range
 from app.models.article import Article, ArticleEnrichment
 from app.models.entity import ArticleEntity, Entity
 from app.models.event import AviationEvent
 from app.models.tk_review import REVIEW_THEMES, TkReview
 from app.services.insights_service import airline_momentum
+
+logger = get_logger(__name__)
 
 # --- shared limits -------------------------------------------------------
 
@@ -329,6 +332,42 @@ async def _regional_route_surge(
     return recommendations
 
 
+
+# Momentum compares two windows of coverage volume, which only means anything
+# if we were *collecting* at a comparable rate in both. Measured on production
+# right after the enrichment backlog drained: 772 enriched articles in the last
+# 14 days against 60 in the 14 before, which turned "Emirates 5 -> 153 haber"
+# into a headline about our own ingest history rather than about Emirates.
+# Below this ratio the two windows are not comparable and momentum is withheld.
+COMPARABLE_WINDOW_MIN_RATIO = 0.35
+
+
+async def _windows_are_comparable(db: AsyncSession, days: int) -> bool:
+    """Did we collect enough in the previous window to compare against it?"""
+    now = datetime.now(timezone.utc)
+    current_start = now - timedelta(days=days)
+    previous_start = now - timedelta(days=2 * days)
+
+    async def _count(start: datetime, end: datetime) -> int:
+        return (
+            await db.execute(
+                select(func.count(func.distinct(Article.id)))
+                .join(ArticleEntity, ArticleEntity.article_id == Article.id)
+                .where(
+                    Article.is_duplicate.is_(False),
+                    Article.published_at >= start,
+                    Article.published_at < end,
+                )
+            )
+        ).scalar_one()
+
+    current = await _count(current_start, now)
+    previous = await _count(previous_start, current_start)
+    if current == 0:
+        return False
+    return previous / current >= COMPARABLE_WINDOW_MIN_RATIO
+
+
 async def _airline_momentum_recs(
     db: AsyncSession, *, days: int, region: str | None, airline: str | None
 ) -> list[dict]:
@@ -337,6 +376,12 @@ async def _airline_momentum_recs(
     if region:
         # Momentum is computed over entity links, which carry no region; a
         # region-filtered momentum claim would be unsupported by the data.
+        return []
+
+    if not await _windows_are_comparable(db, days):
+        # Coverage grew because we started collecting more, not because the
+        # news did. Saying nothing beats saying something untrue.
+        logger.info("momentum_withheld_incomparable_windows", days=days)
         return []
 
     movers = await airline_momentum(db, window_days=days, limit=MOMENTUM_SCAN_LIMIT)

@@ -332,3 +332,48 @@ async def test_every_recommendation_is_sourced_and_sorted_by_urgency(db_session)
     severities = [r["severity"] for r in recs]
     assert severities == sorted(severities, key=lambda s: {"high": 0, "medium": 1, "low": 2}[s])
     assert recs[0]["id"] == "promo-ek"  # high beats the low-severity calendar item
+
+
+async def test_momentum_is_withheld_when_the_two_windows_are_not_comparable(db_session):
+    """Caught in production right after the enrichment backlog drained: 772
+    enriched articles in the last 14 days against 60 in the 14 before turned
+    "Emirates 5 -> 153 haber" into a claim about our own ingest history. When
+    collection itself changed rate, momentum says nothing at all."""
+    from datetime import datetime, timedelta, timezone
+
+    from app.models.article import Article, ArticleEnrichment
+    from app.models.entity import ArticleEntity, Entity
+    from app.models.source import Source
+    from app.services.recommendations import build_recommendations
+
+    now = datetime.now(timezone.utc)
+    source = Source(name="Ramp", url="https://example.com/ramp", source_type="rss")
+    entity = Entity(entity_type="airline", name="Emirates", code="EK")
+    db_session.add_all([source, entity])
+    await db_session.flush()
+
+    # One story in the older window, twenty in the recent one -- the shape of a
+    # pipeline catching up, not of a carrier making news.
+    async def _story(url: str, published_at: datetime) -> None:
+        article = Article(
+            source_id=source.id, url=url, title="Emirates fare and capacity update",
+            raw_content="Emirates moved fares and capacity.", published_at=published_at,
+            fetched_at=published_at, content_hash=url, status="enriched",
+        )
+        db_session.add(article)
+        await db_session.flush()
+        db_session.add(
+            ArticleEnrichment(
+                article_id=article.id, headline="Emirates update",
+                category="revenue_management",
+            )
+        )
+        db_session.add(ArticleEntity(article_id=article.id, entity_id=entity.id))
+
+    await _story("https://example.com/old", now - timedelta(days=10))
+    for i in range(20):
+        await _story(f"https://example.com/new{i}", now - timedelta(days=1))
+    await db_session.commit()
+
+    items = await build_recommendations(db_session, days=7)
+    assert not [i for i in items if i["id"].startswith("momentum-")]
