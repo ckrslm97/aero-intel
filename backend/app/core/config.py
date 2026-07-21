@@ -57,6 +57,12 @@ class Settings(BaseSettings):
     # LLM's daily budget (see D. jobs-news.yml: 12 runs/day x 12 = ~140/day).
     # Only the live/LLM path is capped; the local heuristic is free and unbounded.
     llm_enrich_batch_size: int = 12
+    # Local relevance score below which an article is enriched WITHOUT the LLM
+    # (see app/pipeline/relevance.py). Ingest brings in 250-700 articles/day
+    # against a ~144-article LLM budget, so the budget has to go to the stories
+    # this portal is about; everything else still gets a heuristic enrichment
+    # and is honestly labelled untranslated. 0 disables the gate.
+    llm_relevance_threshold: int = 6
 
     # --- Email (optional; falls back to writing to ./outbox instead of sending) ---
     smtp_host: str | None = None

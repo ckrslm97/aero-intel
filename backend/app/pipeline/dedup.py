@@ -21,10 +21,13 @@ from datetime import datetime, timedelta, timezone
 from datasketch import MinHash, MinHashLSH
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.logging import get_logger
-from app.models.article import Article
+from app.models.article import Article, ArticleEnrichment
+from app.pipeline.enrich import _importance_score
 from app.pipeline.hashing import normalize_text, shingles
+from app.pipeline.verify import compute_confidence
 
 logger = get_logger(__name__)
 
@@ -89,6 +92,7 @@ async def deduplicate_new_articles(db: AsyncSession) -> int:
     new_articles = list(new_result.scalars().all())
 
     duplicates = 0
+    refreshed: set[uuid.UUID] = set()
     for article in new_articles:
         mh = _minhash_for(article.title, article.raw_content)
         genuine_match = next(
@@ -100,16 +104,52 @@ async def deduplicate_new_articles(db: AsyncSession) -> int:
             article.duplicate_of_id = uuid.UUID(genuine_match)
             article.status = "duplicate"
             duplicates += 1
+            # The canonical article's corroboration count was computed when it
+            # was enriched, which is usually BEFORE this duplicate arrived --
+            # so a story confirmed by five outlets kept the score of a story
+            # confirmed by one, and the front page ranked on stale numbers.
+            refreshed.add(article.duplicate_of_id)
         else:
             article.status = "deduped"
             lsh.insert(str(article.id), mh)
             titles_by_id[str(article.id)] = article.title
 
+    rescored = await _refresh_corroboration(db, refreshed)
+
     await db.commit()
     logger.info(
         "dedup_run_complete",
+        rescored=rescored,
         processed=len(new_articles),
         duplicates=duplicates,
         canonical_pool=len(canonical_articles),
     )
     return len(new_articles)
+
+
+async def _refresh_corroboration(db: AsyncSession, canonical_ids: set[uuid.UUID]) -> int:
+    """Recompute confidence for canonical articles that just gained a duplicate.
+
+    Corroboration is the strongest ranking signal the system has, and it was
+    only ever measured once, at enrichment time. Because enrichment can lag
+    ingest by hours, most corroboration arrived after the snapshot and was
+    never counted.
+    """
+    if not canonical_ids:
+        return 0
+
+    rows = (
+        await db.execute(
+            select(Article, ArticleEnrichment)
+            .join(ArticleEnrichment, ArticleEnrichment.article_id == Article.id)
+            .options(selectinload(Article.source))
+            .where(Article.id.in_(canonical_ids))
+        )
+    ).all()
+
+    for article, enrichment in rows:
+        count, confidence = await compute_confidence(db, article)
+        enrichment.corroborating_source_count = count
+        enrichment.confidence_score = confidence
+        enrichment.importance_score = _importance_score(confidence, count)
+    return len(rows)

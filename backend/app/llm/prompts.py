@@ -51,6 +51,27 @@ def translate_prompt(text: str, target: str = "tr") -> str:
     )
 
 
+def translate_pair_prompt(headline: str, summary: str, target: str = "tr") -> str:
+    """Both fields in one call. Translation is the entire 70b token budget, and
+    sending the headline and the summary separately doubled it for no gain --
+    the two are the same story and the model reads them together anyway.
+
+    The delimiters are what the parser splits on, so they are stated twice and
+    kept ASCII-only to survive a small model's formatting drift.
+    """
+    target_name = "Turkish" if target == "tr" else target
+    return (
+        f"Translate the aviation news below into {target_name}. Preserve airline "
+        "names, airport names, and IATA/ICAO codes unchanged.\n"
+        "Respond in EXACTLY this format, with these two markers and nothing else:\n"
+        "HEADLINE: <translated headline>\n"
+        "SUMMARY: <translated summary>\n\n"
+        f"Headline: {headline}\n"
+        f"Summary: {summary}\n\n"
+        "Response:"
+    )
+
+
 def sentiment_prompt(title: str, content: str) -> str:
     return (
         "Classify the overall sentiment as exactly one word: positive, negative, or "

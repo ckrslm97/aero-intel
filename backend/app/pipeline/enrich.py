@@ -7,17 +7,39 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.llm.factory import get_llm_provider
-from app.llm.heuristic import detect_region
+from app.llm.heuristic import HeuristicProvider, detect_region
 from app.models.article import Article, ArticleEnrichment
 from app.models.entity import ArticleEntity
 from app.pipeline.headlines import strip_publisher_suffix
+from app.pipeline.relevance import score_article
 from app.pipeline.search_indexing import index_article_text
 from app.pipeline.verify import compute_confidence
 from app.repositories.entity_repository import EntityRepository
 
 logger = get_logger(__name__)
+
+# Share of each capped run reserved for the oldest waiting articles, so the
+# backlog always drains even while fresh news keeps arriving. See _select_pending.
+BACKLOG_SHARE = 0.35
+
+
+async def _translate_pair(engine, headline: str, summary: str) -> tuple[str | None, str | None]:
+    """Headline + summary in one LLM call where the provider supports it.
+
+    Not every provider does (the heuristic can't translate at all, and Ollama
+    has no paired path), so this degrades to the original two calls rather than
+    requiring every implementation to grow a method.
+    """
+    pair = getattr(engine, "translate_pair", None)
+    if pair is not None:
+        return await pair(headline, summary)
+    return (
+        await engine.translate(headline),
+        await engine.translate(summary) if summary else None,
+    )
 
 
 def _importance_score(confidence: float, corroborating_count: int) -> float:
@@ -26,43 +48,104 @@ def _importance_score(confidence: float, corroborating_count: int) -> float:
     return round(min(1.0, confidence * 0.7 + min(corroborating_count, 5) * 0.06), 3)
 
 
-async def enrich_pending_articles(db: AsyncSession, limit: int | None = None) -> int:
-    """Enrich every deduped article, or the freshest `limit` of them.
+async def _select_pending(db: AsyncSession, limit: int | None) -> list[Article]:
+    """The articles this run will work on.
 
-    A limit exists so a single scheduled run can't blow the LLM's daily budget
-    (see app/core/config.py llm_enrich_batch_size). When capped we take the most
-    recently published first -- that's what a reader opening the site wants
-    translated soonest; the backlog is picked up over subsequent runs. The
-    heuristic path passes no limit (it's free and instant).
+    Freshest-first alone starved the backlog into unreachability: ingest
+    delivers 20-60 new articles every two hours, all of them newer than
+    anything already waiting, so a fixed batch of "the newest N" never reached
+    the older rows -- 934 articles sat at status 'deduped' indefinitely while
+    the queue looked like it was draining.
+
+    So each capped run reserves a share for the oldest waiting articles. The
+    newest still lead (a reader opening the site wants today's news), but the
+    tail is guaranteed to move every single run.
     """
-    provider = get_llm_provider()
-    entity_repo = EntityRepository(db)
-
-    # selectinload: the loop below reads article.source.name to strip the
+    # selectinload: the enrichment loop reads article.source.name to strip the
     # aggregator's " - Publisher" suffix. Left lazy, that attribute access is a
     # SELECT issued mid-iteration, which asyncio SQLAlchemy rejects with
     # MissingGreenlet -- it took down every scheduled ingest run for a day.
-    query = (
+    base = (
         select(Article)
         .options(selectinload(Article.source))
         .where(Article.status == "deduped")
     )
-    if limit is not None:
-        query = query.order_by(Article.published_at.desc().nulls_last()).limit(limit)
-    result = await db.execute(query)
-    articles = list(result.scalars().all())
+    if limit is None:
+        return list((await db.execute(base)).scalars().all())
+
+    oldest_share = max(1, round(limit * BACKLOG_SHARE))
+    newest_share = max(1, limit - oldest_share)
+
+    newest = list(
+        (
+            await db.execute(
+                base.order_by(Article.published_at.desc().nulls_last()).limit(newest_share)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    oldest = list(
+        (
+            await db.execute(
+                base.order_by(Article.published_at.asc().nulls_first()).limit(oldest_share)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    # The two ends can overlap once the queue is short enough.
+    seen: set = set()
+    selected: list[Article] = []
+    for article in [*newest, *oldest]:
+        if article.id not in seen:
+            seen.add(article.id)
+            selected.append(article)
+    return selected
+
+
+async def enrich_pending_articles(db: AsyncSession, limit: int | None = None) -> int:
+    """Enrich every deduped article, or `limit` of them per run.
+
+    A limit exists so a single scheduled run can't blow the LLM's daily budget
+    (see app/core/config.py llm_enrich_batch_size); the heuristic path passes no
+    limit (it's free and instant).
+
+    Articles that score below `llm_relevance_threshold` on the local relevance
+    pass (app/pipeline/relevance.py) are enriched *without* the LLM: they get a
+    category, a summary and entities from the heuristic, stay searchable and
+    filterable, and are honestly marked untranslated. That gate is what keeps
+    the budget on the stories this portal exists for instead of spending it on
+    whatever an aggregator happened to return.
+    """
+    settings = get_settings()
+    provider = get_llm_provider()
+    local = HeuristicProvider()
+    entity_repo = EntityRepository(db)
+
+    articles = await _select_pending(db, limit)
+    skipped = 0
 
     for article in articles:
-        headline = await provider.generate_headline(article.title, article.raw_content)
-        summary = await provider.generate_summary(article.title, article.raw_content)
-        category = await provider.categorize(article.title, article.raw_content)
-        sentiment = await provider.sentiment(article.title, article.raw_content)
-        entities = await provider.extract_entities(article.title, article.raw_content)
+        # The gate. Scored locally, before a single network call: an article
+        # with no commercial-aviation signal is enriched by the heuristic alone
+        # so the LLM budget goes to the stories this portal is about.
+        relevance = score_article(article.title, article.raw_content)
+        worth_llm = relevance.score >= settings.llm_relevance_threshold
+        engine = provider if worth_llm else local
+        if not worth_llm:
+            skipped += 1
+
+        headline = await engine.generate_headline(article.title, article.raw_content)
+        summary = await engine.generate_summary(article.title, article.raw_content)
+        category = await engine.categorize(article.title, article.raw_content)
+        sentiment = await engine.sentiment(article.title, article.raw_content)
+        entities = await engine.extract_entities(article.title, article.raw_content)
 
         # Region is entity-derived (country -> world region), so it works the
         # same regardless of which provider extracted the entities.
         region = detect_region(entities)
-        subcategory = await provider.subcategorize(article.title, article.raw_content, category)
+        subcategory = await engine.subcategorize(article.title, article.raw_content, category)
         if category == "events":
             # Events don't have keyword-detectable subcategories -- they're
             # "regional" whenever a region was detected, "general" otherwise.
@@ -78,9 +161,15 @@ async def enrich_pending_articles(db: AsyncSession, limit: int | None = None) ->
         # is configured (see app/llm/base.py); the heuristic fallback always
         # returns None here, and both fields stay null -- surfaced honestly by
         # the API as is_translated=False rather than faked.
-        headline_tr = await provider.translate(headline)
-        summary_tr = await provider.translate(summary) if summary else None
-        translated = headline_tr is not None and (summary_tr is not None or not summary)
+        #
+        # One call for both fields: sending headline and summary separately
+        # doubled 70b traffic, and translation is the whole of the daily token
+        # budget. translate_pair falls back to two calls on any provider that
+        # doesn't implement it.
+        headline_tr, summary_tr = await _translate_pair(engine, headline, summary)
+        # A successful headline translation used to be thrown away whenever the
+        # summary failed. The card shows the headline, so keep what we got.
+        translated = headline_tr is not None
 
         corroborating_count, confidence = await compute_confidence(db, article)
 
@@ -116,7 +205,14 @@ async def enrich_pending_articles(db: AsyncSession, limit: int | None = None) ->
         article.status = "enriched"
 
     await db.commit()
-    logger.info("enrichment_run_complete", enriched=len(articles))
+    logger.info(
+        "enrichment_run_complete",
+        enriched=len(articles),
+        # How many took the free path -- the ratio is how much budget the
+        # relevance gate saved this run.
+        heuristic_only=skipped,
+        llm_enriched=len(articles) - skipped,
+    )
     return len(articles)
 
 

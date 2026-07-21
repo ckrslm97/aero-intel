@@ -94,21 +94,28 @@ async def test_enrich_events_article_gets_regional_subcategory(db_session):
     assert enrichment.subcategory == "regional"
 
 
-async def test_batch_limit_enriches_only_the_freshest_articles(db_session):
+async def test_batch_limit_takes_from_both_ends_so_the_backlog_drains(db_session):
+    """Freshest-first alone made the backlog unreachable, not merely slow.
+
+    Ingest delivers 20-60 articles every two hours, all newer than anything
+    already waiting, so "the newest N" never reached the tail -- 934 articles
+    sat at 'deduped' in production while the queue looked like it was draining.
+    Each capped run now reserves a share for the oldest.
+    """
     source = Source(name="S", url="https://example.com/feed", source_type="rss")
     db_session.add(source)
     await db_session.flush()
 
     base = datetime(2026, 7, 1, tzinfo=timezone.utc)
-    # Three deduped articles, oldest to newest by published_at.
-    for i, offset in enumerate([0, 1, 2]):
+    # Six deduped articles, oldest (0) to newest (5) by published_at.
+    for i in range(6):
         db_session.add(
             Article(
                 source_id=source.id,
                 url=f"https://example.com/a{i}",
                 title=f"Airline news {i}",
                 raw_content="An airline announced something noteworthy this quarter.",
-                published_at=base + timedelta(days=offset),
+                published_at=base + timedelta(days=i),
                 fetched_at=datetime.now(timezone.utc),
                 content_hash=f"hash-{i}",
                 status="deduped",
@@ -116,25 +123,45 @@ async def test_batch_limit_enriches_only_the_freshest_articles(db_session):
         )
     await db_session.flush()
 
-    # Budget only allows two this run.
-    enriched = await enrich_pending_articles(db_session, limit=2)
-    assert enriched == 2
+    enriched = await enrich_pending_articles(db_session, limit=3)
+    assert enriched == 3
 
     enriched_titles = {
         row.title
         for row in (
-            await db_session.execute(
-                select(Article).where(Article.status == "enriched")
-            )
+            await db_session.execute(select(Article).where(Article.status == "enriched"))
         ).scalars()
     }
-    # The two most recently published were taken; the oldest waits for next run.
-    assert enriched_titles == {"Airline news 2", "Airline news 1"}
+    # The newest still lead...
+    assert "Airline news 5" in enriched_titles
+    # ...but the oldest waiting article moved in the very same run.
+    assert "Airline news 0" in enriched_titles
 
-    still_pending = (
-        await db_session.execute(select(Article).where(Article.status == "deduped"))
-    ).scalars().all()
-    assert [a.title for a in still_pending] == ["Airline news 0"]
+
+async def test_a_capped_run_never_exceeds_its_budget(db_session):
+    """The two-ended selection must not hand back more articles than the cap --
+    that cap is the LLM budget."""
+    source = Source(name="S2", url="https://example.com/feed2", source_type="rss")
+    db_session.add(source)
+    await db_session.flush()
+
+    base = datetime(2026, 7, 1, tzinfo=timezone.utc)
+    for i in range(10):
+        db_session.add(
+            Article(
+                source_id=source.id,
+                url=f"https://example.com/b{i}",
+                title=f"Fare news {i}",
+                raw_content="Pricing and fares moved this quarter.",
+                published_at=base + timedelta(days=i),
+                fetched_at=datetime.now(timezone.utc),
+                content_hash=f"bhash-{i}",
+                status="deduped",
+            )
+        )
+    await db_session.flush()
+
+    assert await enrich_pending_articles(db_session, limit=4) == 4
 
 
 async def test_enrich_works_on_articles_loaded_fresh_from_the_database(db_session):

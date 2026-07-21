@@ -63,6 +63,32 @@ class FallbackProvider:
             # own translate(), which is also always None -- same outcome either way.
             return None
 
+    async def translate_pair(
+        self, headline: str, summary: str, target: str = "tr"
+    ) -> tuple[str | None, str | None]:
+        """Forward the single-call path when the wrapped provider has one.
+
+        Without this the wrapper silently hid the capability -- BudgetedProvider
+        asked FallbackProvider for translate_pair, didn't find it, and fell back
+        to two calls, so the halving never actually reached production.
+        """
+        pair = getattr(self.primary, "translate_pair", None)
+        if pair is None:
+            return (
+                await self.translate(headline, target),
+                await self.translate(summary, target) if summary else None,
+            )
+        try:
+            return await pair(headline, summary, target)
+        except Exception as exc:  # noqa: BLE001 -- translation failure must not crash enrichment
+            logger.warning(
+                "llm_call_failed_falling_back",
+                provider=self.primary.name,
+                method="translate_pair",
+                error=str(exc),
+            )
+            return None, None
+
     async def sentiment(self, title: str, content: str) -> str:
         return await self._call("sentiment", title, content)
 
@@ -118,6 +144,17 @@ class BudgetedProvider:
 
     async def translate(self, text: str, target: str = "tr") -> str | None:
         return await self.live.translate(text, target)
+
+    async def translate_pair(
+        self, headline: str, summary: str, target: str = "tr"
+    ) -> tuple[str | None, str | None]:
+        pair = getattr(self.live, "translate_pair", None)
+        if pair is not None:
+            return await pair(headline, summary, target)
+        return (
+            await self.live.translate(headline, target),
+            await self.live.translate(summary, target) if summary else None,
+        )
 
 
 def get_llm_provider() -> LLMProvider:

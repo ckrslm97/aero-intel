@@ -36,10 +36,21 @@ def _entry_published_at(entry: feedparser.FeedParserDict) -> datetime | None:
     return datetime(*parsed[:6], tzinfo=timezone.utc)
 
 
+# A Google News radar returns ~100 items every run and eight of them drive most
+# of the daily volume. Publisher feeds carry maybe 10-30 items of their own
+# reporting, so they are worth taking whole; aggregator queries are a firehose
+# of the same stories re-listed, and the tail is the least relevant part of it.
+AGGREGATOR_ITEM_CAP = 40
+
+
 class RssSourceAdapter:
-    def __init__(self, source_name: str, feed_url: str):
+    def __init__(self, source_name: str, feed_url: str, item_cap: int | None = None):
         self.source_name = source_name
         self.feed_url = feed_url
+        # Cap aggregator queries by default; a publisher feed keeps everything.
+        if item_cap is None and "news.google.com" in feed_url:
+            item_cap = AGGREGATOR_ITEM_CAP
+        self.item_cap = item_cap
 
     async def fetch(self) -> list[RawArticle]:
         try:
@@ -74,6 +85,16 @@ class RssSourceAdapter:
                     published_at=_entry_published_at(entry),
                 )
             )
+
+        if self.item_cap is not None and len(articles) > self.item_cap:
+            # Feeds are newest-first, so the cap keeps the freshest items.
+            logger.info(
+                "rss_item_cap_applied",
+                source=self.source_name,
+                returned=len(articles),
+                kept=self.item_cap,
+            )
+            articles = articles[: self.item_cap]
 
         logger.info("rss_fetch_ok", source=self.source_name, count=len(articles))
         return articles
