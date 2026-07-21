@@ -4,6 +4,7 @@ cross-source confidence for every deduped (canonical) article.
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -136,6 +137,7 @@ async def enrich_pending_articles(db: AsyncSession, limit: int | None = None) ->
 
     articles = await _select_pending(db, limit)
     skipped = 0
+    collisions = 0
 
     for article in articles:
         # The gate. Scored locally, before a single network call: an article
@@ -203,17 +205,30 @@ async def enrich_pending_articles(db: AsyncSession, limit: int | None = None) ->
             translated_at=datetime.now(timezone.utc) if translated else None,
             translation_provider=provider.name if translated else None,
         )
-        db.add(enrichment)
-        await db.flush()
+        # Each article writes inside its own savepoint. The NOT EXISTS filter
+        # closes the common case, but another worker can still enrich an
+        # article in the seconds between this run's SELECT and this INSERT --
+        # and when that happened, one unique-constraint collision aborted the
+        # entire batch and the job exited non-zero. A collision means someone
+        # else already did the work: skip that article, keep the rest.
+        try:
+            async with db.begin_nested():
+                db.add(enrichment)
+                await db.flush()
 
-        for mention in entities:
-            entity = await entity_repo.get_or_create(mention.entity_type, mention.name, mention.code)
-            db.add(ArticleEntity(article_id=article.id, entity_id=entity.id))
+                for mention in entities:
+                    entity = await entity_repo.get_or_create(
+                        mention.entity_type, mention.name, mention.code
+                    )
+                    db.add(ArticleEntity(article_id=article.id, entity_id=entity.id))
 
-        await index_article_text(
-            db, article.id, f"{article.title} {headline} {summary} {enrichment.tags}"
-        )
-        article.status = "enriched"
+                await index_article_text(
+                    db, article.id, f"{article.title} {headline} {summary} {enrichment.tags}"
+                )
+                article.status = "enriched"
+        except IntegrityError:
+            logger.info("enrichment_already_written_by_another_worker", article_id=str(article.id))
+            collisions += 1
 
     await db.commit()
     logger.info(
@@ -223,8 +238,10 @@ async def enrich_pending_articles(db: AsyncSession, limit: int | None = None) ->
         # relevance gate saved this run.
         heuristic_only=skipped,
         llm_enriched=len(articles) - skipped,
+        # Articles another worker had already written while this run was going.
+        collisions=collisions,
     )
-    return len(articles)
+    return len(articles) - collisions
 
 
 async def translate_pending_articles(db: AsyncSession, limit: int = 12) -> int:

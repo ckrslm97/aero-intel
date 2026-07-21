@@ -304,3 +304,61 @@ async def test_an_already_enriched_article_is_never_picked_up_twice(db_session):
 
     # Must be a no-op, not a crash.
     assert await enrich_pending_articles(db_session) == 0
+
+
+async def test_one_collision_does_not_abort_the_whole_batch(db_session):
+    """The NOT EXISTS filter closes the common case, but another worker can
+    still write in the seconds between this run's SELECT and its INSERT. When
+    that happened in production, one unique-constraint collision aborted the
+    entire batch and the job exited non-zero -- 23 good articles lost to one
+    race. A collision means the work is already done: skip it, keep the rest.
+    """
+    source = Source(name="Batch", url="https://example.com/batch", source_type="rss")
+    db_session.add(source)
+    await db_session.flush()
+
+    articles = []
+    for i in range(3):
+        article = Article(
+            source_id=source.id, url=f"https://example.com/batch{i}",
+            title=f"Emirates raises fares on route {i} as unit revenue climbs",
+            raw_content="Pricing and yield moved this quarter.",
+            published_at=NOW, fetched_at=NOW, content_hash=f"batch{i}", status="deduped",
+        )
+        db_session.add(article)
+        articles.append(article)
+    await db_session.flush()
+
+    # Simulate the race: a competing worker wrote article[1] after our SELECT.
+    from sqlalchemy import insert
+
+    await db_session.execute(
+        insert(ArticleEnrichment).values(
+            article_id=articles[1].id, headline="written by another worker",
+            category="revenue_management",
+        )
+    )
+    await db_session.commit()
+
+    # Force the stale selection the race produces: all three look pending to us.
+    from unittest.mock import patch
+
+    async def stale_selection(db, limit):
+        return articles
+
+    with patch("app.pipeline.enrich._select_pending", stale_selection):
+        enriched = await enrich_pending_articles(db_session, limit=3)
+
+    assert enriched == 2  # the collision is reported, not counted as work
+
+    from sqlalchemy import select
+
+    done = {
+        row.status
+        for row in (
+            await db_session.execute(
+                select(Article).where(Article.id.in_([articles[0].id, articles[2].id]))
+            )
+        ).scalars()
+    }
+    assert done == {"enriched"}  # the other two still went through
