@@ -68,7 +68,18 @@ async def _select_pending(db: AsyncSession, limit: int | None) -> list[Article]:
     base = (
         select(Article)
         .options(selectinload(Article.source))
-        .where(Article.status == "deduped")
+        .where(
+            Article.status == "deduped",
+            # Never re-enrich something that already has a row. Two workers on
+            # the same database -- a scheduled run and a manual dispatch, say --
+            # both selected the same 'deduped' articles and the second INSERT
+            # died on the unique constraint, taking the whole run down with it.
+            # article_id is unique on article_enrichment, so this is also what
+            # heals a row whose status update was lost to an earlier crash.
+            ~select(ArticleEnrichment.article_id)
+            .where(ArticleEnrichment.article_id == Article.id)
+            .exists(),
+        )
     )
     if limit is None:
         return list((await db.execute(base)).scalars().all())

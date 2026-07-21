@@ -274,3 +274,33 @@ async def test_the_single_call_path_survives_every_wrapper():
     )
     assert inner.pair_calls == 1
     assert inner.single_calls == 0  # the whole point: not two calls
+
+
+async def test_an_already_enriched_article_is_never_picked_up_twice(db_session):
+    """Regression: two workers on the same database -- a scheduled run and a
+    manual dispatch -- both selected the same 'deduped' articles, and the
+    second INSERT died on article_enrichment's unique constraint, taking the
+    whole run down. It also heals rows whose status update was lost to an
+    earlier crash: an enrichment row means the article is done."""
+    source = Source(name="Race", url="https://example.com/race", source_type="rss")
+    db_session.add(source)
+    await db_session.flush()
+
+    article = Article(
+        source_id=source.id, url="https://example.com/raced",
+        title="Emirates raises fares as unit revenue climbs",
+        raw_content="Pricing and yield moved this quarter.",
+        published_at=NOW, fetched_at=NOW, content_hash="raced",
+        status="deduped",  # stuck: enriched by another worker, status never updated
+    )
+    db_session.add(article)
+    await db_session.flush()
+    db_session.add(
+        ArticleEnrichment(
+            article_id=article.id, headline="already done", category="revenue_management"
+        )
+    )
+    await db_session.commit()
+
+    # Must be a no-op, not a crash.
+    assert await enrich_pending_articles(db_session) == 0
