@@ -13,7 +13,15 @@ from app.ingest.base import RawArticle
 
 logger = get_logger(__name__)
 
-USER_AGENT = "AeroIntelBot/0.1 (+aviation intelligence newsroom; contact: newsroom@aerointel.local)"
+# Mozilla-compatible prefix, which is the documented convention for
+# well-behaved crawlers (Googlebot and friends all use it) rather than a
+# disguise -- the bot still names itself and links back. Measured: the bare
+# "AeroIntelBot/0.1" form was 403'd by the FAA and 429'd by Reddit, whose WAFs
+# reject user agents they do not recognise, so three otherwise-working public
+# feeds were silently producing nothing.
+USER_AGENT = (
+    "Mozilla/5.0 (compatible; AeroIntelBot/0.1; +https://aero-intel-3qt1.vercel.app)"
+)
 REQUEST_TIMEOUT = httpx.Timeout(10.0)
 
 

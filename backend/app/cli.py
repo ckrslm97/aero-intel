@@ -117,6 +117,24 @@ async def _clean_headlines() -> None:
         print(f"Cleaned {result['cleaned']} of {result['scanned']} stored headlines")
 
 
+async def _refresh_tk_reviews() -> None:
+    from app.ingest.tk_reviews_live import refresh_tk_reviews
+    from app.services.tk_service import build_tk_digest
+
+    async with AsyncSessionLocal() as db:
+        result = await refresh_tk_reviews(db)
+        sources = ", ".join(f"{name}={count}" for name, count in result["sources"].items())
+        print(f"Fetched {result['fetched']} TK reviews ({sources})")
+        for name, error in result.get("errors", {}).items():
+            print(f"  ! {name} unavailable: {error}")
+        if result["inserted"]:
+            # Only worth a 70b call when the corpus actually changed.
+            digest = await build_tk_digest(db)
+            print(f"Inserted {result['inserted']} new reviews; digest rebuilt [{digest.provider}]")
+        else:
+            print("No new reviews; digest left as is")
+
+
 async def _seed_tk_reviews() -> None:
     from app.ingest.tk_reviews_seed import seed_tk_reviews
     from app.services.tk_service import build_tk_digest
@@ -222,6 +240,7 @@ def main() -> None:
             "seed-kpi-history",
             "seed-events",
             "seed-tk-reviews",
+            "refresh-tk-reviews",
             "seed-promos",
             "prune-kpi-duplicates",
             "refresh-pdf",
@@ -268,6 +287,8 @@ def main() -> None:
         asyncio.run(_seed_events())
     elif args.command == "seed-tk-reviews":
         asyncio.run(_seed_tk_reviews())
+    elif args.command == "refresh-tk-reviews":
+        asyncio.run(_refresh_tk_reviews())
     elif args.command == "seed-promos":
         asyncio.run(_seed_promos())
     elif args.command == "prune-kpi-duplicates":

@@ -15,6 +15,7 @@ on:
           - seed-kpi-history
           - seed-events
           - seed-tk-reviews
+          - refresh-tk-reviews
           - seed-promos
           - prune-kpi-duplicates
           - re-enrich
@@ -83,6 +84,11 @@ jobs:
             seed-tk-reviews)
               alembic upgrade head
               python -m app.cli seed-tk-reviews ;;
+            refresh-tk-reviews)
+              # Pulls new reviews off Skytrax / App Store / Reddit; rebuilds
+              # the BİZ digest only if anything new actually landed.
+              alembic upgrade head
+              python -m app.cli refresh-tk-reviews ;;
             seed-promos)
               alembic upgrade head
               python -m app.cli seed-promos ;;
