@@ -5,14 +5,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db
-from app.core.deps import require_roles
 from app.repositories.subscriber_repository import SubscriberRepository
 from app.schemas.subscriber import SubscriberCreate, SubscriberOut
 
 router = APIRouter(prefix="/subscribers", tags=["subscribers"])
 
 
-@router.get("", response_model=list[SubscriberOut], dependencies=[Depends(require_roles("admin"))])
+@router.get("", response_model=list[SubscriberOut])
 async def list_subscribers(db: AsyncSession = Depends(get_db)) -> list[SubscriberOut]:
     repo = SubscriberRepository(db)
     subscribers = await repo.list_active()

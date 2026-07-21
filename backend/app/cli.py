@@ -169,17 +169,39 @@ async def _send_newsletter() -> None:
     print("Edition assembled, PDF rendered (if available), newsletter dispatched")
 
 
-async def _create_admin(email: str, password: str) -> None:
-    from app.repositories.user_repository import UserRepository
+async def _daily_if_due() -> None:
+    """Assemble the edition, and send it only when the send window is open.
+
+    The workflow runs this many times through the small hours because GitHub's
+    scheduler cannot be trusted to fire punctually (see
+    app/services/delivery_window.py). Runs outside the window do nothing.
+    """
+    from app.services.daily_cycle import run_daily_edition_and_newsletter
+    from app.services.delivery_window import (
+        build_window_is_open,
+        local_now,
+        newsletter_is_due,
+    )
 
     async with AsyncSessionLocal() as db:
-        repo = UserRepository(db)
-        if await repo.get_by_email(email) is not None:
-            print(f"A user with email {email} already exists")
-            return
-        await repo.create(email, password, role="admin")
-        await db.commit()
-        print(f"Admin account created: {email}")
+        due, reason = await newsletter_is_due(db)
+
+    if due:
+        await run_daily_edition_and_newsletter()
+        print(f"Newsletter sent — {reason}")
+        return
+
+    if build_window_is_open():
+        # Keep the edition warm so the send, when it comes, is instant and
+        # complete rather than assembled from scratch at nine o'clock.
+        from app.services.edition_service import assemble_edition
+
+        async with AsyncSessionLocal() as db:
+            edition = await assemble_edition(db, local_now().date())
+            print(f"Edition ready ({edition.headline[:60]}) — not sending: {reason}")
+        return
+
+    print(f"Nothing to do — {reason}")
 
 
 def main() -> None:
@@ -204,11 +226,9 @@ def main() -> None:
             "prune-kpi-duplicates",
             "refresh-pdf",
             "send-newsletter",
-            "create-admin",
+            "daily-if-due",
         ],
     )
-    parser.add_argument("--email", help="Required for create-admin")
-    parser.add_argument("--password", help="Required for create-admin")
     parser.add_argument(
         "--days",
         type=int,
@@ -256,10 +276,8 @@ def main() -> None:
         asyncio.run(_refresh_pdf())
     elif args.command == "send-newsletter":
         asyncio.run(_send_newsletter())
-    elif args.command == "create-admin":
-        if not args.email or not args.password:
-            parser.error("create-admin requires --email and --password")
-        asyncio.run(_create_admin(args.email, args.password))
+    elif args.command == "daily-if-due":
+        asyncio.run(_daily_if_due())
 
 
 if __name__ == "__main__":

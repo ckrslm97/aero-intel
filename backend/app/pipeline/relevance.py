@@ -15,7 +15,7 @@ labels them honestly as untranslated.
 
 The same score doubles as the ranking signal for "sort by importance".
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from app.llm.heuristic import _keyword_pattern, _score
 from app.pipeline.hashing import normalize_text
@@ -78,6 +78,22 @@ _WATCHED_PATTERN = _keyword_pattern(WATCHED_AIRLINES)
 WATCHED_AIRLINE_BONUS = 6
 
 
+# When the local scorer may overrule the model's category. Both conditions
+# must hold, and both were calibrated on the exact production sample that
+# showed the problem:
+#
+#   "SR Technics signs engine maintenance agreement"  fleet 3, RM 1
+#   "Embraer receives E2 orders at Farnborough 2026"  fleet 7, RM 1
+#   "Premium Economy Is Quietly Becoming Best Value"  fleet 2, RM 2  <- leave alone
+#
+# A margin alone would fire on the third (a genuinely RM story that happens to
+# name an aircraft); an evidence floor alone would fire wherever the model is
+# merely reading between the lines. Together they catch the first two and only
+# those.
+OVERRIDE_MARGIN = 2
+MIN_OVERRIDE_EVIDENCE = 3
+
+
 @dataclass(frozen=True)
 class Relevance:
     score: int
@@ -86,9 +102,38 @@ class Relevance:
     LLM re-decides for articles that clear the gate -- but it is what a skipped
     article is filed under."""
 
+    raw_by_category: dict[str, int] = field(default_factory=dict)
+    """Unweighted keyword score per category, kept so the LLM's choice can be
+    sanity-checked against the evidence (see better_category_than)."""
+
     @property
     def is_general(self) -> bool:
         return self.category == GENERAL_CATEGORY
+
+    def better_category_than(self, chosen: str) -> str | None:
+        """The category the keywords point to, when the model's pick is clearly
+        contradicted -- otherwise None.
+
+        The model is trusted by default. An override needs a category that
+        both carries real evidence of its own and clearly beats the model's
+        pick -- see the constants for the production cases that set the bar.
+        """
+        if not self.raw_by_category:
+            return None
+
+        chosen_score = self.raw_by_category.get(chosen, 0)
+        ranked = sorted(self.raw_by_category.items(), key=lambda kv: -kv[1])
+        best, best_score = ranked[0]
+        if best == chosen:
+            return None
+        # An outright tie for first place is not evidence of anything.
+        if len(ranked) > 1 and ranked[1][1] == best_score and ranked[1][0] != chosen:
+            return None
+        if best_score < MIN_OVERRIDE_EVIDENCE:
+            return None
+        if best_score - chosen_score < OVERRIDE_MARGIN:
+            return None
+        return best
 
 
 # Below this, `content` is a stub (an aggregator echoing the headline plus a
@@ -109,8 +154,10 @@ def score_article(title: str, content: str) -> Relevance:
 
     best_category = GENERAL_CATEGORY
     best_score = 0
+    raw_by_category: dict[str, int] = {}
     for category, keywords in CATEGORY_KEYWORDS.items():
         raw = _score(_keyword_pattern(tuple(keywords)), title_text, body_text)
+        raw_by_category[category] = raw
         weighted = raw * FOCUS_CATEGORIES.get(category, 1)
         if weighted > best_score:
             best_score = weighted
@@ -128,4 +175,5 @@ def score_article(title: str, content: str) -> Relevance:
     return Relevance(
         score=best_score + commercial + decisive + watched + stub,
         category=best_category,
+        raw_by_category=raw_by_category,
     )

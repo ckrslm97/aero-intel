@@ -6,7 +6,22 @@ name: Daily edition + PDF
 # DB). If SMTP secrets are configured, also send the newsletter.
 on:
   schedule:
-    - cron: "15 4 * * *"
+    # Not one alarm clock -- a series of knocks. GitHub queues scheduled
+    # workflows and, measured on this repo over four days, fired a 04:15 UTC
+    # schedule at 06:15, 06:41, 07:25 and 06:38: an average delay of 2h30m.
+    # No single cron entry can therefore deliver "every morning at nine".
+    # These fire through the small hours; each run asks
+    # app/services/delivery_window.py whether the send window (09:00 Istanbul
+    # = 06:00 UTC) is open, and only the first one inside it sends. Sending is
+    # idempotent, so the extra runs cost a few seconds and nothing else.
+    - cron: "0 3 * * *"
+    - cron: "30 4 * * *"
+    - cron: "0 6 * * *"
+    - cron: "20 6 * * *"
+    - cron: "40 6 * * *"
+    - cron: "0 7 * * *"
+    - cron: "30 7 * * *"
+    - cron: "15 8 * * *"
   workflow_dispatch:
 
 permissions:
@@ -65,19 +80,15 @@ jobs:
           LLM_MODEL: llama-3.3-70b-versatile
           LLM_MODEL_FAST: llama-3.1-8b-instant
           LLM_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          # daily-if-due sends the newsletter itself, so the link target has to
+          # be here: without it the runner has no CORS origin to infer from and
+          # every link in the email falls back to localhost.
+          PUBLIC_SITE_URL: https://aero-intel-3qt1.vercel.app
         run: |
           alembic upgrade head
-          python -m app.cli build-edition
+          # Decides for itself whether it is time; assembles the edition either
+          # way so the send, when it comes, is instant.
+          python -m app.cli daily-if-due
           python -m app.cli refresh-pdf
           # One 70b call/day: the Turkish "pattern of the day" for /insights.
           python -m app.cli build-insight
-
-      - name: Send newsletter (only if SMTP is configured)
-        if: ${{ env.SMTP_HOST != '' }}
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          # Where the newsletter's "read on the site" links point. Without this
-          # the runner has no CORS origin to infer from and every link in the
-          # email would fall back to localhost.
-          PUBLIC_SITE_URL: https://aero-intel-3qt1.vercel.app
-        run: python -m app.cli send-newsletter

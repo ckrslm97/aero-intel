@@ -8,7 +8,6 @@ from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db
-from app.core.deps import require_roles
 from app.models.edition import Edition
 from app.repositories.edition_repository import EditionRepository
 from app.schemas.article import ArticleOut
@@ -105,7 +104,6 @@ async def download_edition_pdf(edition_date: date, db: AsyncSession = Depends(ge
 @router.post(
     "/{edition_date}/rebuild",
     response_model=EditionOut,
-    dependencies=[Depends(require_roles("admin", "editor"))],
 )
 async def rebuild_edition(edition_date: date, db: AsyncSession = Depends(get_db)) -> EditionOut:
     await assemble_edition(db, edition_date)

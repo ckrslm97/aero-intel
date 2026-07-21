@@ -362,3 +362,57 @@ async def test_one_collision_does_not_abort_the_whole_batch(db_session):
         ).scalars()
     }
     assert done == {"enriched"}  # the other two still went through
+
+
+# --- category sanity check against the keyword evidence ---
+
+def test_keywords_overrule_a_clearly_wrong_category():
+    """Production sample: an engine-maintenance deal and an aircraft order were
+    both filed under revenue management -- the first thing a reader sees on the
+    Gazete. The keyword evidence contradicts the model outright in both."""
+    # Verbatim opening of the production article, so the test measures the real
+    # keyword evidence rather than wording invented to make it pass.
+    maintenance = score_article(
+        "SR Technics signs engine maintenance agreement with Oman Air",
+        "SR Technics has signed a two-year engine maintenance agreement with Oman Air, "
+        "marking further growth for the Maintenance, Repair, and Overhaul (MRO) provider "
+        "in the MENA region. Switzerland-based SR Technics said the agreement marks a "
+        "strong collaboration between the two companies, with all maintenance work to be "
+        "carried out at its engine maintenance facility in Zurich. The fleet covered "
+        "includes the airline's Boeing 787 aircraft.",
+    )
+    assert maintenance.better_category_than("revenue_management") == "fleet"
+
+    order = score_article(
+        "Embraer receives E2 orders from Abra Group, Binter, Luxair at Farnborough",
+        "The aircraft order covers E195-E2 deliveries, with firm order commitments and "
+        "purchase agreements for the regional jet fleet announced during the show.",
+    )
+    assert order.better_category_than("revenue_management") == "fleet"
+
+
+def test_the_model_is_trusted_when_the_evidence_is_close():
+    """A genuinely revenue-management story that happens to name an aircraft
+    must keep its category -- the override is for contradictions, not ties."""
+    borderline = score_article(
+        "Why Premium Economy Is Quietly Becoming The Best Value In Long-Haul",
+        "The cabin sits between economy and business; fares and yield have moved as "
+        "carriers refit the widebody aircraft that carry it.",
+    )
+    assert borderline.better_category_than("revenue_management") is None
+
+
+def test_no_override_without_real_evidence():
+    """A headline-only stub gives the keywords almost nothing to go on; the
+    model's call stands rather than being replaced by noise."""
+    stub = score_article("Emirates Just Solved the Worst Part of Long-Haul Economy", "")
+    assert stub.better_category_than("revenue_management") is None
+
+
+def test_the_model_keeps_its_own_category_when_it_leads():
+    strong = score_article(
+        "LATAM closes first half with double-digit international capacity growth",
+        "Unit revenue, load factor, yield and fares all improved as capacity and "
+        "demand grew; bookings and revenue per passenger rose across the network.",
+    )
+    assert strong.better_category_than("revenue_management") is None

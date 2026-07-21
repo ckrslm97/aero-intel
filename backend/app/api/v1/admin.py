@@ -8,7 +8,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.db import get_db
-from app.core.deps import require_roles
 from app.models.article import Article
 from app.models.edition import Edition
 from app.models.email_delivery import EmailDelivery
@@ -25,7 +24,7 @@ from app.schemas.admin import (
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 
-@router.get("/status", response_model=AdminStatusOut, dependencies=[Depends(require_roles("admin"))])
+@router.get("/status", response_model=AdminStatusOut)
 async def admin_status(db: AsyncSession = Depends(get_db)) -> AdminStatusOut:
     settings = get_settings()
 

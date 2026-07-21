@@ -8,7 +8,6 @@ from app.models.kpi import KPI
 from app.models.source import Source
 from app.models.subscriber import Subscriber
 from app.models.tk_review import TkReview
-from app.models.user import User
 
 __all__ = [
     "Article",
@@ -24,5 +23,4 @@ __all__ = [
     "Source",
     "Subscriber",
     "TkReview",
-    "User",
 ]

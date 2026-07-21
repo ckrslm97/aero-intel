@@ -27,6 +27,7 @@ from app.core.logging import get_logger
 from app.models.article import Article, ArticleEnrichment
 from app.pipeline.enrich import _importance_score
 from app.pipeline.hashing import normalize_text, shingles
+from app.pipeline.headlines import strip_publisher_suffix
 from app.pipeline.verify import compute_confidence
 
 logger = get_logger(__name__)
@@ -153,3 +154,149 @@ async def _refresh_corroboration(db: AsyncSession, canonical_ids: set[uuid.UUID]
         enrichment.confidence_score = confidence
         enrichment.importance_score = _importance_score(confidence, count)
     return len(rows)
+
+
+# --- second pass: the same story told in two languages -------------------
+
+# MinHash+LSH compares title AND body, so two outlets covering one story with
+# different wording never become candidates -- and when the originals are in
+# different languages the titles barely overlap at all. Measured on production:
+#
+#   "Arajet incorpora nuevos servicios adicionales..."   (es)
+#   "Arajet introduces new ancillary services..."        (en)
+#      original-title similarity 0.10  -> missed
+#      Turkish-translation similarity 0.62 -> obvious
+#
+# Translation normalises vocabulary, so the Turkish headlines the site actually
+# displays are the better signal. This pass runs after enrichment, compares
+# only within same-entity/same-day groups (so the O(n^2) stays tiny), and takes
+# the stronger of the two languages.
+CROSS_LANGUAGE_MIN = 0.30
+SECOND_PASS_DAYS = 3
+
+
+# Two stories can share almost every word and still be different events.
+# Caught in testing: Riyadh Air "firms up order for six more Airbus A350-1000s"
+# and "firms up order for 28 Boeing 787s" -- same airline, same show, same
+# phrasing, two separate orders. Model designations and manufacturer names are
+# what tells them apart, so a clash in either blocks the merge.
+_MODEL_TOKEN = re.compile(r"\b[a-z]?\d[\w-]*\b")
+_MANUFACTURERS = ("airbus", "boeing", "embraer", "bombardier", "atr", "comac")
+# Acronyms carry the identity of the counterparty in supplier stories, and they
+# survive translation untouched. Caught in testing: "Turkish Airlines Signs
+# Multi-Year Agreement With CAE" was merged into "...Signs Agreement with
+# HAVELSAN for 12 Flight Simulators" -- two different vendors, two deals,
+# titles otherwise nearly identical.
+_ACRONYM = re.compile(r"\b[A-Z]{2,}\b")
+# Acronyms that describe the subject rather than name a party, so a clash in
+# them says nothing about whether two stories are the same.
+_GENERIC_ACRONYMS = frozenset({
+    "MRO", "CEO", "COO", "CFO", "AI", "IT", "US", "USA", "UK", "EU", "UAE",
+    "NDC", "GDS", "IATA", "ICAO", "FAA", "EASA", "SAF", "ESG", "VIP", "FIA",
+})
+
+
+def _named_parties(title: str) -> set[str]:
+    """Acronyms that identify who a story is about, publisher credit removed."""
+    head = strip_publisher_suffix(title)
+    return {a for a in _ACRONYM.findall(head) if a not in _GENERIC_ACRONYMS}
+
+
+def _mentions_conflict(title_a: str, title_b: str) -> bool:
+    """True when the titles name different aircraft, makers or counterparties."""
+    norm_a, norm_b = normalize_text(title_a), normalize_text(title_b)
+
+    makers_a = {m for m in _MANUFACTURERS if m in norm_a}
+    makers_b = {m for m in _MANUFACTURERS if m in norm_b}
+    if makers_a and makers_b and not (makers_a & makers_b):
+        return True
+
+    models_a = set(_MODEL_TOKEN.findall(norm_a))
+    models_b = set(_MODEL_TOKEN.findall(norm_b))
+    if models_a and models_b and not (models_a & models_b):
+        return True
+
+    parties_a, parties_b = _named_parties(title_a), _named_parties(title_b)
+    if parties_a and parties_b and not (parties_a & parties_b):
+        return True
+    return False
+
+
+def _best_title_similarity(
+    title_a: str, title_b: str, tr_a: str | None, tr_b: str | None
+) -> float:
+    """How alike two stories read, in whichever language shows it more clearly."""
+    original = _title_jaccard(title_a, title_b)
+    translated = _title_jaccard(tr_a or "", tr_b or "") if tr_a and tr_b else 0.0
+    return max(original, translated)
+
+
+async def deduplicate_translated_articles(db: AsyncSession) -> int:
+    """Catch near-duplicates the first pass could not see.
+
+    Runs after enrichment because it needs the Turkish headlines. Only articles
+    that share an entity and a publication day are compared, which keeps this
+    to a handful of comparisons per group while covering the case that actually
+    reaches the reader: the same story listed twice in the newspaper.
+    """
+    from app.models.entity import ArticleEntity
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=SECOND_PASS_DAYS)
+    rows = (
+        await db.execute(
+            select(Article, ArticleEnrichment.headline_tr, ArticleEntity.entity_id)
+            .join(ArticleEnrichment, ArticleEnrichment.article_id == Article.id)
+            .join(ArticleEntity, ArticleEntity.article_id == Article.id)
+            .where(
+                Article.is_duplicate.is_(False),
+                Article.status == "enriched",
+                Article.published_at >= cutoff,
+            )
+        )
+    ).all()
+
+    # (entity, day) -> [(article, turkish headline)]
+    groups: dict[tuple, list] = {}
+    seen_pairs: set = set()
+    for article, headline_tr, entity_id in rows:
+        if (article.id, entity_id) in seen_pairs:
+            continue
+        seen_pairs.add((article.id, entity_id))
+        day = (article.published_at or article.fetched_at).date()
+        groups.setdefault((entity_id, day), []).append((article, headline_tr))
+
+    marked = 0
+    already: set = set()
+    gained_duplicates: set = set()
+    for members in groups.values():
+        if len(members) < 2:
+            continue
+        # Oldest first: the earliest version of a story stays canonical.
+        members.sort(key=lambda m: m[0].published_at or m[0].fetched_at)
+        for i, (canonical, canonical_tr) in enumerate(members):
+            if canonical.id in already:
+                continue
+            for other, other_tr in members[i + 1 :]:
+                if other.id in already or other.id == canonical.id:
+                    continue
+                if _differs_only_by_number(canonical.title, other.title):
+                    continue  # weekly templated reports, not duplicates
+                if _mentions_conflict(canonical.title, other.title):
+                    continue  # different aircraft or different manufacturer
+                similarity = _best_title_similarity(
+                    canonical.title, other.title, canonical_tr, other_tr
+                )
+                if similarity >= CROSS_LANGUAGE_MIN:
+                    other.is_duplicate = True
+                    other.duplicate_of_id = canonical.id
+                    other.status = "duplicate"
+                    already.add(other.id)
+                    gained_duplicates.add(canonical.id)
+                    marked += 1
+
+    # The canonical story is now corroborated by one more source; its
+    # confidence and importance were scored before this duplicate arrived.
+    await _refresh_corroboration(db, gained_duplicates)
+    await db.commit()
+    logger.info("second_pass_dedup_complete", groups=len(groups), marked=marked)
+    return marked

@@ -23,17 +23,12 @@ on:
           - clean-headlines
           - translate-backlog
           - build-insight
-          - create-admin
       days:
         description: "re-enrich only: limit to articles fetched in the last N days (blank = all)"
         required: false
         type: string
       limit:
         description: "translate-backlog only: how many articles to translate this run (default 12)"
-        required: false
-        type: string
-      admin_email:
-        description: "create-admin only: the admin account email (password comes from the ADMIN_PASSWORD secret)"
         required: false
         type: string
 
@@ -72,8 +67,6 @@ jobs:
           LLM_MODEL: llama-3.3-70b-versatile
           LLM_MODEL_FAST: llama-3.1-8b-instant
           LLM_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          ADMIN_EMAIL: ${{ inputs.admin_email }}
-          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
           DAYS: ${{ inputs.days }}
           LIMIT: ${{ inputs.limit }}
         run: |
@@ -111,12 +104,6 @@ jobs:
               python -m app.cli translate-backlog --limit "${LIMIT:-12}" ;;
             build-insight)
               python -m app.cli build-insight ;;
-            create-admin)
-              if [ -z "${ADMIN_EMAIL}" ] || [ -z "${ADMIN_PASSWORD}" ]; then
-                echo "create-admin needs the admin_email input and the ADMIN_PASSWORD secret" >&2
-                exit 1
-              fi
-              python -m app.cli create-admin --email "${ADMIN_EMAIL}" --password "${ADMIN_PASSWORD}" ;;
             *)
               echo "Unknown task: ${{ inputs.task }}" >&2
               exit 1 ;;

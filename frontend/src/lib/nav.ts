@@ -5,7 +5,6 @@ import {
   Lightbulb,
   Newspaper,
   Search,
-  ShieldCheck,
   Star,
 } from "lucide-react";
 
@@ -25,10 +24,6 @@ export const primaryNav: NavItem[] = [
   { href: "/biz", label: "BİZ", icon: Star },
   { href: "/archive", label: "Arşiv", icon: Archive },
   { href: "/search", label: "Ara", icon: Search },
-];
-
-export const secondaryNav: NavItem[] = [
-  { href: "/admin", label: "Yönetim", icon: ShieldCheck },
 ];
 
 export const airlineTabs = [

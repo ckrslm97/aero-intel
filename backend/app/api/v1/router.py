@@ -4,11 +4,9 @@ from fastapi import APIRouter
 from app.api.v1 import (
     admin,
     articles,
-    auth,
     editions,
     events,
     health,
-    ingest,
     insights,
     kpis,
     search,
@@ -19,9 +17,7 @@ from app.api.v1 import (
 
 api_router = APIRouter()
 api_router.include_router(health.router)
-api_router.include_router(auth.router)
 api_router.include_router(articles.router)
-api_router.include_router(ingest.router)
 api_router.include_router(editions.router)
 api_router.include_router(events.router)
 api_router.include_router(insights.router)

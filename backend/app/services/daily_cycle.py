@@ -11,7 +11,10 @@ logger = get_logger(__name__)
 
 async def run_daily_ingest_and_enrich() -> None:
     from app.core.db import AsyncSessionLocal
-    from app.pipeline.dedup import deduplicate_new_articles
+    from app.pipeline.dedup import (
+        deduplicate_new_articles,
+        deduplicate_translated_articles,
+    )
     from app.pipeline.enrich import enrich_pending_articles
     from app.services.ingestion_service import run_ingestion
 
@@ -26,8 +29,13 @@ async def run_daily_ingest_and_enrich() -> None:
         settings = get_settings()
         batch = settings.llm_enrich_batch_size if settings.llm_provider != "heuristic" else None
         enriched = await enrich_pending_articles(db, limit=batch)
+        # Second dedup pass, after translation exists: the same story filed by
+        # two outlets in two languages only becomes obvious once both have been
+        # rendered into Turkish (see deduplicate_translated_articles).
+        merged = await deduplicate_translated_articles(db)
         logger.info(
-            "daily_ingest_cycle_complete", fetched=fetched, deduped=deduped, enriched=enriched
+            "daily_ingest_cycle_complete",
+            fetched=fetched, deduped=deduped, enriched=enriched, merged=merged,
         )
 
 

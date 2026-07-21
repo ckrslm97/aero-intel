@@ -1,55 +1,12 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { ChevronLeft, ChevronRight, LogIn, Plane, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Plane, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-import { useAuth } from "@/components/auth-provider";
-import { primaryNav, secondaryNav } from "@/lib/nav";
+import { primaryNav } from "@/lib/nav";
 import { cn } from "@/lib/utils";
-
-function AccountStatus({ collapsed }: { collapsed?: boolean }) {
-  const { user, loading } = useAuth();
-
-  if (loading) return null;
-
-  if (!user) {
-    return (
-      <Link
-        href="/login"
-        title="Giriş yap"
-        className={cn(
-          "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
-          collapsed && "justify-center px-0",
-        )}
-      >
-        <LogIn className="size-4 shrink-0" />
-        {!collapsed && "Giriş yap"}
-      </Link>
-    );
-  }
-
-  return (
-    <div
-      title={`${user.email} (${user.role})`}
-      className={cn(
-        "flex items-center gap-3 rounded-md px-3 py-2 text-sm",
-        collapsed && "justify-center px-0",
-      )}
-    >
-      <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
-        {user.email[0].toUpperCase()}
-      </span>
-      {!collapsed && (
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-xs font-medium text-sidebar-foreground">{user.email}</p>
-          <p className="text-[10px] uppercase tracking-wide text-muted-foreground">{user.role}</p>
-        </div>
-      )}
-    </div>
-  );
-}
 
 function NavLinks({
   onNavigate,
@@ -88,10 +45,6 @@ function NavLinks({
   return (
     <nav className="flex flex-1 flex-col gap-6 overflow-y-auto px-3 py-4">
       <div className="flex flex-col gap-1">{renderItems(primaryNav)}</div>
-      <div className="mt-auto flex flex-col gap-1 border-t border-sidebar-border pt-4">
-        {renderItems(secondaryNav)}
-        <AccountStatus collapsed={collapsed} />
-      </div>
     </nav>
   );
 }

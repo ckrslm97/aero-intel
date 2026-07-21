@@ -39,11 +39,15 @@ CATEGORIES: list[CategoryDef] = [
                 [
                     "competitor", "rival", "undercut", "market share", "competition",
                     "compete", "vs ", "battle",
-                    # The user's named main rivals: an RM-category story about any
-                    # of these airlines IS competitor intelligence, whether or not
-                    # it uses the word "competitor".
-                    "emirates", "qatar airways", "etihad", "lufthansa", "air france",
-                    "klm", "british airways", "pegasus", "ajet",
+                    # NOTE: rival airline NAMES deliberately do not live here.
+                    # They were added in round 5 so rival stories would surface,
+                    # but any article merely mentioning a carrier landed under
+                    # "Rakip" -- an SR Technics engine-maintenance deal and an
+                    # Embraer order both showed up there. Mentioning a carrier
+                    # is an *entity* fact, and the Ana Rakipler filter
+                    # (airline=RIVALS, app/repositories/article_repository.py)
+                    # already answers it from the entity table. A subcategory
+                    # should describe what the story is ABOUT.
                 ],
             ),
             # NOTE: the old "region" subcategory is gone -- keyword matching

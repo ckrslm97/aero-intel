@@ -1,6 +1,7 @@
 """AI enrichment: headline, summary, category, sentiment, entities, and
 cross-source confidence for every deduped (canonical) article.
 """
+import re
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete, func, select
@@ -41,6 +42,18 @@ async def _translate_pair(engine, headline: str, summary: str) -> tuple[str | No
         await engine.translate(headline),
         await engine.translate(summary) if summary else None,
     )
+
+
+
+# Aggregator feeds carry a lot of ranked-list clickbait ("7 Airlines That...").
+# It is aviation content, so it passes the relevance gate, but it is not what a
+# revenue-management desk opens the site for.
+_LISTICLE_START = re.compile(r"^\s*\d{1,2}\s+\w")
+LISTICLE_PENALTY = 0.6
+
+
+def _is_listicle(headline: str) -> bool:
+    return bool(_LISTICLE_START.match(headline))
 
 
 def _importance_score(confidence: float, corroborating_count: int) -> float:
@@ -152,6 +165,20 @@ async def enrich_pending_articles(db: AsyncSession, limit: int | None = None) ->
         headline = await engine.generate_headline(article.title, article.raw_content)
         summary = await engine.generate_summary(article.title, article.raw_content)
         category = await engine.categorize(article.title, article.raw_content)
+        # Sanity-check the model against the keyword evidence we already scored
+        # for free. Production sample: an SR Technics engine-maintenance deal
+        # and an Embraer aircraft order were both filed under revenue
+        # management, which is what a reader sees first on the Gazete. The
+        # local pass only overrules a lopsided call (see OVERRIDE_MARGIN).
+        corrected = relevance.better_category_than(category)
+        if corrected:
+            logger.info(
+                "category_corrected_by_keywords",
+                article_id=str(article.id),
+                model_said=category,
+                keywords_say=corrected,
+            )
+            category = corrected
         sentiment = await engine.sentiment(article.title, article.raw_content)
         entities = await engine.extract_entities(article.title, article.raw_content)
 
@@ -185,6 +212,12 @@ async def enrich_pending_articles(db: AsyncSession, limit: int | None = None) ->
         translated = headline_tr is not None
 
         corroborating_count, confidence = await compute_confidence(db, article)
+        importance = _importance_score(confidence, corroborating_count)
+        if _is_listicle(headline):
+            # "5 Business Class Seats So Special Passengers Forget They Are On A
+            # Plane" outranked real pricing coverage on the Gazete's front page.
+            # Not hidden -- still searchable and filterable, just not led with.
+            importance = round(importance * LISTICLE_PENALTY, 3)
 
         enrichment = ArticleEnrichment(
             article_id=article.id,
@@ -193,7 +226,7 @@ async def enrich_pending_articles(db: AsyncSession, limit: int | None = None) ->
             category=category,
             subcategory=subcategory,
             region=region,
-            importance_score=_importance_score(confidence, corroborating_count),
+            importance_score=importance,
             sentiment=sentiment,
             confidence_score=confidence,
             corroborating_source_count=corroborating_count,
