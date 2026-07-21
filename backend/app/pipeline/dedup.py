@@ -244,9 +244,19 @@ async def deduplicate_translated_articles(db: AsyncSession) -> int:
     cutoff = datetime.now(timezone.utc) - timedelta(days=SECOND_PASS_DAYS)
     rows = (
         await db.execute(
-            select(Article, ArticleEnrichment.headline_tr, ArticleEntity.entity_id)
+            # OUTER join on entities: the gazetteer does not know every company.
+            # "Atlas adds Air Transat NDC content" and "Atlas Strengthens North
+            # American Leisure Coverage with Air Transat NDC Launch" extracted
+            # zero entities between them, so an inner join left that duplicate
+            # pair in no group at all and it stayed on the page.
+            select(
+                Article,
+                ArticleEnrichment.headline_tr,
+                ArticleEnrichment.category,
+                ArticleEntity.entity_id,
+            )
             .join(ArticleEnrichment, ArticleEnrichment.article_id == Article.id)
-            .join(ArticleEntity, ArticleEntity.article_id == Article.id)
+            .outerjoin(ArticleEntity, ArticleEntity.article_id == Article.id)
             .where(
                 Article.is_duplicate.is_(False),
                 Article.status == "enriched",
@@ -255,15 +265,18 @@ async def deduplicate_translated_articles(db: AsyncSession) -> int:
         )
     ).all()
 
-    # (entity, day) -> [(article, turkish headline)]
+    # (entity or category, day) -> [(article, turkish headline)]
     groups: dict[tuple, list] = {}
     seen_pairs: set = set()
-    for article, headline_tr, entity_id in rows:
+    for article, headline_tr, category, entity_id in rows:
         if (article.id, entity_id) in seen_pairs:
             continue
         seen_pairs.add((article.id, entity_id))
         day = (article.published_at or article.fetched_at).date()
-        groups.setdefault((entity_id, day), []).append((article, headline_tr))
+        # With no named entity, the category is the next-coarsest grouping that
+        # still keeps each comparison set small.
+        key = entity_id if entity_id is not None else f"category:{category}"
+        groups.setdefault((key, day), []).append((article, headline_tr))
 
     marked = 0
     already: set = set()
