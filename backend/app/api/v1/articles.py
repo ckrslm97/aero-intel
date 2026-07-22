@@ -34,6 +34,12 @@ async def list_articles(
     date: date_type | None = Query(
         None, description="Only articles from this UTC day (archive view)"
     ),
+    country: str | None = Query(
+        None, max_length=80, description="Country name; matches articles mentioning it"
+    ),
+    airport: str | None = Query(
+        None, max_length=4, description="Airport IATA code; the Hub Explorer's filter"
+    ),
     response: Response = None,  # type: ignore[assignment]  -- FastAPI injects it
     db: AsyncSession = Depends(get_db),
 ) -> ArticleListOut:
@@ -43,6 +49,7 @@ async def list_articles(
     items = await repo.list_recent(
         limit=limit, offset=offset, category=category, subcategory=subcategory,
         region=region, since=since, airline=airline, on_date=date,
+        country=country, airport=airport,
     )
     # Filtered total (same clause as the list) so "load more" knows when to stop.
     # A short page IS the end of the result set, so the count query -- the more
@@ -53,7 +60,7 @@ async def list_articles(
     else:
         total = await repo.count(
             category=category, subcategory=subcategory, region=region, since=since,
-            airline=airline, on_date=date,
+            airline=airline, on_date=date, country=country, airport=airport,
         )
     return ArticleListOut(total=total, items=[ArticleOut.model_validate(a) for a in items])
 

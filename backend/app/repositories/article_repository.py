@@ -15,6 +15,37 @@ from app.taxonomy import RIVAL_CODES
 _DAY_EXPR = func.coalesce(Article.published_at, Article.fetched_at)
 
 
+def _entity_mentions(entity_type: str, value: str, *, by_code: bool = True):
+    """Article ids that mention one named entity.
+
+    A semi-join for the same reason the airline filter is one: an article that
+    names a country three times must still count once, or LIMIT pages over
+    duplicate rows.
+    """
+    column = Entity.code if by_code else Entity.name
+    return (
+        select(ArticleEntity.article_id)
+        .join(Entity, Entity.id == ArticleEntity.entity_id)
+        .where(Entity.entity_type == entity_type, func.lower(column) == value.lower())
+    )
+
+
+def article_out_loaders():
+    """Everything ArticleOut touches, eager-loaded.
+
+    ArticleOut derives `airlines` and `airports` from the entity links, so any
+    query whose rows get serialised has to load them here. Miss one and it
+    fails only in production: the tests keep objects in the session's identity
+    map, where a lazy load quietly succeeds, while a real request has already
+    left the greenlet by the time Pydantic reads the attribute.
+    """
+    return (
+        selectinload(Article.source),
+        selectinload(Article.enrichment),
+        selectinload(Article.entity_links).selectinload(ArticleEntity.entity),
+    )
+
+
 class ArticleRepository:
     def __init__(self, db: AsyncSession):
         self.db = db
@@ -38,6 +69,8 @@ class ArticleRepository:
         since: datetime | None,
         airline: str | None = None,
         on_date: date | None = None,
+        country: str | None = None,
+        airport: str | None = None,
     ):
         """Shared filter clause for list_recent and count, so the "load more"
         pagination in the newspaper can trust that total counts the same rows
@@ -79,6 +112,14 @@ class ArticleRepository:
             elif airline != "ALL":
                 mentions = mentions.where(Entity.code == airline)
             query = query.where(Article.id.in_(mentions))
+        # Country and airport read the same entity table. Region already exists
+        # as a filter, but a region is nine countries wide: a network planner
+        # asking "what is happening in Japan" does not want all of Asia, and a
+        # hub page is about one airport, not the continent it sits on.
+        if country:
+            query = query.where(Article.id.in_(_entity_mentions("country", country, by_code=False)))
+        if airport:
+            query = query.where(Article.id.in_(_entity_mentions("airport", airport)))
         return query
 
     async def list_recent(
@@ -91,12 +132,13 @@ class ArticleRepository:
         since: datetime | None = None,
         airline: str | None = None,
         on_date: date | None = None,
+        country: str | None = None,
+        airport: str | None = None,
     ) -> list[Article]:
         query = (
             select(Article)
             .options(
-                selectinload(Article.source),
-                selectinload(Article.enrichment),
+                *article_out_loaders(),
                 # The scraped body is never rendered in a list and is not part
                 # of the JSON; leaving it in the SELECT moved hundreds of KB per
                 # request out of Postgres for nothing (reading time now comes
@@ -115,6 +157,8 @@ class ArticleRepository:
             since=since,
             airline=airline,
             on_date=on_date,
+            country=country,
+            airport=airport,
         )
         result = await self.db.execute(query)
         return list(result.scalars().unique().all())
@@ -127,6 +171,8 @@ class ArticleRepository:
         since: datetime | None = None,
         airline: str | None = None,
         on_date: date | None = None,
+        country: str | None = None,
+        airport: str | None = None,
     ) -> int:
         # Plain COUNT, not COUNT(DISTINCT): the airline filter is a semi-join
         # now, so no clause can multiply rows, and COUNT(DISTINCT uuid) forces
@@ -139,6 +185,8 @@ class ArticleRepository:
             since=since,
             airline=airline,
             on_date=on_date,
+            country=country,
+            airport=airport,
         )
         result = await self.db.execute(query)
         return int(result.scalar_one())
@@ -181,7 +229,7 @@ class ArticleRepository:
     async def get_by_id(self, article_id: uuid.UUID) -> Article | None:
         result = await self.db.execute(
             select(Article)
-            .options(selectinload(Article.source), selectinload(Article.enrichment))
+            .options(*article_out_loaders())
             .where(Article.id == article_id)
         )
         return result.scalar_one_or_none()

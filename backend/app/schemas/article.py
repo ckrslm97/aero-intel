@@ -42,6 +42,16 @@ class ArticleEnrichmentOut(BaseModel):
         return self.translated_at is not None
 
 
+class MentionOut(BaseModel):
+    """A named entity the article talks about. Carries the IATA code because
+    that is what the card needs to draw a carrier's logo."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    name: str
+    code: str | None
+
+
 class ArticleOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -58,11 +68,36 @@ class ArticleOut(BaseModel):
     # meant every list request pulled the full article bodies out of Postgres
     # only to discard them -- the list queries now defer that column entirely.
     word_count: int | None = Field(default=None, exclude=True, repr=False)
+    # Excluded from the JSON: the shape the client wants is a flat list of
+    # airlines and airports, not the association rows.
+    entity_links: list = Field(default_factory=list, exclude=True, repr=False)
 
     @computed_field  # type: ignore[prop-decorator]
     @property
     def reading_time_minutes(self) -> int:
         return max(1, round((self.word_count or 0) / _WORDS_PER_MINUTE))
+
+    def _mentions(self, entity_type: str) -> list[MentionOut]:
+        seen: dict[str, MentionOut] = {}
+        for link in self.entity_links:
+            entity = getattr(link, "entity", None)
+            if entity is None or entity.entity_type != entity_type:
+                continue
+            # An article can link the same carrier twice via different aliases.
+            seen.setdefault(entity.name, MentionOut(name=entity.name, code=entity.code))
+        return list(seen.values())
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def airlines(self) -> list[MentionOut]:
+        """Carriers named in the story -- this is what puts a logo on the card.
+        Ordered by nothing in particular; the card shows the first few."""
+        return self._mentions("airline")
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def airports(self) -> list[MentionOut]:
+        return self._mentions("airport")
 
 
 class ArticleListOut(BaseModel):

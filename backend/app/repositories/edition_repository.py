@@ -4,8 +4,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models.article import Article
 from app.models.edition import Edition, EditionArticle
+from app.repositories.article_repository import article_out_loaders
 
 
 class EditionRepository:
@@ -16,8 +16,14 @@ class EditionRepository:
         result = await self.db.execute(
             select(Edition)
             .options(
-                selectinload(Edition.articles).selectinload(EditionArticle.article).selectinload(Article.source),
-                selectinload(Edition.articles).selectinload(EditionArticle.article).selectinload(Article.enrichment),
+                # Same set the API serialises elsewhere -- the edition endpoint
+                # returns ArticleOut too, so it needs the entity links as well.
+                *(
+                    selectinload(Edition.articles)
+                    .selectinload(EditionArticle.article)
+                    .options(loader)
+                    for loader in article_out_loaders()
+                ),
             )
             .where(Edition.edition_date == edition_date)
         )

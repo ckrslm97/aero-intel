@@ -131,10 +131,31 @@ AIRPORT_COUNTRY: dict[str, str] = {
 }
 
 # name/alias (lowercase) -> (canonical name, IATA code)
+#
+# Aliases matter more than entries. Production check after the Hub Explorer was
+# built: IST had never once been recognised, because the gazetteer only knew
+# "istanbul airport" while the wires write "Istanbul Airport (IST)", "IST" or
+# just "Istanbul" -- on a portal built around Turkish Airlines' hub. Bare IATA
+# codes are listed only where the code is not an ordinary English word.
 AIRPORTS: dict[str, tuple[str, str]] = {
     "heathrow": ("London Heathrow", "LHR"),
+    "lhr": ("London Heathrow", "LHR"),
     "gatwick": ("London Gatwick", "LGW"),
+    "lgw": ("London Gatwick", "LGW"),
     "istanbul airport": ("Istanbul Airport", "IST"),
+    "istanbul havalimani": ("Istanbul Airport", "IST"),
+    # The city name counts as the hub here. Measured: "Istanbul Airport" appears
+    # in 2 articles out of 2.879, "Istanbul" in 23 -- the wires write "Turkish
+    # Airlines' Istanbul hub", not the airport's formal name, and a hub page for
+    # the home carrier's own base showing two stories would be worse than the
+    # conflation. Accepted cost: coverage of the city that is not about the
+    # airport lands here too.
+    "istanbul": ("Istanbul Airport", "IST"),
+    # Not a bare "IST". Measured against 2.879 production articles: 38 matches,
+    # of which 33 were German-language stories using "ist" as the verb ("das
+    # ist", "Hintergrund ist"). The five real ones all wrote "Istanbul Airport
+    # (IST)", which the alias above already catches, so the bare code would
+    # have bought nothing and cost 33 wrong hub links.
     "jfk": ("John F. Kennedy International", "JFK"),
     "los angeles international": ("Los Angeles International", "LAX"),
     "lax": ("Los Angeles International", "LAX"),
@@ -142,7 +163,9 @@ AIRPORTS: dict[str, tuple[str, str]] = {
     "hamad international": ("Hamad International", "DOH"),
     "changi": ("Singapore Changi", "SIN"),
     "charles de gaulle": ("Paris Charles de Gaulle", "CDG"),
+    "cdg": ("Paris Charles de Gaulle", "CDG"),
     "schiphol": ("Amsterdam Schiphol", "AMS"),
+    "ams": ("Amsterdam Schiphol", "AMS"),
     "frankfurt airport": ("Frankfurt Airport", "FRA"),
     "hartsfield-jackson": ("Hartsfield-Jackson Atlanta", "ATL"),
     "o'hare": ("Chicago O'Hare", "ORD"),
@@ -151,7 +174,14 @@ AIRPORTS: dict[str, tuple[str, str]] = {
     "hong kong international": ("Hong Kong International", "HKG"),
     "sydney airport": ("Sydney Kingsford Smith", "SYD"),
     "abu dhabi international": ("Abu Dhabi International", "AUH"),
+    "zayed international": ("Abu Dhabi International", "AUH"),
     "sabiha gokcen": ("Istanbul Sabiha Gokcen", "SAW"),
+    "sabiha gökçen": ("Istanbul Sabiha Gokcen", "SAW"),
+    "sabiha": ("Istanbul Sabiha Gokcen", "SAW"),
+    "hamad": ("Hamad International", "DOH"),
+    "dxb": ("Dubai International", "DXB"),
+    # No bare "SAW" or "DOH": matching is whole-word and case-insensitive, so
+    # they would tag every "the airline saw record demand" and every "doh".
 }
 
 # ISO-ish common country names, lowercase
