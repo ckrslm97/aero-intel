@@ -28,6 +28,10 @@ class EventOut(BaseModel):
     url: str
     summary_tr: str
     event_type: str
+    # What the calendar is for: how hard this moves demand, and what to expect.
+    impact_level: str
+    attendance: int | None
+    demand_effect_tr: str
 
     @computed_field  # type: ignore[prop-decorator]
     @property

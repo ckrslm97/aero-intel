@@ -48,6 +48,19 @@ class AviationEvent:
     summary: str
     # One of app.models.event.EVENT_TYPES; drives the calendar page's type filter.
     event_type: str = "conference"
+    # How hard this moves traffic and fares into the host market:
+    #   high   -- reprices the market; capacity decisions get made around it
+    #   medium -- visible in the booking curve, absorbed by normal inventory
+    #   low    -- newsworthy, not a demand event
+    # Judged from headcount and how concentrated the travel is, and written by
+    # hand next to the dates. Never inferred: a guessed impact level reads
+    # exactly like a measured one, which is what makes it dangerous.
+    impact_level: str = "medium"
+    # Organiser-published headcount, where there is one. None = not published,
+    # which the calendar shows as a dash rather than an estimate.
+    attendance: int | None = None
+    # One line: what to expect on the routes into that city, and when.
+    demand_effect: str = ""
 
 
 EVENTS: list[AviationEvent] = [
@@ -65,6 +78,12 @@ EVENTS: list[AviationEvent] = [
             "yoğunlaştığı hafta."
         ),
         event_type="airshow",
+        impact_level="high",
+        attendance=80000,
+        demand_effect=(
+            "Fuar haftasında Londra bölgesine iş seyahati talebi sıçrar; LHR ve LGW'de son dakika "
+            "ücretleri sertleşir, oteller erken dolar. Etki fuardan iki hafta önce başlar."
+        ),
     ),
     AviationEvent(
         name="Aviation Africa Summit 2026",
@@ -77,6 +96,12 @@ EVENTS: list[AviationEvent] = [
         summary=(
             "Afrika havacılığının 10. zirvesi, Sarit Expo Centre'da. 100'ü aşkın katılımcı, "
             "kıtadaki havayolları ve düzenleyici kurumlar bir araya geliyor."
+        ),
+        impact_level="low",
+        attendance=None,
+        demand_effect=(
+            "Nairobi'ye sınırlı ama üst düzey bir talep; hat bazında kapasite kararı gerektirmez, "
+            "iş sınıfı doluluğunda iki günlük hareket beklenir."
         ),
     ),
     AviationEvent(
@@ -92,6 +117,12 @@ EVENTS: list[AviationEvent] = [
             "sadakat, perakendecilik ve dijital dönüşümden sorumlu üst yönetim katılıyor. "
             "Gelir yönetimi gündeminin en yoğun olduğu etkinliklerden biri."
         ),
+        impact_level="medium",
+        attendance=7000,
+        demand_effect=(
+            "Lizbon'a Avrupa içi iş trafiğinde üç günlük yoğunlaşma. Kısa mesafe hatlarda son "
+            "hafta rezervasyonları öne çekilir."
+        ),
     ),
     AviationEvent(
         name="Routes World 2026",
@@ -105,6 +136,12 @@ EVENTS: list[AviationEvent] = [
             "Havayolları, havalimanları ve turizm kurumlarının ağ planlama görüşmelerini "
             "yürüttüğü küresel rota geliştirme forumu; yeni hat kararlarının şekillendiği yer."
         ),
+        impact_level="high",
+        attendance=3000,
+        demand_effect=(
+            "Ağ planlama ekiplerinin toplandığı hafta: Riyad'a talep artışının ötesinde, burada "
+            "duyurulan yeni hatlar sonraki sezonun rekabet haritasını değiştirir."
+        ),
     ),
     AviationEvent(
         name="NBAA-BACE 2026",
@@ -115,6 +152,12 @@ EVENTS: list[AviationEvent] = [
         region="north-america",
         url="https://nbaa.org/events/",
         summary="Kuzey Amerika'nın en büyük iş havacılığı fuarı ve konferansı.",
+        impact_level="medium",
+        attendance=25000,
+        demand_effect=(
+            "Las Vegas'a iş jeti ve kurumsal havacılık trafiği; tarifeli hatlarda premium kabin "
+            "talebi belirgin şekilde artar."
+        ),
     ),
     AviationEvent(
         name="MRO Europe 2026",
@@ -128,6 +171,12 @@ EVENTS: list[AviationEvent] = [
             "Avrupa'nın en büyük bakım-onarım (MRO) etkinliği: 500'ü aşkın katılımcı ve "
             "11.000'den fazla ziyaretçi."
         ),
+        impact_level="medium",
+        attendance=9000,
+        demand_effect=(
+            "Amsterdam'a teknik ve tedarik zinciri trafiği. AMS bağlantılı Avrupa hatlarında üç "
+            "günlük iş seyahati yoğunlaşması."
+        ),
     ),
     AviationEvent(
         name="Bahrain International Airshow 2026",
@@ -139,6 +188,12 @@ EVENTS: list[AviationEvent] = [
         url="https://www.bahraininternationalairshow.com/",
         summary="Körfez bölgesinin iki yılda bir düzenlenen havacılık fuarı, Sakhir Hava Üssü'nde.",
         event_type="airshow",
+        impact_level="medium",
+        attendance=None,
+        demand_effect=(
+            "Körfez içi kısa mesafe trafiğinde artış; bölgesel taşıyıcılar için kapasite değil "
+            "fiyat konusu."
+        ),
     ),
     AviationEvent(
         name="Aircraft Interiors Expo 2027",
@@ -151,6 +206,12 @@ EVENTS: list[AviationEvent] = [
         summary=(
             "Kabin içi ürün ve yolcu deneyimi fuarı; koltuk, kabin ve ek gelir ürünlerinin "
             "tanıtıldığı ana etkinlik."
+        ),
+        impact_level="medium",
+        attendance=18000,
+        demand_effect=(
+            "Hamburg'a kabin ürünü ve tedarikçi trafiği. Almanya içi ve Avrupa kısa mesafede üç "
+            "günlük talep sıçraması."
         ),
     ),
     AviationEvent(
@@ -165,6 +226,12 @@ EVENTS: list[AviationEvent] = [
             "IATA Yıllık Genel Kurulu ve Dünya Hava Taşımacılığı Zirvesi, Xiamen Airlines "
             "ev sahipliğinde. Sektörün finansal görünümünün açıklandığı toplantı."
         ),
+        impact_level="high",
+        attendance=1200,
+        demand_effect=(
+            "Sektörün en üst düzey buluşması. Xiamen'e doğrudan talep sınırlı ama Çin bağlantılı "
+            "premium trafik ve basın ilgisi zirve yapar; duyurular fiyat beklentisini etkiler."
+        ),
     ),
     AviationEvent(
         name="Paris Air Show (SIAE) 2027",
@@ -176,6 +243,12 @@ EVENTS: list[AviationEvent] = [
         url="https://www.siae.fr/en/",
         summary="56. Uluslararası Paris Hava Show'u, Le Bourget Fuar Merkezi'nde.",
         event_type="airshow",
+        impact_level="high",
+        attendance=320000,
+        demand_effect=(
+            "Sektörün en büyük fuarı. Paris'e giden tüm hatlarda iki hafta boyunca talep ve fiyat "
+            "yükselir; CDG ve ORY'de kapasite planlaması gerektirir."
+        ),
     ),
     AviationEvent(
         name="Dubai Airshow 2027",
@@ -190,6 +263,12 @@ EVENTS: list[AviationEvent] = [
             "havayollarının büyük sipariş duyurularıyla bilinir."
         ),
         event_type="airshow",
+        impact_level="high",
+        attendance=100000,
+        demand_effect=(
+            "Körfez'in en büyük fuarı. DXB'ye uzun menzilli iş trafiği ve otel fiyatları zirveye "
+            "çıkar; Emirates ve bölgesel taşıyıcılar için yılın en yoğun premium haftası."
+        ),
     ),
     AviationEvent(
         name="Singapore Airshow 2028",
@@ -201,6 +280,12 @@ EVENTS: list[AviationEvent] = [
         url="https://www.singaporeairshow.com/",
         summary="Asya-Pasifik'in en büyük havacılık fuarı, iki yılda bir düzenleniyor.",
         event_type="airshow",
+        impact_level="high",
+        attendance=60000,
+        demand_effect=(
+            "Asya-Pasifik'in en büyük fuarı. SIN'e bölgesel ve uzun menzilli iş trafiğinde "
+            "belirgin artış; Güneydoğu Asya hatlarında kapasite konusu."
+        ),
     ),
     # ------------------------------------------------------------------
     # Round-5 additions. Conference/airshow/sports dates verified against the
@@ -223,6 +308,12 @@ EVENTS: list[AviationEvent] = [
             "doluluklarının yılın zirvesine çıktığı iki hafta."
         ),
         event_type="festival",
+        impact_level="high",
+        attendance=6000000,
+        demand_effect=(
+            "Münih'e on altı gün boyunca yoğun turistik talep. MUC hatlarında ekonomi sınıfı "
+            "erken dolar, son dakika ücretleri en yüksek seviyeye çıkar."
+        ),
     ),
     AviationEvent(
         name="Çin Ulusal Günü Altın Haftası 2026",
@@ -237,6 +328,12 @@ EVENTS: list[AviationEvent] = [
             "talebin hafta boyunca tavan yaptığı ulusal tatil."
         ),
         event_type="holiday",
+        impact_level="high",
+        attendance=None,
+        demand_effect=(
+            "Çin'in en büyük iki seyahat dalgasından biri. Çin çıkışlı uluslararası talep patlar; "
+            "kapasite kararlarının aylar önceden verilmesi gerekir."
+        ),
     ),
     AviationEvent(
         name="Diwali 2026",
@@ -251,6 +348,12 @@ EVENTS: list[AviationEvent] = [
             "diaspora rotalarında yılın en yoğun talep haftalarından."
         ),
         event_type="holiday",
+        impact_level="high",
+        attendance=None,
+        demand_effect=(
+            "Hindistan'ın en büyük seyahat dönemi. Hindistan bağlantılı hatlarda hem iç hem "
+            "diaspora talebi zirve yapar; iki yönlü dengesizlik belirgindir."
+        ),
     ),
     AviationEvent(
         name="159. IATA Slot Konferansı",
@@ -264,6 +367,12 @@ EVENTS: list[AviationEvent] = [
             "Havayolları ile slot koordinatörlerinin 2027 yaz tarifesi slotlarını "
             "pazarlık ettiği toplantı; ağ planlama ve kapasitenin kalbi."
         ),
+        impact_level="high",
+        attendance=1400,
+        demand_effect=(
+            "Bir sonraki sezonun slotları burada dağıtılır. Budapeşte'ye talep etkisi küçük, ama "
+            "konferansın çıktısı tüm ağın gelecek sezon kapasitesini belirler."
+        ),
     ),
     AviationEvent(
         name="APEX FTE EXPO Asia 2026",
@@ -276,6 +385,11 @@ EVENTS: list[AviationEvent] = [
         summary=(
             "APEX ve Future Travel Experience'ın ortak fuarı Marina Bay Sands'te: "
             "kabin içi eğlence, bağlantı ve yolcu deneyimi teknolojileri."
+        ),
+        impact_level="low",
+        attendance=3000,
+        demand_effect=(
+            "Singapur'a yolcu deneyimi ve teknoloji trafiği; bölgesel hatlarda sınırlı hareket."
         ),
     ),
     AviationEvent(
@@ -291,6 +405,12 @@ EVENTS: list[AviationEvent] = [
             "günlerini yaşadığı pencere."
         ),
         event_type="holiday",
+        impact_level="high",
+        attendance=None,
+        demand_effect=(
+            "ABD'nin yılın en yoğun iç hat dönemi. Kuzey Amerika bağlantılı hatlarda doluluk "
+            "tavan yapar; aktarma trafiği için de kritik hafta."
+        ),
     ),
     AviationEvent(
         name="Noel & Yılbaşı dönemi 2026-27",
@@ -305,6 +425,12 @@ EVENTS: list[AviationEvent] = [
             "ve ücretlerin zirve yaptığı dönem."
         ),
         event_type="holiday",
+        impact_level="high",
+        attendance=None,
+        demand_effect=(
+            "Küresel ölçekte yılın en uzun talep zirvesi. Neredeyse tüm pazarlarda iki haftalık "
+            "yüksek doluluk ve en yüksek ücret seviyeleri."
+        ),
     ),
     AviationEvent(
         name="Çin Yeni Yılı (Bahar Bayramı) 2027",
@@ -319,6 +445,12 @@ EVENTS: list[AviationEvent] = [
             "hareketliliği olan chunyun seyahat dalgasının merkezi haftası."
         ),
         event_type="holiday",
+        impact_level="high",
+        attendance=None,
+        demand_effect=(
+            "Dünyanın en büyük insan hareketi. Çin ve Güneydoğu Asya hatlarında haftalar süren "
+            "talep zirvesi; dönüş yönü ayrı planlanmalı."
+        ),
     ),
     AviationEvent(
         name="Avalon Australian International Airshow 2027",
@@ -333,6 +465,11 @@ EVENTS: list[AviationEvent] = [
             "ardından halka açık gösteri programı."
         ),
         event_type="airshow",
+        impact_level="low",
+        attendance=75000,
+        demand_effect=(
+            "Melbourne'e ağırlıklı iç hat talebi; uluslararası hatlarda etkisi sınırlı."
+        ),
     ),
     AviationEvent(
         name="Ramazan Bayramı 2027",
@@ -347,6 +484,12 @@ EVENTS: list[AviationEvent] = [
             "rotalarında yoğun talep penceresi."
         ),
         event_type="holiday",
+        impact_level="high",
+        attendance=None,
+        demand_effect=(
+            "Türkiye ve İslam dünyasında en yoğun seyahat dönemlerinden biri. İç hat ve gurbetçi "
+            "trafiğinde bayram öncesi/sonrası çift zirve oluşur."
+        ),
     ),
     AviationEvent(
         name="Routes Asia 2027",
@@ -359,6 +502,12 @@ EVENTS: list[AviationEvent] = [
         summary=(
             "Asya'nın rota geliştirme forumu ilk kez Yeni Delhi'de; bölgeye yeni hat "
             "kararlarının şekillendiği buluşma."
+        ),
+        impact_level="medium",
+        attendance=1200,
+        demand_effect=(
+            "Asya ağ planlama buluşması. Yeni Delhi'ye iş trafiği artar; bölgedeki hat duyuruları "
+            "bu hafta yoğunlaşır."
         ),
     ),
     AviationEvent(
@@ -374,6 +523,12 @@ EVENTS: list[AviationEvent] = [
             "talep zirvesi. Ortodoks Paskalyası 2 Mayıs'ta ayrıca izlenmeli."
         ),
         event_type="holiday",
+        impact_level="high",
+        attendance=None,
+        demand_effect=(
+            "Avrupa'nın ilk büyük tatil dalgası. Kısa mesafe tatil hatlarında doluluk ve ücretler "
+            "sezon açılışını belirler."
+        ),
     ),
     AviationEvent(
         name="MRO Americas 2027",
@@ -386,6 +541,12 @@ EVENTS: list[AviationEvent] = [
         summary=(
             "Aviation Week'in Amerika kıtası MRO fuarı: 19.000+ katılımcı, 1.000+ "
             "stant, 93+ ülke."
+        ),
+        impact_level="medium",
+        attendance=17000,
+        demand_effect=(
+            "Orlando'ya teknik ve tedarik trafiği; ABD iç hatlarında üç günlük iş seyahati "
+            "artışı."
         ),
     ),
     AviationEvent(
@@ -401,6 +562,12 @@ EVENTS: list[AviationEvent] = [
             "zirvelerinden biri."
         ),
         event_type="festival",
+        impact_level="high",
+        attendance=None,
+        demand_effect=(
+            "Tayland'ın en büyük tatil dönemi. Bangkok ve Phuket hatlarında hem gelen turist hem "
+            "iç seyahat talebi zirve yapar."
+        ),
     ),
     AviationEvent(
         name="Japonya Altın Haftası 2027",
@@ -415,6 +582,12 @@ EVENTS: list[AviationEvent] = [
             "zirve haftası."
         ),
         event_type="holiday",
+        impact_level="high",
+        attendance=None,
+        demand_effect=(
+            "Japonya'nın en yoğun tatil haftası. Japonya çıkışlı uluslararası talep patlar; dönüş "
+            "yönünde de yüksek doluluk."
+        ),
     ),
     AviationEvent(
         name="Kurban Bayramı 2027",
@@ -429,6 +602,12 @@ EVENTS: list[AviationEvent] = [
             "Suudi Arabistan rotalarında yoğun trafik."
         ),
         event_type="holiday",
+        impact_level="high",
+        attendance=None,
+        demand_effect=(
+            "Türkiye, Orta Doğu ve Kuzey Afrika'da yoğun seyahat dönemi. Hac öncesi trafikle "
+            "birleştiğinde Suudi Arabistan hatlarında ayrı bir zirve oluşur."
+        ),
     ),
     AviationEvent(
         name="FIFA Kadınlar Dünya Kupası 2027",
@@ -443,6 +622,12 @@ EVENTS: list[AviationEvent] = [
             "dahil 8 şehirde; Brezilya'ya uluslararası talep dalgası yaratacak."
         ),
         event_type="sports",
+        impact_level="medium",
+        attendance=None,
+        demand_effect=(
+            "Brezilya'nın sekiz şehrine bir ay boyunca dağılmış talep. Etki tek bir zirve değil, "
+            "maç takvimine göre şehirler arası dalgalanma olarak görünür."
+        ),
     ),
 ]
 
@@ -494,6 +679,9 @@ async def _upsert_calendar_rows(db: AsyncSession) -> int:
                     url=event.url,
                     summary_tr=event.summary,
                     event_type=event.event_type,
+                    impact_level=event.impact_level,
+                    attendance=event.attendance,
+                    demand_effect_tr=event.demand_effect,
                 )
             )
             inserted += 1
@@ -507,6 +695,9 @@ async def _upsert_calendar_rows(db: AsyncSession) -> int:
             existing.region = event.region
             existing.summary_tr = event.summary
             existing.event_type = event.event_type
+            existing.impact_level = event.impact_level
+            existing.attendance = event.attendance
+            existing.demand_effect_tr = event.demand_effect
     await db.flush()
     return inserted
 

@@ -2,6 +2,7 @@ import type { LucideIcon } from "lucide-react";
 import {
   Archive,
   Globe2,
+  GraduationCap,
   LayoutDashboard,
   Lightbulb,
   Newspaper,
@@ -28,6 +29,7 @@ export const primaryNav: NavItem[] = [
   { href: "/oneriler", label: "Öneriler", icon: Sparkles },
   { href: "/analiz", label: "Analiz", icon: Table2 },
   { href: "/hublar", label: "Hub'lar", icon: Globe2 },
+  { href: "/know-how", label: "Know How", icon: GraduationCap },
   { href: "/biz", label: "BİZ", icon: Star },
   { href: "/archive", label: "Arşiv", icon: Archive },
   { href: "/search", label: "Ara", icon: Search },

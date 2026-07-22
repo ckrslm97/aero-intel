@@ -9,7 +9,7 @@ never drift apart.
 """
 from datetime import date
 
-from sqlalchemy import Date, String, Text
+from sqlalchemy import Date, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
@@ -33,3 +33,18 @@ class AviationEvent(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     url: Mapped[str] = mapped_column(String(500), unique=True)
     summary_tr: Mapped[str] = mapped_column(Text, default="")
     event_type: Mapped[str] = mapped_column(String(20), index=True)  # see EVENT_TYPES
+
+    # What the calendar is actually for. "Farnborough is in July" is a fact any
+    # search engine has; what a revenue-management desk needs is how hard it
+    # hits demand and what to do about it. Curated in app/ingest/events_seed.py
+    # alongside the dates, never inferred -- an invented impact level would be
+    # worse than none, because it reads exactly like a measured one.
+    impact_level: Mapped[str] = mapped_column(String(10), default="medium", index=True)
+    # Rough headcount, where the organiser publishes one. None = not published.
+    attendance: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # One line, in Turkish: what this does to traffic and fares on the routes
+    # into that city, and over what window.
+    demand_effect_tr: Mapped[str] = mapped_column(Text, default="")
+
+
+IMPACT_LEVELS = ("high", "medium", "low")

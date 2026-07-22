@@ -1,6 +1,6 @@
 "use client";
 
-import { CalendarDays, ExternalLink, MapPin } from "lucide-react";
+import { CalendarDays, ExternalLink, Gauge, MapPin, Users } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { Skeleton } from "@/components/ui/skeleton";
@@ -25,6 +25,17 @@ const TYPE_CLASSES: Record<EventOut["event_type"], string> = {
   holiday: "bg-category-revenue-management/10 text-category-revenue-management",
   festival: "bg-category-events/10 text-category-events",
 };
+
+// Impact rides on the status palette, not on the type tints above: it is a
+// state (how hard this hits demand), not another category. Icon + word carry
+// the meaning, so the colour is never the only signal.
+const IMPACT_META: Record<EventOut["impact_level"], { label: string; className: string }> = {
+  high: { label: "Yüksek etki", className: "border-critical/40 bg-critical/10 text-critical" },
+  medium: { label: "Orta etki", className: "border-warning/40 bg-warning/10 text-warning" },
+  low: { label: "Düşük etki", className: "border-border bg-muted text-muted-foreground" },
+};
+
+const ATTENDANCE_FORMAT = new Intl.NumberFormat("tr-TR");
 
 function monthKey(iso: string): string {
   return iso.slice(0, 7); // YYYY-MM
@@ -200,6 +211,21 @@ export function EventsCalendar() {
                           ? `, ${event.country}`
                           : ""}
                       </span>
+                      <span
+                        className={cn(
+                          "flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
+                          IMPACT_META[event.impact_level].className,
+                        )}
+                      >
+                        <Gauge className="size-3" />
+                        {IMPACT_META[event.impact_level].label}
+                      </span>
+                      {event.attendance !== null && (
+                        <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                          <Users className="size-3.5" />
+                          {ATTENDANCE_FORMAT.format(event.attendance)} katılımcı
+                        </span>
+                      )}
                     </div>
                     <div className="flex items-start justify-between gap-3">
                       <span className="font-medium text-card-foreground group-hover:text-primary">
@@ -210,6 +236,14 @@ export function EventsCalendar() {
                     <p className="text-xs leading-relaxed text-muted-foreground">
                       {event.summary_tr}
                     </p>
+                    {/* The line the calendar exists for: dates are public, the
+                        read on demand is the part a desk can act on. */}
+                    {event.demand_effect_tr && (
+                      <p className="rounded-lg bg-muted/60 p-2.5 text-xs leading-relaxed">
+                        <span className="font-medium">Talebe etkisi: </span>
+                        <span className="text-muted-foreground">{event.demand_effect_tr}</span>
+                      </p>
+                    )}
                   </a>
                 ))}
               </div>

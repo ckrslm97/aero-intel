@@ -103,3 +103,43 @@ async def test_seed_writes_structured_calendar_rows(db_session):
     farnborough = by_url["https://www.farnboroughairshow.com/"]
     assert farnborough.starts == date(2026, 7, 20)
     assert farnborough.event_type == "airshow"
+
+
+# --- Round-8 remainder: the calendar carries demand judgement, not just dates ---
+
+def test_every_event_says_what_it_does_to_demand():
+    """A calendar that only says "Farnborough is in July" is a search engine.
+    The reason this one exists is the line underneath."""
+    from app.ingest.events_seed import EVENTS
+    from app.models.event import IMPACT_LEVELS
+
+    for event in EVENTS:
+        assert event.impact_level in IMPACT_LEVELS, event.name
+        assert event.demand_effect.strip(), event.name
+        # Attendance is optional on purpose -- most holidays have no headcount,
+        # and inventing one would look exactly like a published figure.
+        assert event.attendance is None or event.attendance > 0, event.name
+
+
+async def test_seed_writes_and_refreshes_the_demand_fields(db_session):
+    from sqlalchemy import select
+
+    from app.ingest.events_seed import EVENTS, seed_events
+    from app.models.event import AviationEvent as AviationEventRow
+
+    await seed_events(db_session)
+    rows = {
+        row.url: row
+        for row in (await db_session.execute(select(AviationEventRow))).scalars()
+    }
+    assert len(rows) == len(EVENTS)
+    for event in EVENTS:
+        row = rows[event.url]
+        assert row.impact_level == event.impact_level
+        assert row.demand_effect_tr == event.demand_effect
+        assert row.attendance == event.attendance
+
+    # Re-running refreshes in place rather than duplicating.
+    await seed_events(db_session)
+    again = (await db_session.execute(select(AviationEventRow))).scalars().all()
+    assert len(again) == len(EVENTS)

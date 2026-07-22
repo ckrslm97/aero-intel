@@ -204,4 +204,9 @@ export interface EventOut {
   summary_tr: string;
   event_type: "airshow" | "conference" | "sports" | "holiday" | "festival";
   date_range_tr: string;
+  /** How hard the event moves demand into its market. Curated, never inferred. */
+  impact_level: "high" | "medium" | "low";
+  /** Organiser-published headcount, or null when there isn't one. */
+  attendance: number | null;
+  demand_effect_tr: string;
 }

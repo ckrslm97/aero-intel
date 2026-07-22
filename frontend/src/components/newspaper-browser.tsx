@@ -4,6 +4,7 @@ import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { CalendarDays, Download, List, Map as MapIcon } from "lucide-react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
 import { ArticleCard } from "@/components/article-card";
@@ -40,11 +41,28 @@ const PAGE_LIMIT = 30;
 export function NewspaperBrowser() {
   const reduceMotion = useReducedMotion();
 
-  const [categorySlug, setCategorySlug] = useState(CATEGORIES[0].slug); // Gelir Yönetimi default
-  const [subcategorySlug, setSubcategorySlug] = useState<string | null>(null);
-  const [regionSlug, setRegionSlug] = useState<string | null>(null);
+  // Opening filters can come from the URL, so Know How's "Gelir Yönetimi
+  // haberleri" link lands on the paper already filtered and a filtered view is
+  // shareable. Read once, as the initial state: after that the chips own the
+  // filters, and re-reading the URL would fight them.
+  const searchParams = useSearchParams();
+  const initial = useMemo(() => {
+    const wanted = searchParams.get("category");
+    return {
+      // An unknown slug would filter to nothing and look broken; fall back.
+      category: CATEGORIES.some((c) => c.slug === wanted) ? wanted! : CATEGORIES[0].slug,
+      subcategory: searchParams.get("subcategory"),
+      region: searchParams.get("region"),
+      airline: searchParams.get("airline"),
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberately the first URL only
+  }, []);
+
+  const [categorySlug, setCategorySlug] = useState(initial.category); // Gelir Yönetimi default
+  const [subcategorySlug, setSubcategorySlug] = useState<string | null>(initial.subcategory);
+  const [regionSlug, setRegionSlug] = useState<string | null>(initial.region);
   // An IATA code, or the aggregate values "RIVALS" / "ALL" the API understands.
-  const [airlineCode, setAirlineCode] = useState<string | null>(null);
+  const [airlineCode, setAirlineCode] = useState<string | null>(initial.airline);
   const [eventView, setEventView] = useState<"news" | "calendar">("news");
   const [showMap, setShowMap] = useState(false);
 
