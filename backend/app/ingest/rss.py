@@ -2,6 +2,7 @@
 Eurocontrol, FAA, ICAO, ...). Network or parse failures are caught and logged so a
 single broken feed never blocks the rest of the ingestion run.
 """
+import re
 from datetime import datetime, timezone
 
 import feedparser
@@ -25,10 +26,26 @@ USER_AGENT = (
 REQUEST_TIMEOUT = httpx.Timeout(10.0)
 
 
+# Some feeds escape their HTML twice: the XML carries "&lt;span&gt;", so one
+# get_text() pass decodes the entities and hands back a string of literal tags
+# instead of prose. Caught in production after the source list grew -- an
+# Aviation Week story rendered on the site as
+# '<span>Turkey Signs $11 Billion Eurofighter Deal</span> <span lang=""...'.
+# Bounded rather than a while-loop: two passes covers double encoding, and an
+# unbounded loop on hostile input is a denial-of-service waiting to happen.
+_MAX_UNESCAPE_PASSES = 2
+_LOOKS_LIKE_MARKUP = re.compile(r"<[a-zA-Z/][^>]*>")
+
+
 def _strip_html(raw_html: str) -> str:
-    if not raw_html:
-        return ""
-    return BeautifulSoup(raw_html, "lxml").get_text(separator=" ", strip=True)
+    text = raw_html
+    for _ in range(_MAX_UNESCAPE_PASSES):
+        if not text:
+            return ""
+        text = BeautifulSoup(text, "lxml").get_text(separator=" ", strip=True)
+        if not _LOOKS_LIKE_MARKUP.search(text):
+            break
+    return text
 
 
 def _entry_content(entry: feedparser.FeedParserDict) -> str:

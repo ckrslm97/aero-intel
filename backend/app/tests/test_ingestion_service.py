@@ -75,3 +75,29 @@ async def test_run_ingestion_skips_already_seen_urls(db_session, monkeypatch):
 
     assert first == 1
     assert second == 0
+
+
+def test_double_escaped_feed_html_is_not_shown_as_prose():
+    """Some feeds escape their HTML twice, so a single unescape pass hands back
+    literal tags. Production: an Aviation Week story rendered on the site as
+    '<span>Turkey Signs $11 Billion Eurofighter Deal</span> <span lang=""...'.
+    """
+    from app.ingest.rss import _strip_html
+
+    once_escaped = "<p>Turkish Airlines adds <b>Lima</b> to its network.</p>"
+    assert _strip_html(once_escaped) == "Turkish Airlines adds Lima to its network."
+
+    twice_escaped = (
+        "&lt;span class=&quot;title&quot;&gt;Turkey Signs $11 Billion Eurofighter Deal"
+        "&lt;/span&gt; &lt;span&gt;Reported this week.&lt;/span&gt;"
+    )
+    cleaned = _strip_html(twice_escaped)
+    assert "<span" not in cleaned
+    assert "Turkey Signs $11 Billion Eurofighter Deal" in cleaned
+    assert "Reported this week." in cleaned
+
+    # Ordinary prose containing a comparison must survive untouched.
+    assert _strip_html("Load factor rose, cost per seat < last year") == (
+        "Load factor rose, cost per seat < last year"
+    )
+    assert _strip_html("") == ""
