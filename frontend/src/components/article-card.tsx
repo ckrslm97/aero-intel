@@ -1,6 +1,7 @@
 import { ExternalLink, Minus, TrendingDown, TrendingUp } from "lucide-react";
 import { memo } from "react";
 
+import { AirlineLogo } from "@/components/airline-logo";
 import { Badge } from "@/components/ui/badge";
 import { getCategory, getSubcategoryLabel } from "@/lib/taxonomy";
 import { cn } from "@/lib/utils";
@@ -89,6 +90,28 @@ function ArticleCardComponent({
         <Badge variant="secondary" className="text-[10px] uppercase">
           {article.source.name}
         </Badge>
+        {/* Who the story is about, read at a glance. Capped at three: a wire
+            round-up can name a dozen carriers, and a row of twelve logos stops
+            being information. */}
+        {article.airlines.length > 0 && (
+          <span className="flex items-center gap-1" title={article.airlines.map((a) => a.name).join(", ")}>
+            {article.airlines.slice(0, 3).map((airline) =>
+              airline.code ? (
+                <AirlineLogo
+                  key={airline.code}
+                  code={airline.code}
+                  name={airline.name}
+                  className="size-3.5"
+                />
+              ) : null,
+            )}
+            {article.airlines.length > 3 && (
+              <span className="text-[10px] text-muted-foreground">
+                +{article.airlines.length - 3}
+              </span>
+            )}
+          </span>
+        )}
         {enrichment && (
           <span className="flex items-center gap-1 text-[10px] font-medium text-muted-foreground">
             <SentimentIcon sentiment={enrichment.sentiment} />

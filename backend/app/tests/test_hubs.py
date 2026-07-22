@@ -110,7 +110,12 @@ async def test_hub_detail_reports_the_carriers_the_coverage_is_about(db_session)
     detail = await hub_detail(db_session, "ist")  # case-insensitive
     assert detail["code"] == "IST"
     assert detail["article_count"] == 3
-    assert detail["carriers"][0] == {"code": "TK", "name": "Turkish Airlines", "article_count": 2}
+    # The airlines based here, from the reference table...
+    assert detail["carriers"] == ["TK"]
+    # ...kept separate from the ones this hub's coverage is actually about.
+    assert detail["carriers_seen"][0] == {
+        "code": "TK", "name": "Turkish Airlines", "article_count": 2
+    }
     assert dict((c["slug"], c["count"]) for c in detail["categories"]) == {
         "network": 2, "fleet": 1
     }

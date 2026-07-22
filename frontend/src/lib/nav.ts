@@ -1,6 +1,7 @@
 import type { LucideIcon } from "lucide-react";
 import {
   Archive,
+  Globe2,
   LayoutDashboard,
   Lightbulb,
   Newspaper,
@@ -26,6 +27,7 @@ export const primaryNav: NavItem[] = [
   { href: "/insights", label: "İçgörüler", icon: Lightbulb },
   { href: "/oneriler", label: "Öneriler", icon: Sparkles },
   { href: "/analiz", label: "Analiz", icon: Table2 },
+  { href: "/hublar", label: "Hub'lar", icon: Globe2 },
   { href: "/biz", label: "BİZ", icon: Star },
   { href: "/archive", label: "Arşiv", icon: Archive },
   { href: "/search", label: "Ara", icon: Search },

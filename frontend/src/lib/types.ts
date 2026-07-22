@@ -24,6 +24,12 @@ export interface ArticleEnrichmentOut {
   is_translated: boolean;
 }
 
+/** A named entity the story mentions. `code` is IATA where there is one. */
+export interface MentionOut {
+  name: string;
+  code: string | null;
+}
+
 export interface ArticleOut {
   id: string;
   url: string;
@@ -35,11 +41,57 @@ export interface ArticleOut {
   source: SourceOut;
   enrichment: ArticleEnrichmentOut | null;
   reading_time_minutes: number;
+  airlines: MentionOut[];
+  airports: MentionOut[];
 }
 
 export interface ArticleListOut {
   total: number;
   items: ArticleOut[];
+}
+
+export interface HubOut {
+  code: string;
+  name: string;
+  city: string;
+  country: string;
+  region: string;
+  lat: number;
+  lon: number;
+  carriers: string[];
+  note_tr: string;
+  article_count: number;
+}
+
+/** A pair of airports the archive keeps discussing together. Not a schedule --
+ * we have no OAG feed on the free tier. */
+export interface HubRouteOut {
+  from: string;
+  to: string;
+  from_lat: number;
+  from_lon: number;
+  to_lat: number;
+  to_lon: number;
+  article_count: number;
+}
+
+export interface HubOverviewOut {
+  days: number;
+  hubs: HubOut[];
+  routes: HubRouteOut[];
+}
+
+export interface HubDetailOut extends Omit<HubOut, "article_count"> {
+  days: number;
+  article_count: number;
+  categories: { slug: string; count: number }[];
+  carriers_seen: { code: string; name: string; article_count: number }[];
+}
+
+export interface CountryOut {
+  name: string;
+  article_count: number;
+  region: string | null;
 }
 
 export interface EditionSectionOut {

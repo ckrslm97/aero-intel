@@ -162,7 +162,12 @@ async def hub_detail(db: AsyncSession, code: str, days: int = 90) -> dict | None
         "days": days,
         "article_count": total,
         "categories": [{"slug": slug, "count": count} for slug, count in by_category],
-        "carriers": [
+        # Deliberately NOT "carriers": that key already holds the airlines based
+        # here (from _hub_payload) and a second one would silently overwrite it.
+        # The two are different questions, and the gap between them is the
+        # interesting part -- coverage of a hub is often about a visiting
+        # carrier, not a resident one.
+        "carriers_seen": [
             {"code": code, "name": name, "article_count": count}
             for code, name, count in carriers
         ],
