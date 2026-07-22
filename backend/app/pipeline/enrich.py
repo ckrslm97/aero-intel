@@ -56,6 +56,19 @@ def _is_listicle(headline: str) -> bool:
     return bool(_LISTICLE_START.match(headline))
 
 
+# How many articles a run may work through per unit of LLM budget. The batch
+# limit exists to bound *token spend*, but it was bounding throughput too:
+# articles the relevance gate rejects cost nothing and were still counted
+# against it. Measured after the source list went 28 -> 57: intake reached 971
+# articles/day while the pipeline could only touch 24 x 12 runs = 288, so 935
+# articles sat uncategorised and "(belirtilmemiş)" became the largest row on the
+# Analiz page. A run now walks this many times the batch, spending the LLM on at
+# most `limit` of them and giving the rest the free heuristic pass; they stay
+# searchable and filterable, and translate-backlog upgrades the important ones
+# on later runs.
+LOCAL_FANOUT = 8
+
+
 def _importance_score(confidence: float, corroborating_count: int) -> float:
     """More corroborating independent sources -> higher importance; this is what
     the Top-10 story board (M3) ranks by."""
@@ -148,18 +161,26 @@ async def enrich_pending_articles(db: AsyncSession, limit: int | None = None) ->
     local = HeuristicProvider()
     entity_repo = EntityRepository(db)
 
-    articles = await _select_pending(db, limit)
+    articles = await _select_pending(db, limit * LOCAL_FANOUT if limit else None)
     skipped = 0
     collisions = 0
+    llm_used = 0
 
     for article in articles:
         # The gate. Scored locally, before a single network call: an article
         # with no commercial-aviation signal is enriched by the heuristic alone
         # so the LLM budget goes to the stories this portal is about.
         relevance = score_article(article.title, article.raw_content)
-        worth_llm = relevance.score >= settings.llm_relevance_threshold
+        # `limit` is a token budget, so it counts only the articles that reach
+        # the model. Once it is spent the run keeps going on the free path
+        # instead of stopping, which is what keeps the backlog draining.
+        worth_llm = relevance.score >= settings.llm_relevance_threshold and (
+            limit is None or llm_used < limit
+        )
         engine = provider if worth_llm else local
-        if not worth_llm:
+        if worth_llm:
+            llm_used += 1
+        else:
             skipped += 1
 
         headline = await engine.generate_headline(article.title, article.raw_content)
@@ -283,9 +304,14 @@ async def translate_pending_articles(db: AsyncSession, limit: int = 12) -> int:
 
     The steady-state cron translates new articles as they're ingested, but a
     backlog enriched before a translator was configured (or by the heuristic,
-    which can't translate) stays English. This backfills it a batch at a time,
-    freshest first, so the site fills with Turkish over successive runs without
-    ever un-publishing an article the way a full re-enrich would.
+    which can't translate) stays English. This backfills it a batch at a time
+    without ever un-publishing an article the way a full re-enrich would.
+
+    Ordered by importance, then recency. Freshest-first was fine while the
+    backlog was small, but once the heuristic path started absorbing the
+    overflow (see LOCAL_FANOUT) the queue filled with routine wire copy, and
+    strict recency spent the translation budget on whatever happened to arrive
+    last rather than on the stories the desk opens the site for.
 
     Only rows with translated_at IS NULL are touched, which by construction
     excludes the curated events (they carry translation_provider='curated' and a
@@ -301,7 +327,10 @@ async def translate_pending_articles(db: AsyncSession, limit: int = 12) -> int:
             Article.status == "enriched",
             ArticleEnrichment.translated_at.is_(None),
         )
-        .order_by(Article.published_at.desc().nulls_last())
+        .order_by(
+            ArticleEnrichment.importance_score.desc().nulls_last(),
+            Article.published_at.desc().nulls_last(),
+        )
         .limit(limit)
     )
     enrichments = list(result.scalars().all())

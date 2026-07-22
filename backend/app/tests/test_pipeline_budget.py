@@ -416,3 +416,114 @@ def test_the_model_keeps_its_own_category_when_it_leads():
         "demand grew; bookings and revenue per passenger rose across the network.",
     )
     assert strong.better_category_than("revenue_management") is None
+
+
+# --- throughput vs. token budget, after the source list doubled ---
+
+async def test_the_batch_limit_bounds_llm_calls_not_throughput(db_session, monkeypatch):
+    """The limit exists to cap token spend, but it was capping how many articles
+    a run could clear at all. Measured after the source list went 28 -> 57:
+    971 articles ingested a day against 24 x 12 runs of capacity, so 935 sat
+    with no category and "(belirtilmemiş)" became the largest row on Analiz.
+    A run must now clear the queue on the free path once the budget is spent.
+    """
+    from app.core.config import get_settings
+    from app.llm.heuristic import HeuristicProvider
+
+    get_settings.cache_clear()
+    monkeypatch.setenv("LLM_RELEVANCE_THRESHOLD", "0")  # every article is worth it
+
+    class CountingProvider(HeuristicProvider):
+        """Stands in for Groq; counts the articles that actually reach it."""
+
+        def __init__(self):
+            super().__init__()
+            self.seen: set[str] = set()
+
+        async def categorize(self, title, body):
+            self.seen.add(title)
+            return await super().categorize(title, body)
+
+    provider = CountingProvider()
+    monkeypatch.setattr("app.pipeline.enrich.get_llm_provider", lambda: provider)
+
+    source = Source(name="Flood", url="https://example.com/flood", source_type="rss")
+    db_session.add(source)
+    await db_session.flush()
+    for i in range(10):
+        db_session.add(
+            Article(
+                source_id=source.id, url=f"https://example.com/flood/{i}",
+                title=f"Emirates raises fares on Gulf routes {i}",
+                raw_content="Unit revenue, yield and load factor all rose this quarter.",
+                published_at=NOW, fetched_at=NOW, content_hash=f"flood{i}",
+                status="deduped",
+            )
+        )
+    await db_session.commit()
+
+    # Budget for two; the other eight still get categorised, for free.
+    assert await enrich_pending_articles(db_session, limit=2) == 10
+    assert len(provider.seen) == 2
+
+    from sqlalchemy import select
+
+    rows = list((await db_session.execute(select(ArticleEnrichment))).scalars())
+    assert len(rows) == 10
+    assert all(row.category for row in rows)  # nothing lands as "(belirtilmemiş)"
+
+    get_settings.cache_clear()
+
+
+async def test_translation_backlog_serves_the_important_stories_first(db_session, monkeypatch):
+    """Once the heuristic path absorbs the overflow the untranslated queue fills
+    with routine wire copy, and strict recency spends the translation budget on
+    whatever arrived last instead of on what the desk actually reads."""
+    from datetime import timedelta
+
+    from app.pipeline.enrich import translate_pending_articles
+
+    class Translator:
+        name = "test-translator"
+
+        async def translate(self, text, target="tr"):
+            return f"tr:{text}"
+
+    monkeypatch.setattr("app.pipeline.enrich.get_llm_provider", lambda: Translator())
+
+    source = Source(name="Queue", url="https://example.com/queue", source_type="rss")
+    db_session.add(source)
+    await db_session.flush()
+
+    async def _untranslated(slug, importance, published_at):
+        article = Article(
+            source_id=source.id, url=f"https://example.com/q/{slug}", title=slug,
+            raw_content="body", published_at=published_at, fetched_at=NOW,
+            content_hash=slug, status="enriched",
+        )
+        db_session.add(article)
+        await db_session.flush()
+        db_session.add(
+            ArticleEnrichment(
+                article_id=article.id, headline=slug, summary="s",
+                category="revenue_management", importance_score=importance,
+            )
+        )
+        await db_session.flush()
+
+    # The important story is also the oldest -- recency alone would skip it.
+    await _untranslated("routine", 0.20, NOW)
+    await _untranslated("decisive", 0.90, NOW - timedelta(days=2))
+    await _untranslated("middling", 0.50, NOW - timedelta(days=1))
+    await db_session.commit()
+
+    assert await translate_pending_articles(db_session, limit=1) == 1
+
+    from sqlalchemy import select
+
+    translated = [
+        row.headline
+        for row in (await db_session.execute(select(ArticleEnrichment))).scalars()
+        if row.translated_at is not None
+    ]
+    assert translated == ["decisive"]

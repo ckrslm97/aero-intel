@@ -7,15 +7,33 @@ name: Daily edition + PDF
 on:
   schedule:
     # Not one alarm clock -- a series of knocks. GitHub queues scheduled
-    # workflows and, measured on this repo over four days, fired a 04:15 UTC
-    # schedule at 06:15, 06:41, 07:25 and 06:38: an average delay of 2h30m.
+    # workflows; every entry below fires late, and by a different amount each
+    # day. Measured on this repo on 22 Jul (scheduled -> actually started):
+    #   03:00 -> 05:45 (2h46)   06:40 -> 09:14 (2h34)
+    #   04:30 -> 07:08 (2h38)   07:00 -> 09:26 (2h26)
+    #   06:00 -> 08:03 (2h03)   07:30 -> 09:55 (2h25)
+    #   06:20 -> 08:47 (2h27)   08:15 -> 10:34 (2h19)
     # No single cron entry can therefore deliver "every morning at nine".
-    # These fire through the small hours; each run asks
-    # app/services/delivery_window.py whether the send window (09:00 Istanbul
-    # = 06:00 UTC) is open, and only the first one inside it sends. Sending is
-    # idempotent, so the extra runs cost a few seconds and nothing else.
+    # Each run asks app/services/delivery_window.py whether the send window
+    # (09:00 Istanbul = 06:00 UTC) is open; only the first one inside it sends,
+    # and sending is idempotent, so the extra runs cost nothing.
+    #
+    # The first version of this list left a 1h22m hole: the 03:00 entry landed
+    # at 08:45 Istanbul -- fifteen minutes too early to send -- and the next
+    # arrival was 10:07, so the mail went out at 10:08 instead of just after
+    # nine. With the delay running 2h03-2h46, an *arrival* in 06:00-06:40 UTC
+    # needs a *schedule* somewhere in 03:15-04:30, so that band is now covered
+    # every quarter hour. Whatever the queue does on a given day, one of these
+    # lands in the window.
     - cron: "0 3 * * *"
+    - cron: "15 3 * * *"
+    - cron: "30 3 * * *"
+    - cron: "45 3 * * *"
+    - cron: "0 4 * * *"
+    - cron: "15 4 * * *"
     - cron: "30 4 * * *"
+    # Backstops, in case the queue is fast that morning and every entry above
+    # arrives before nine.
     - cron: "0 6 * * *"
     - cron: "20 6 * * *"
     - cron: "40 6 * * *"
@@ -48,9 +66,28 @@ jobs:
       run:
         working-directory: backend
     steps:
+      # Thirteen knocks a day, but only the ones that arrive after 09:00
+      # Istanbul can possibly send. Answering that with `date` costs two
+      # seconds; letting the run reach `daily-if-due` costs four minutes of
+      # pip install and a Chromium download first. Manual dispatches skip the
+      # gate -- if a human asked for an edition, they want it now.
+      - name: Is the send window open?
+        id: gate
+        run: |
+          hour=$(TZ=Europe/Istanbul date +%-H)
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ "$hour" -ge 9 ]; then
+            echo "due=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "due=false" >> "$GITHUB_OUTPUT"
+            echo "Istanbul time is ${hour}:xx -- too early, stopping here."
+          fi
+        working-directory: .
+
       - uses: actions/checkout@v4
+        if: steps.gate.outputs.due == 'true'
 
       - uses: actions/setup-python@v5
+        if: steps.gate.outputs.due == 'true'
         with:
           python-version: "3.11"
           cache: "pip"
@@ -59,10 +96,12 @@ jobs:
           cache-dependency-path: backend/requirements-dev.txt
 
       - name: Install dependencies
+        if: steps.gate.outputs.due == 'true'
         run: pip install -r requirements-dev.txt
 
       # Chromium is large; cache it across runs keyed on the Playwright version.
       - name: Cache Playwright browsers
+        if: steps.gate.outputs.due == 'true'
         id: playwright-cache
         uses: actions/cache@v4
         with:
@@ -70,9 +109,11 @@ jobs:
           key: ${{ runner.os }}-playwright-${{ hashFiles('backend/requirements-dev.txt') }}
 
       - name: Install Chromium
+        if: steps.gate.outputs.due == 'true'
         run: playwright install --with-deps chromium
 
       - name: Build edition + render PDF
+        if: steps.gate.outputs.due == 'true'
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           LLM_PROVIDER: openai_compat

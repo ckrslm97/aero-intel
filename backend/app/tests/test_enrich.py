@@ -5,7 +5,7 @@ from sqlalchemy import select
 from app.models.article import Article, ArticleEnrichment
 from app.models.entity import ArticleEntity
 from app.models.source import Source
-from app.pipeline.enrich import enrich_pending_articles
+from app.pipeline.enrich import LOCAL_FANOUT, enrich_pending_articles
 
 
 async def test_enrich_pending_articles_creates_enrichment_and_entities(db_session):
@@ -107,8 +107,9 @@ async def test_batch_limit_takes_from_both_ends_so_the_backlog_drains(db_session
     await db_session.flush()
 
     base = datetime(2026, 7, 1, tzinfo=timezone.utc)
-    # Six deduped articles, oldest (0) to newest (5) by published_at.
-    for i in range(6):
+    # Twenty deduped articles, oldest (0) to newest (19) by published_at --
+    # more than one run can take, which is when the two-ended split matters.
+    for i in range(20):
         db_session.add(
             Article(
                 source_id=source.id,
@@ -123,8 +124,8 @@ async def test_batch_limit_takes_from_both_ends_so_the_backlog_drains(db_session
         )
     await db_session.flush()
 
-    enriched = await enrich_pending_articles(db_session, limit=3)
-    assert enriched == 3
+    enriched = await enrich_pending_articles(db_session, limit=1)
+    assert enriched == LOCAL_FANOUT  # one article's worth of LLM, eight cleared
 
     enriched_titles = {
         row.title
@@ -133,20 +134,21 @@ async def test_batch_limit_takes_from_both_ends_so_the_backlog_drains(db_session
         ).scalars()
     }
     # The newest still lead...
-    assert "Airline news 5" in enriched_titles
+    assert "Airline news 19" in enriched_titles
     # ...but the oldest waiting article moved in the very same run.
     assert "Airline news 0" in enriched_titles
 
 
-async def test_a_capped_run_never_exceeds_its_budget(db_session):
-    """The two-ended selection must not hand back more articles than the cap --
-    that cap is the LLM budget."""
+async def test_a_capped_run_still_has_a_ceiling(db_session):
+    """The cap is a token budget, so a run may clear more articles than it has
+    LLM calls for (see LOCAL_FANOUT) -- but only a bounded multiple of them.
+    A scheduled run is not allowed to walk an arbitrarily long queue."""
     source = Source(name="S2", url="https://example.com/feed2", source_type="rss")
     db_session.add(source)
     await db_session.flush()
 
     base = datetime(2026, 7, 1, tzinfo=timezone.utc)
-    for i in range(10):
+    for i in range(40):
         db_session.add(
             Article(
                 source_id=source.id,
@@ -161,7 +163,7 @@ async def test_a_capped_run_never_exceeds_its_budget(db_session):
         )
     await db_session.flush()
 
-    assert await enrich_pending_articles(db_session, limit=4) == 4
+    assert await enrich_pending_articles(db_session, limit=4) == 4 * LOCAL_FANOUT
 
 
 async def test_enrich_works_on_articles_loaded_fresh_from_the_database(db_session):
