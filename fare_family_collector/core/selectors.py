@@ -71,10 +71,30 @@ SELECTORS: dict[str, SiteSelectors] = {
             "button[aria-label='Accept all']",
             "#onetrust-accept-btn-handler",
         ],
-        "origin_input": "input[name='portChooserInput-origin']",
-        "destination_input": "input[name='portChooserInput-destination']",
-        "date_input": "input[name='departureDate']",
-        "search_button": "button[aria-label='Search flights']",
+        # NOT: TK canlı formu dinamik ve sık değişir. Birden çok yedek seçici
+        # verilir; fill `.first` ile ilk eşleşeni kullanır. Canlıda doğrulamak için:
+        # `playwright codegen https://www.turkishairlines.com/en-int/flights/booking/`
+        "origin_input": (
+            "input[name='portChooserInput-origin'], "
+            "input#fromPort, input#booking-origin, "
+            "input[aria-label*='From' i], input[placeholder*='From' i], "
+            "input[data-testid*='origin' i], input[data-test*='from' i]"
+        ),
+        "destination_input": (
+            "input[name='portChooserInput-destination'], "
+            "input#toPort, input#booking-destination, "
+            "input[aria-label*='To' i], input[placeholder*='To' i], "
+            "input[data-testid*='destination' i], input[data-test*='to' i]"
+        ),
+        "date_input": (
+            "input[name='departureDate'], input#departureDate, "
+            "input[aria-label*='Depart' i], input[placeholder*='Depart' i], "
+            "input[data-testid*='depart' i]"
+        ),
+        "search_button": (
+            "button[aria-label='Search flights'], button[aria-label*='Search' i], "
+            "button[type='submit'], button[data-testid*='search' i]"
+        ),
         "fare_card": "div.fare-brand-card",
         "fare_name": ".fare-brand-name",
         "fare_price": ".fare-price .amount",

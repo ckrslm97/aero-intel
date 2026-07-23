@@ -168,13 +168,15 @@ async def _open_search(
     sel = scraper.selectors
     await _goto(page, sel["base_url"], config)
     await _accept_cookies(scraper, page, config)
-    await _wait_ready(scraper, page, config)
+    # Arama formu görünene kadar (sınırlı süre) bekle. Görünmezse HIZLICA ve NET
+    # bir hatayla çık — yanlış/eski seçicide her alan için tek tek asılı kalma.
+    await _ensure_form_ready(scraper, page, ond, config)
     await _human_pause(config)
-    await _fill_verified(scraper, page, sel.get("origin_input"), ond.origin, "origin", ond)
+    await _fill_verified(scraper, page, sel.get("origin_input"), ond.origin, "origin", ond, config)
     await _human_pause(config)
-    await _fill_verified(scraper, page, sel.get("destination_input"), ond.destination, "destination", ond)
+    await _fill_verified(scraper, page, sel.get("destination_input"), ond.destination, "destination", ond, config)
     await _human_pause(config)
-    await _fill_verified(scraper, page, sel.get("date_input"), travel_date, "date", ond)
+    await _fill_verified(scraper, page, sel.get("date_input"), travel_date, "date", ond, config)
     await _human_pause(config)
     await _click(page, sel.get("search_button"))
 
@@ -184,7 +186,8 @@ async def _goto(page: Any, url: str, config: AppConfig) -> None:
 
 
 async def _fill_verified(
-    scraper: BaseScraper, page: Any, selector: str | None, value: str, field: str, ond: OND
+    scraper: BaseScraper, page: Any, selector: str | None, value: str, field: str,
+    ond: OND, config: AppConfig,
 ) -> bool | None:
     """Alanı doldurur ve **oku-geri** ile girilen değerin doğruluğunu kontrol eder.
 
@@ -195,19 +198,26 @@ async def _fill_verified(
     """
     if not selector:
         return None
+    if page.is_closed():
+        raise ScrapeError(f"{scraper.airline_code} {ond}: sayfa kapandı ('{field}' doldurulamadan)")
+    # Kısa, sınırlı fill timeout: yanlış seçicide 30 sn asılı kalmak yerine hızlı düş.
+    # `.first`: virgülle ayrılmış yedek seçicilerde ilk eşleşeni al (strict-mode hatasını önler).
+    fill_timeout = min(config.page_timeout_ms, config.form_ready_timeout_ms)
+    loc = page.locator(selector).first
     try:
-        await page.fill(selector, value)
+        await loc.fill(value, timeout=fill_timeout)
     except Exception as exc:  # noqa: BLE001 - alan bulunamazsa akış yine denenir
-        scraper.log.warning("%s %s: '%s' alanı doldurulamadı: %s", scraper.airline_code, ond, field, exc)
+        scraper.log.warning("%s %s: '%s' alanı doldurulamadı: %s",
+                            scraper.airline_code, ond, field, _brief(exc))
         return False
 
-    actual = await _input_value(page, selector)
+    actual = await _input_value(loc)
     if not input_matches(value, actual):
         # İkinci deneme: temizle ve karakter karakter yaz (autocomplete tetiklensin).
         try:
-            await page.fill(selector, "")
-            await page.type(selector, value, delay=20)
-            actual = await _input_value(page, selector)
+            await loc.fill("")
+            await loc.type(value, delay=20)
+            actual = await _input_value(loc)
         except Exception:  # noqa: BLE001
             pass
 
@@ -221,11 +231,16 @@ async def _fill_verified(
     return False
 
 
-async def _input_value(page: Any, selector: str) -> str:
+async def _input_value(locator: Any) -> str:
     try:
-        return await page.input_value(selector)
+        return await locator.input_value()
     except Exception:  # noqa: BLE001
         return ""
+
+
+def _brief(exc: Exception) -> str:
+    """Playwright hata metinlerini kısaltır (ekranı dolduran 'Call log' gürültüsünü atar)."""
+    return str(exc).split("\nCall log:", 1)[0].strip()[:200]
 
 
 async def _click(page: Any, selector: str | None) -> None:
@@ -237,15 +252,25 @@ async def _click(page: Any, selector: str | None) -> None:
         log.debug("click atlandı (%s): %s", selector, exc)
 
 
-async def _wait_ready(scraper: BaseScraper, page: Any, config: AppConfig) -> None:
-    """Arama formu (ya da sonuç kartları) görünene kadar bekler — erken fill'i önler."""
+async def _ensure_form_ready(scraper: BaseScraper, page: Any, ond: OND, config: AppConfig) -> None:
+    """Arama formu görünene kadar (sınırlı süre) bekler; görünmezse hızlıca hata verir.
+
+    Origin (yoksa sonuç kartı) seçicisi `form_ready_timeout_ms` içinde görünmezse
+    seçicilerin güncel olmadığını varsayar ve `NotFoundError` fırlatır. Böylece
+    yanlış seçicide her alan için ayrı ayrı uzun süre asılı kalınmaz; OND hızlıca
+    başarısız olur ve (varsa) OTA yedeğine düşülür.
+    """
     selector = scraper.selectors.get("origin_input") or scraper.selectors.get("fare_card")
     if not selector:
         return
     try:
-        await page.wait_for_selector(selector, state="visible", timeout=config.page_timeout_ms)
-    except Exception:  # noqa: BLE001 - görünmezse yine de devam et
-        pass
+        await page.wait_for_selector(selector, state="visible", timeout=config.form_ready_timeout_ms)
+    except Exception as exc:  # noqa: BLE001
+        raise NotFoundError(
+            f"{scraper.airline_code} {ond}: arama formu ({selector}) "
+            f"{config.form_ready_timeout_ms} ms içinde görünmedi — seçiciler güncel "
+            f"olmayabilir ya da site anti-bot/farklı düzen sunuyor ({_brief(exc)})"
+        ) from exc
 
 
 async def _human_pause(config: AppConfig) -> None:

@@ -55,6 +55,9 @@ class AppConfig:
     headless: bool = field(default_factory=lambda: _env_bool("HEADLESS", True))
     page_timeout_ms: int = field(default_factory=lambda: _env_int("PAGE_TIMEOUT_MS", 30_000))
     navigation_timeout_ms: int = field(default_factory=lambda: _env_int("NAV_TIMEOUT_MS", 45_000))
+    # Arama formunun (origin input) görünmesi için üst sınır. Seçici güncel değilse
+    # bu süre sonunda OND HIZLICA başarısız sayılır (uzun uzun asılı kalmaz).
+    form_ready_timeout_ms: int = field(default_factory=lambda: _env_int("FORM_READY_TIMEOUT_MS", 15_000))
     user_agent: str = field(default_factory=lambda: os.getenv(
         "USER_AGENT",
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "

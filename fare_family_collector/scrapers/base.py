@@ -208,21 +208,26 @@ class BaseScraper(ABC):
         """
         if not selector:
             return
-        page.fill(selector, value)
-        get_value = getattr(page, "input_value", None)
-        if not callable(get_value):
-            return
-        try:
-            actual = get_value(selector)
-        except Exception:  # noqa: BLE001
-            return
-        from core.verify import input_matches
+        # Gerçek Playwright'ta locator(...).first: virgülle ayrılmış yedek seçicilerde
+        # ilk eşleşeni kullan (strict-mode hatasını önler) ve girilen değeri doğrula.
+        locator = getattr(page, "locator", None)
+        if callable(locator):
+            loc = page.locator(selector).first
+            loc.fill(value)
+            from core.verify import input_matches
 
-        if not input_matches(value, actual):
-            self.log.warning(
-                "%s: '%s' girdisi doğrulanamadı — beklenen %r, alanda %r",
-                self.airline_code, selector, value, actual,
-            )
+            try:
+                actual = loc.input_value()
+            except Exception:  # noqa: BLE001
+                return
+            if not input_matches(value, actual):
+                self.log.warning(
+                    "%s: '%s' girdisi doğrulanamadı — beklenen %r, alanda %r",
+                    self.airline_code, selector, value, actual,
+                )
+            return
+        # Sahte/basit page (testler): düz fill.
+        page.fill(selector, value)
 
     def _click(self, page: Any, selector: str | None) -> None:
         if not selector:
