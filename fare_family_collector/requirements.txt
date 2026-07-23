@@ -1,0 +1,13 @@
+# Çekirdek
+playwright==1.44.0
+pandas==2.2.2
+openpyxl==3.1.2
+
+# Arayüz
+customtkinter==5.2.2
+
+# Yapılandırma
+python-dotenv==1.0.1
+
+# Test (opsiyonel — geliştirme)
+pytest==8.2.0
