@@ -219,13 +219,25 @@ class CollectorRunner:
         self, pending: list[OND], travel_date: str | None,
         record: "Callable[[OND, list[FareBrand] | Exception], None]",
     ) -> None:
-        """Canlı toplama: taşıyıcıya göre grupla, her grubu async çok-sekme motoruyla çek.
+        """Canlı toplama: önce resmi API'ler, sonra tarayıcı (çok-sekme), sonra OTA.
 
-        Taşıyıcı grupları bir thread havuzunda **paralel** işlenir (her thread kendi
-        olay döngüsü + tarayıcısı); her grup **içinde** ise `pages_per_browser` kadar
-        sekme **eşzamanlı** sorgu atar ve çerez tek sefer kabul edilir.
+        Sıra:
+        1. **Resmi API'ler** (Duffel/Amadeus) — kimlik bilgisi varsa OND başına
+           denenir; en güvenilir kaynak. Veri gelen OND'ler burada kaydedilir.
+        2. Kalan OND'ler **taşıyıcıya göre** gruplanır; her grup thread havuzunda
+           **paralel**, grup içinde `pages_per_browser` kadar sekme **eşzamanlı**
+           çekilir (çerez tek sefer kabul edilir).
+        3. Havayolu sitesinden veri gelmezse OTA yedeği (`_run_carrier_group` içinde).
         """
         resolved = self._resolve_travel_date(travel_date)
+
+        # 1) Resmi API kaynakları (öncelikli).
+        if self.config.use_api_sources:
+            pending = self._run_api_sources(pending, resolved, record)
+            if not pending:
+                return
+
+        # 2) Tarayıcı (çok-sekme) — taşıyıcıya göre grupla.
         groups: dict[str, list[OND]] = defaultdict(list)
         for ond in pending:
             groups[ond.airline.upper()].append(ond)
@@ -243,6 +255,50 @@ class CollectorRunner:
                     break
                 for ond, outcome in future.result():
                     record(ond, outcome)
+
+    def _run_api_sources(
+        self, pending: list[OND], travel_date: str,
+        record: "Callable[[OND, list[FareBrand] | Exception], None]",
+    ) -> list[OND]:
+        """Resmi API sağlayıcılarını OND başına dener; başarılıları kaydeder.
+
+        Kimlik bilgisi olan sağlayıcılar `config.api_sources` sırasıyla denenir;
+        ilk veri döneni kullanılır. API'lerden veri alınamayan OND'ler (leftover)
+        tarayıcı + OTA yoluna devredilir. API çağrıları I/O-bağımlı olduğundan
+        thread havuzunda paralel çalıştırılır.
+        """
+        from apis.base import get_api_providers
+
+        providers = get_api_providers(self.config)
+        if not providers:
+            return pending
+        self._log(f"Resmi API kaynakları etkin: {', '.join(p.name for p in providers)}")
+
+        def _one(ond: OND) -> tuple[OND, list[FareBrand] | None]:
+            errors: list[str] = []
+            for provider in providers:
+                try:
+                    fares = provider.fetch(ond, travel_date)
+                    if fares:
+                        self._log(f"{ond}: API '{provider.name}' → {len(fares)} paket ✔")
+                        return ond, fares
+                    errors.append(f"{provider.name}: boş sonuç")
+                except Exception as exc:  # noqa: BLE001 - sonraki sağlayıcıya/tarayıcıya düş
+                    errors.append(f"{provider.name}: {exc}")
+            if errors:
+                self._log(f"{ond}: API'lerden veri yok ({'; '.join(errors)}); tarayıcı denenecek…")
+            return ond, None
+
+        leftover: list[OND] = []
+        with ThreadPoolExecutor(max_workers=self.config.max_workers) as pool:
+            for ond, fares in pool.map(_one, pending):
+                if self._stop_event.is_set():
+                    break
+                if fares:
+                    record(ond, fares)
+                else:
+                    leftover.append(ond)
+        return leftover
 
     def _run_carrier_group(
         self, airline: str, group: list[OND], travel_date: str,

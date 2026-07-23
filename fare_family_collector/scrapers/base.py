@@ -200,10 +200,29 @@ class BaseScraper(ABC):
             page.goto(url)
 
     def _fill(self, page: Any, selector: str | None, value: str) -> None:
-        """Alanı doldurur (Playwright `fill` öğe actionable olana dek bekler)."""
+        """Alanı doldurur (Playwright `fill` öğe actionable olana dek bekler).
+
+        Gerçek Playwright sayfasında (``input_value`` mevcutsa) girilen değeri
+        oku-geri ile doğrular ve uyuşmazlıkta uyarı verir; testlerdeki sahte
+        page'lerde bu adım güvenle atlanır.
+        """
         if not selector:
             return
         page.fill(selector, value)
+        get_value = getattr(page, "input_value", None)
+        if not callable(get_value):
+            return
+        try:
+            actual = get_value(selector)
+        except Exception:  # noqa: BLE001
+            return
+        from core.verify import input_matches
+
+        if not input_matches(value, actual):
+            self.log.warning(
+                "%s: '%s' girdisi doğrulanamadı — beklenen %r, alanda %r",
+                self.airline_code, selector, value, actual,
+            )
 
     def _click(self, page: Any, selector: str | None) -> None:
         if not selector:

@@ -3,6 +3,9 @@ playwright==1.44.0
 pandas==2.2.2
 openpyxl==3.1.2
 
+# Resmi API kaynakları (Duffel / Amadeus) — HTTP istemcisi
+requests==2.32.3
+
 # Arayüz
 customtkinter==5.2.2
 

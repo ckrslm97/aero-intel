@@ -28,6 +28,7 @@ from core.logging_config import get_logger
 from core.models import Cabin, FareBrand
 from core.ond import OND
 from core.selectors import consent_candidates
+from core.verify import input_matches
 from scrapers.base import BaseScraper, CaptchaError, NotFoundError
 
 log = get_logger("async_engine")
@@ -131,6 +132,7 @@ async def _scrape_one(
         pass
 
     await _check_captcha(scraper, page)
+    await _verify_results(scraper, page, ond)
 
     # Yakalanan yanıtların JSON gövdesini oku.
     captured: list[dict[str, Any]] = []
@@ -168,11 +170,11 @@ async def _open_search(
     await _accept_cookies(scraper, page, config)
     await _wait_ready(scraper, page, config)
     await _human_pause(config)
-    await _fill(page, sel.get("origin_input"), ond.origin)
+    await _fill_verified(scraper, page, sel.get("origin_input"), ond.origin, "origin", ond)
     await _human_pause(config)
-    await _fill(page, sel.get("destination_input"), ond.destination)
+    await _fill_verified(scraper, page, sel.get("destination_input"), ond.destination, "destination", ond)
     await _human_pause(config)
-    await _fill(page, sel.get("date_input"), travel_date)
+    await _fill_verified(scraper, page, sel.get("date_input"), travel_date, "date", ond)
     await _human_pause(config)
     await _click(page, sel.get("search_button"))
 
@@ -181,13 +183,49 @@ async def _goto(page: Any, url: str, config: AppConfig) -> None:
     await page.goto(url, wait_until="domcontentloaded", timeout=config.navigation_timeout_ms)
 
 
-async def _fill(page: Any, selector: str | None, value: str) -> None:
+async def _fill_verified(
+    scraper: BaseScraper, page: Any, selector: str | None, value: str, field: str, ond: OND
+) -> bool | None:
+    """Alanı doldurur ve **oku-geri** ile girilen değerin doğruluğunu kontrol eder.
+
+    Alan boş kalır veya değer yansımazsa bir kez daha (temizle + karakter karakter
+    yaz) dener; sonucu loglar. Otomatik-tamamlama dönüşümlerine karşı `input_matches`
+    toleranslıdır. Doğrulanamazsa uyarı verir ama akışı durdurmaz (site yine de
+    doğru sonucu döndürebilir; sonuçlar ayrıca `_verify_results` ile kontrol edilir).
+    """
     if not selector:
-        return
+        return None
     try:
         await page.fill(selector, value)
     except Exception as exc:  # noqa: BLE001 - alan bulunamazsa akış yine denenir
-        log.debug("fill atlandı (%s): %s", selector, exc)
+        scraper.log.warning("%s %s: '%s' alanı doldurulamadı: %s", scraper.airline_code, ond, field, exc)
+        return False
+
+    actual = await _input_value(page, selector)
+    if not input_matches(value, actual):
+        # İkinci deneme: temizle ve karakter karakter yaz (autocomplete tetiklensin).
+        try:
+            await page.fill(selector, "")
+            await page.type(selector, value, delay=20)
+            actual = await _input_value(page, selector)
+        except Exception:  # noqa: BLE001
+            pass
+
+    if input_matches(value, actual):
+        scraper.log.info("%s %s: '%s' girdisi doğrulandı (%r)", scraper.airline_code, ond, field, actual)
+        return True
+    scraper.log.warning(
+        "%s %s: '%s' girdisi DOĞRULANAMADI — beklenen %r, alanda %r",
+        scraper.airline_code, ond, field, value, actual,
+    )
+    return False
+
+
+async def _input_value(page: Any, selector: str) -> str:
+    try:
+        return await page.input_value(selector)
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 async def _click(page: Any, selector: str | None) -> None:
@@ -281,6 +319,28 @@ async def _accept_cookies(scraper: BaseScraper, page: Any, config: AppConfig) ->
         return True
     except Exception:  # noqa: BLE001
         return False
+
+
+async def _verify_results(scraper: BaseScraper, page: Any, ond: OND) -> None:
+    """Arama sonrası sonuç sayfasının istenen OND'yi yansıtıp yansıtmadığını kontrol eder.
+
+    Hafif ve log-amaçlı: origin/destination kodları sayfa URL'i ya da başlığında
+    geçiyorsa doğrulanmış sayılır. Geçmiyorsa uyarı verir (site farklı rota
+    döndürmüş ya da form beklenenden farklı yorumlanmış olabilir)."""
+    try:
+        url = (page.url or "").upper()
+        title = (await page.title() or "").upper()
+    except Exception:  # noqa: BLE001
+        return
+    haystack = f"{url} {title}"
+    o, d = ond.origin.upper(), ond.destination.upper()
+    if o in haystack and d in haystack:
+        scraper.log.info("%s %s: sonuç sayfası rota ile uyumlu ✔", scraper.airline_code, ond)
+    else:
+        scraper.log.warning(
+            "%s %s: sonuç sayfasında rota (%s→%s) URL/başlıkta doğrulanamadı "
+            "(API/DOM yine de kontrol edilecek)", scraper.airline_code, ond, o, d,
+        )
 
 
 async def _check_captcha(scraper: BaseScraper, page: Any) -> None:

@@ -34,15 +34,21 @@ fare_family_collector/
 │   ├── ond.py              # OND modeli + CSV/Excel yükleyici
 │   ├── selectors.py        # Merkezi CSS/XPath kaydı + çerez (consent) aday seçicileri
 │   ├── exporter.py         # Excel / CSV / SQLite / JSON çıktı
-│   ├── async_engine.py     # Tek tarayıcı + çok sekme (async) toplama motoru
-│   ├── runner.py           # Taşıyıcıya göre gruplama + async motor / demo orkestrasyonu + resume
+│   ├── async_engine.py     # Tek tarayıcı + çok sekme (async) toplama motoru + girdi doğrulama
+│   ├── verify.py           # Form girdisi oku-geri doğrulama eşleştiricisi (input_matches)
+│   ├── runner.py           # API → tarayıcı(çok-sekme) → OTA orkestrasyonu + resume
 │   └── logging_config.py   # Dosya + canlı GUI log kuyruğu
+├── apis/                    # Resmi HTTP/JSON API kaynakları (canlıda ÖNCE denenir)
+│   ├── base.py             # FareAPIProvider + registry (token yoksa sessiz atla)
+│   ├── duffel.py           # Duffel Offers API (fare brand + koşullar + bagaj)
+│   └── amadeus.py          # Amadeus Flight Offers Search (branded fares)
 ├── scrapers/
 │   ├── base.py             # BaseScraper — sağlam çerez onayı, form-hazır bekleme, ortak arama/DOM şablonu
 │   ├── registry.py         # Kod → scraper otomatik eşleme
 │   ├── demo.py             # Gerçekçi sahte veri (uçtan uca test için)
-│   ├── tk.py               # Turkish Airlines — HTML parse örneği
-│   └── af.py               # Air France — network/API (JSON) örneği
+│   ├── tk.py af.py lh.py   # Turkish / Air France / Lufthansa (API→HTML)
+│   ├── ba.py pc.py         # British Airways / Pegasus (paylaşımlı şablon)
+│   └── ota_*.py            # Google Flights / Kayak (OTA yedeği)
 ├── gui/
 │   ├── app.py              # CustomTkinter arayüz
 │   └── theme.py            # Koyu tema paleti
@@ -76,6 +82,46 @@ birden çok rota, **tek tarayıcı bağlamında** ve **eşzamanlı sekmelerle** 
 Sekme sayısı `PAGES_PER_BROWSER` ile, paralel işlenen taşıyıcı grubu sayısı
 `MAX_WORKERS` ile ayarlanır. Havayolu sitesinden veri gelmezse OTA yedeği devreye
 girer. Demo modu bu motoru kullanmaz (sync, çevrimdışı).
+
+### Resmi API kaynakları (Duffel / Amadeus) — önerilen
+
+Fare-family verisi için en güvenilir yol tarayıcı değil **resmi API**'dir (anti-bot/
+çerez/dinamik yükleme yok). Canlı modda kaynak sırası:
+
+1. **Resmi API'ler** (`apis/`): kimlik bilgisi tanımlıysa OND başına denenir.
+   - **Duffel** (`apis/duffel.py`): Offers API → fare brand, kabin, fiyat, iade/
+     değişiklik koşulları, bagaj. `.env`: `DUFFEL_ACCESS_TOKEN` (+ `DUFFEL_API_VERSION`).
+   - **Amadeus** (`apis/amadeus.py`): Flight Offers Search (branded fares) → marka,
+     kabin, sınıf, dahil bagaj. `.env`: `AMADEUS_CLIENT_ID` / `AMADEUS_CLIENT_SECRET`
+     (+ `AMADEUS_ENV=test|production`).
+   - Token yoksa sağlayıcı **sessizce atlanır** — akış bozulmaz.
+2. Veri gelmezse **havayolu sitesi** (çok-sekme tarayıcı motoru).
+3. O da olmazsa **OTA** (Google/Kayak).
+
+Yeni API eklemek: `apis/xx.py` içinde `FareAPIProvider`'dan türet, `@register_api`
+ile kaydet, `available()` ve `fetch()` doldur; `API_SOURCES` listesine adını ekle.
+
+### Girdi doğruluğu kontrolü
+
+Tarayıcı formuna girilen değerler **oku-geri** ile doğrulanır (`core/verify.py`,
+`input_matches`): alan doldurulduktan sonra `input_value` okunur ve girilen kod/
+tarih alanda yansıyor mu bakılır. Otomatik-tamamlama dönüşümleri (`IST` →
+`Istanbul (IST)`, `2026-08-01` → `01 Aug 2026`) toleranslıdır. Boş kalan/uyuşmayan
+alanlarda bir kez daha (temizle + karakter karakter yaz) denenir ve sonuç loglanır.
+Arama sonrası sonuç sayfasının istenen rotayı yansıtıp yansıtmadığı da kontrol edilir.
+
+### Canlı çalıştırma (örnek komutlar)
+
+```bash
+# Sadece resmi API (en güvenilir) — tarayıcı gerekmez:
+export DUFFEL_ACCESS_TOKEN=duffel_test_xxx
+python main.py --routes "TK:IST-LHR,TK:IST-CDG,TK:IST-FRA"
+
+# API + tarayıcı (çok-sekme) + OTA zinciri (varsayılan canlı davranış):
+python main.py --cli data/ond_example.csv
+
+# Girdi doğrulama uyarılarını görmek için logs/ altındaki log dosyasına bakın.
+```
 
 ---
 
@@ -430,6 +476,11 @@ Tüm ayarlar `config.py` içindedir ve `.env` ile ezilebilir:
 | `DEMO_MODE` | Çevrimdışı sahte veri (canlı istek yok) | `false` |
 | `USE_OTA_FALLBACK` | Havayolu sitesi başarısızsa OTA'dan dene | `true` |
 | `OTA_SOURCES` | OTA yedek sırası | `google,kayak` |
+| `USE_API_SOURCES` | Canlıda önce resmi API'leri dene | `true` |
+| `API_SOURCES` | API kaynak sırası | `duffel,amadeus` |
+| `DUFFEL_ACCESS_TOKEN` | Duffel API tokenı (yoksa atlanır) | boş |
+| `AMADEUS_CLIENT_ID` / `_SECRET` | Amadeus kimlik bilgisi (yoksa atlanır) | boş |
+| `AMADEUS_ENV` | Amadeus ortamı (`test`/`production`) | `test` |
 
 ---
 

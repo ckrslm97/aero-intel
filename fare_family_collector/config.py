@@ -88,6 +88,23 @@ class AppConfig:
     use_ota_fallback: bool = field(default_factory=lambda: _env_bool("USE_OTA_FALLBACK", True))
     ota_sources: list[str] = field(default_factory=lambda: _env_list("OTA_SOURCES", ["google", "kayak"]))
 
+    # Resmi API kaynakları: canlı modda ÖNCE denenir (kimlik bilgisi varsa). Fare-family
+    # verisi için en güvenilir yol. Token yoksa ilgili sağlayıcı sessizce atlanır.
+    use_api_sources: bool = field(default_factory=lambda: _env_bool("USE_API_SOURCES", True))
+    api_sources: list[str] = field(default_factory=lambda: _env_list("API_SOURCES", ["duffel", "amadeus"]))
+    api_timeout_s: float = field(default_factory=lambda: _env_float("API_TIMEOUT_S", 30.0))
+
+    # Duffel (https://duffel.com) — Offers API. Test tokenları "duffel_test_...",
+    # canlı "duffel_live_..." ile başlar. Duffel-Version başlığı sürümle uyumlu olmalı.
+    duffel_access_token: str = field(default_factory=lambda: os.getenv("DUFFEL_ACCESS_TOKEN", ""))
+    duffel_api_version: str = field(default_factory=lambda: os.getenv("DUFFEL_API_VERSION", "v2"))
+
+    # Amadeus Self-Service (https://developers.amadeus.com) — OAuth2 client credentials.
+    # Ortam: "test" (test.api.amadeus.com) veya "production" (api.amadeus.com).
+    amadeus_client_id: str = field(default_factory=lambda: os.getenv("AMADEUS_CLIENT_ID", ""))
+    amadeus_client_secret: str = field(default_factory=lambda: os.getenv("AMADEUS_CLIENT_SECRET", ""))
+    amadeus_env: str = field(default_factory=lambda: os.getenv("AMADEUS_ENV", "test"))
+
     # Çıktı
     output_dir: Path = field(default_factory=lambda: Path(os.getenv("OUTPUT_DIR", "output")))
     export_excel: bool = field(default_factory=lambda: _env_bool("EXPORT_EXCEL", True))

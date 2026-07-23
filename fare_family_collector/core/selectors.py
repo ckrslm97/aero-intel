@@ -125,6 +125,51 @@ SELECTORS: dict[str, SiteSelectors] = {
         "feature_row": "[data-testid='fare-feature'], .fare-family__benefit, li.o-fare-card__benefit",
         "captcha_marker": "iframe[src*='captcha'], #distilCaptchaForm, iframe[title*='captcha']",
     },
+    "BA": {
+        # British Airways — fare family ("Economy Basic/Plus", "Club" vb.) verisi
+        # arama sonrası XHR ile döner; DOM'da da kabin/marka kartları bulunur.
+        # UYARI: Seçiciler canlıda doğrulanmalı (playwright codegen).
+        "base_url": "https://www.britishairways.com/travel/home/public/en_gb/",
+        "api_pattern": r"availability|fare|farefamil|pricing|offers",
+        "consent_button": "button#ensCloseBanner, #onetrust-accept-btn-handler",
+        "consent_buttons": [
+            "button#ensCloseBanner",
+            "#onetrust-accept-btn-handler",
+            "button[aria-label*='Accept all' i]",
+        ],
+        "origin_input": "input#planpanelmain\\:_id1:bookFlightModule:depAirport, input[name='departurePoint']",
+        "destination_input": "input#planpanelmain\\:_id1:bookFlightModule:destAirport, input[name='destinationPoint']",
+        "date_input": "input[name='outboundDate'], input#departureDate",
+        "search_button": "button[type='submit'], button[data-test='search-flights']",
+        "fare_card": "[data-test='fare-card'], .fare-family-card, .cabin-fare",
+        "fare_name": "[data-test='fare-name'], .fare-family-card__title",
+        "fare_price": "[data-test='fare-price'], .fare-family-card__price",
+        "cabin_tab": "[role='tab'][data-cabin], .cabin-selector button",
+        "feature_row": "[data-test='fare-feature'], .fare-family-card__benefit, li.benefit",
+        "captcha_marker": "iframe[src*='captcha'], #px-captcha",
+    },
+    "PC": {
+        # Pegasus (flypgs) — düşük maliyetli; "Essentials/Advantage/Extra" paketleri.
+        # UYARI: Seçiciler canlıda doğrulanmalı.
+        "base_url": "https://www.flypgs.com/en",
+        "api_pattern": r"availability|fare|package|pricing|offers|search",
+        "consent_button": "#onetrust-accept-btn-handler, button.cookie-accept",
+        "consent_buttons": [
+            "#onetrust-accept-btn-handler",
+            "button[aria-label*='Accept' i]",
+            "button.cookie-accept",
+        ],
+        "origin_input": "input#depPort, input[name='departurePort'], input[placeholder*='From' i]",
+        "destination_input": "input#arrPort, input[name='arrivalPort'], input[placeholder*='To' i]",
+        "date_input": "input#departureDate, input[name='departureDate']",
+        "search_button": "button#flightSearchButton, button[type='submit']",
+        "fare_card": ".package-card, .fare-package, [data-testid='package-card']",
+        "fare_name": ".package-card__name, [data-testid='package-name']",
+        "fare_price": ".package-card__price, [data-testid='package-price']",
+        "cabin_tab": ".cabin-selector button",
+        "feature_row": ".package-card__benefit, li.package-benefit, [data-testid='package-feature']",
+        "captcha_marker": "iframe[src*='captcha'], #px-captcha",
+    },
     # ---- OTA (Online Travel Agency) kaynakları — havayolu sitesi yedeği ---- #
     "GOOGLE": {
         # Google Flights — branded fares/price verisini XHR (GetShoppingResults
