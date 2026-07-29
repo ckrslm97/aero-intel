@@ -66,7 +66,7 @@ function ArticleCardComponent({
         onClick={() => open(article)}
         style={glowVar ? ({ "--glow-color": glowVar } as React.CSSProperties) : undefined}
         className={cn(
-          "group relative flex h-full w-full flex-col gap-2 overflow-hidden rounded-xl border bg-card p-4 text-left transition-all duration-200",
+          "group relative flex h-full w-full flex-col gap-2.5 overflow-hidden rounded-xl border bg-card p-5 text-left transition-all duration-200",
           "hover:-translate-y-1 motion-reduce:transform-none motion-reduce:transition-none",
           glowVar ? "edge-lit hover:glow-edge" : "border-border hover:bg-accent/30",
         )}

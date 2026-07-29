@@ -74,7 +74,7 @@ export function CategoryChipRow({
       cn(
         "rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
         active
-          ? "ring-1 ring-current/40 dark:glow"
+          ? "ring-1 ring-current/40 dark:glow-soft"
           : "border border-border text-muted-foreground hover:bg-accent",
       );
     // Each chip drives its own entrance instead of a stagger-orchestrating
@@ -167,7 +167,7 @@ export function CategoryChipRow({
           className={cn(
             "relative flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold transition-colors",
             value === null
-              ? "bg-primary/12 text-primary ring-1 ring-primary/40 dark:glow"
+              ? "bg-primary/12 text-primary ring-1 ring-primary/40 dark:glow-soft"
               : "text-muted-foreground hover:bg-accent",
           )}
         >
@@ -193,7 +193,7 @@ export function CategoryChipRow({
             className={cn(
               "relative flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold transition-colors",
               active
-                ? cn(c.textClass, "ring-1 ring-current/40 dark:glow")
+                ? cn(c.textClass, "ring-1 ring-current/40 dark:glow-soft")
                 : isFocus
                   ? "border border-category-revenue-management/50 bg-category-revenue-management/10 text-category-revenue-management hover:bg-category-revenue-management/20"
                   : "text-muted-foreground hover:bg-accent",

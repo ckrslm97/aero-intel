@@ -9,13 +9,7 @@ import { AirlineLogo } from "@/components/airline-logo";
 import { MotionItem, MotionList } from "@/components/motion/motion-list";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiFetch } from "@/lib/api";
-import {
-  baseOption,
-  categoryAxis,
-  useChartTheme,
-  valueAxis,
-} from "@/lib/chart-theme";
-import { getCategory } from "@/lib/taxonomy";
+import { baseOption, useChartTheme } from "@/lib/chart-theme";
 import { airlineTabs, worldRegions } from "@/lib/nav";
 import { cn } from "@/lib/utils";
 
@@ -54,14 +48,13 @@ interface InsightsOut {
  * filtered as a single set. */
 interface FlatSignal extends RouteSignalArticle {
   region: string | null;
+  /** Index of the source region group, so a card's edge light lands on the
+   * same `theme.series` hue as its slice in the region donut above. */
+  colorIndex: number;
 }
 
 const REGION_NAME: Record<string, string> = Object.fromEntries(
   worldRegions.map((r) => [r.slug, r.name]),
-);
-
-const AIRLINE_COLOR: Record<string, string> = Object.fromEntries(
-  airlineTabs.map((a) => [a.code, a.color]),
 );
 
 const AIRLINE_NAME: Record<string, string> = Object.fromEntries(
@@ -80,7 +73,7 @@ const chip = (active: boolean) =>
   cn(
     "rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
     active
-      ? "bg-primary/12 text-primary ring-1 ring-primary/40 dark:glow"
+      ? "bg-primary/12 text-primary ring-1 ring-primary/40 dark:glow-soft"
       : "border border-border text-muted-foreground hover:bg-accent",
   );
 
@@ -116,8 +109,13 @@ export function InsightsClient() {
 
   const flatSignals = useMemo<FlatSignal[]>(
     () =>
-      (data?.new_route_signals ?? []).flatMap((group) =>
-        group.articles.map((article) => ({ ...article, region: group.region })),
+      (data?.new_route_signals ?? []).flatMap((group, groupIndex) =>
+        group.articles.map((article) => ({
+          ...article,
+          region: group.region,
+          // Same array, same order that drives regionOption's pie slices.
+          colorIndex: groupIndex,
+        })),
       ),
     [data],
   );
@@ -154,7 +152,7 @@ export function InsightsClient() {
   // All chart colors now come from lib/chart-theme.ts -- one mirror of
   // globals.css instead of a ternary per file. The hues are the same
   // dataviz-validated ones; they are just no longer duplicated here.
-  const { good, critical, ink, surface, neutral: neutralBar } = theme;
+  const { ink, surface } = theme;
 
   const base = {
     ...baseOption(theme, reduceMotion),
@@ -172,84 +170,14 @@ export function InsightsClient() {
     return (
       <div className="flex flex-col gap-6">
         <Skeleton className="h-28 w-full rounded-xl" />
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <Skeleton key={i} className="h-72 w-full rounded-xl" />
-          ))}
-        </div>
+        {/* One chart card now, not four -- see the single-column MotionList. */}
+        <Skeleton className="h-72 w-full rounded-xl" />
         <Skeleton className="h-72 w-full rounded-xl" />
       </div>
     );
   }
 
-  const movers = [...data.airline_momentum].reverse(); // biggest at top after axis inversion
-  const momentumOption = {
-    ...base,
-    tooltip: {
-      ...base.tooltip,
-      trigger: "item",
-      formatter: (p: { dataIndex: number }) => {
-        const m = movers[p.dataIndex];
-        return `${m.name}<br/>Son 7 gün: ${m.current} haber · Önceki: ${m.previous}`;
-      },
-    },
-    xAxis: { ...valueAxis(theme), type: "value" },
-    yAxis: {
-      ...categoryAxis(theme),
-      type: "category",
-      data: movers.map((m) => `${m.name}`),
-    },
-    series: [
-      {
-        type: "bar",
-        barMaxWidth: 14,
-        data: movers.map((m) => ({
-          value: m.delta,
-          itemStyle: {
-            color: m.delta >= 0 ? good : critical,
-            borderRadius: m.delta >= 0 ? [0, 4, 4, 0] : [4, 0, 0, 4],
-          },
-        })),
-        label: {
-          show: true,
-          position: "outside",
-          color: ink,
-          fontSize: 11,
-          formatter: (p: { value: number }) => (p.value > 0 ? `+${p.value}` : `${p.value}`),
-        },
-      },
-    ],
-  };
-
-  const sentimentCats = data.sentiment_by_category.slice(0, 6);
-  const sentimentOption = {
-    ...base,
-    tooltip: { ...base.tooltip, trigger: "axis" },
-    legend: { top: 0, textStyle: { color: ink, fontSize: 11 } },
-    xAxis: { ...valueAxis(theme), type: "value" },
-    yAxis: {
-      ...categoryAxis(theme),
-      type: "category",
-      data: sentimentCats.map((s) => getCategory(s.category).label).reverse(),
-    },
-    series: (
-      [
-        ["Olumlu", "positive", good],
-        ["Nötr", "neutral", neutralBar],
-        ["Olumsuz", "negative", critical],
-      ] as const
-    ).map(([name, key, color]) => ({
-      name,
-      type: "bar",
-      stack: "sentiment",
-      barMaxWidth: 14,
-      data: sentimentCats.map((s) => s[key]).reverse(),
-      // 2px surface gap between stacked segments, per the mark spec.
-      itemStyle: { color, borderColor: surface, borderWidth: 1 },
-    })),
-  };
-
-  // NEW: where the route news is coming from. Straight off new_route_signals'
+  // Where the route news is coming from. Straight off new_route_signals'
   // region + count -- no extra aggregation.
   const regionSlices = data.new_route_signals
     .map((s) => ({
@@ -292,54 +220,6 @@ export function InsightsClient() {
     ],
   };
 
-  // NEW: absolute mention volume behind the momentum delta -- the delta chart
-  // says "who moved", this says "off what base".
-  const volumeAirlines = [...data.airline_momentum]
-    .sort((a, b) => b.current - a.current)
-    .slice(0, 8);
-
-  const volumeOption = {
-    ...base,
-    tooltip: { ...base.tooltip, trigger: "axis", axisPointer: { type: "shadow" } },
-    legend: {
-      top: 0,
-      icon: "roundRect",
-      itemWidth: 10,
-      itemHeight: 10,
-      textStyle: { color: ink, fontSize: 11 },
-    },
-    xAxis: {
-      ...categoryAxis(theme),
-      type: "category",
-      data: volumeAirlines.map((m) => m.code),
-    },
-    yAxis: { ...valueAxis(theme), type: "value" },
-    series: [
-      {
-        name: "Önceki 7 gün",
-        type: "bar",
-        barMaxWidth: 16,
-        data: volumeAirlines.map((m) => m.previous),
-        itemStyle: { color: neutralBar, borderRadius: [3, 3, 0, 0] },
-      },
-      {
-        name: "Son 7 gün",
-        type: "bar",
-        barMaxWidth: 16,
-        // Carrier livery where we know it, otherwise the app's own series
-        // ramp cycled per carrier -- previously every unknown carrier
-        // collapsed onto one hardcoded blue.
-        data: volumeAirlines.map((m, i) => ({
-          value: m.current,
-          itemStyle: {
-            color: AIRLINE_COLOR[m.code] ?? theme.series[i % theme.series.length],
-            borderRadius: [3, 3, 0, 0],
-          },
-        })),
-      },
-    ],
-  };
-
   // These panels are plain divs rather than <Card>, so they take the Task 4
   // base coat (elevation + sheen + shadow transition) explicitly.
   const chartCard =
@@ -376,55 +256,7 @@ export function InsightsClient() {
         </div>
       )}
 
-      <MotionList className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <MotionItem className={litCard} style={glow("var(--chart-1)")}>
-          <h2 className="mb-2 text-sm font-semibold">
-            Havayolu momentumu{" "}
-            <span className="font-normal text-muted-foreground">
-              (son 7 gün vs önceki 7 gün, haber sayısı farkı)
-            </span>
-          </h2>
-          <ReactECharts
-            option={momentumOption}
-            style={{ height: 280 }}
-            opts={{ renderer: "svg" }}
-            notMerge
-          />
-        </MotionItem>
-
-        <MotionItem className={litCard} style={glow("var(--good)")}>
-          <h2 className="mb-2 text-sm font-semibold">
-            Duygu dengesi <span className="font-normal text-muted-foreground">(son 30 gün)</span>
-          </h2>
-          <ReactECharts
-            option={sentimentOption}
-            style={{ height: 280 }}
-            opts={{ renderer: "svg" }}
-            notMerge
-          />
-        </MotionItem>
-
-        <MotionItem className={litCard} style={glow("var(--chart-4)")}>
-          <h2 className="mb-2 text-sm font-semibold">
-            Haber hacmi{" "}
-            <span className="font-normal text-muted-foreground">
-              (taşıyıcı bazında, son 7 gün vs önceki 7 gün)
-            </span>
-          </h2>
-          {volumeAirlines.length > 0 ? (
-            <ReactECharts
-              option={volumeOption}
-              style={{ height: 280 }}
-              opts={{ renderer: "svg" }}
-              notMerge
-            />
-          ) : (
-            <p className="py-24 text-center text-sm text-muted-foreground">
-              Bu dönemde taşıyıcı bazında haber sayılmadı.
-            </p>
-          )}
-        </MotionItem>
-
+      <MotionList className="grid grid-cols-1 gap-6">
         <MotionItem className={litCard} style={glow("var(--chart-5)")}>
           <h2 className="mb-2 text-sm font-semibold">
             Yeni hat sinyallerinin dağılımı{" "}
@@ -519,40 +351,68 @@ export function InsightsClient() {
               : "Bu filtrelerle sinyal yok. Bölge ya da taşıyıcı seçimini kaldırın."}
           </p>
         ) : (
-          <MotionList className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <MotionList className="grid grid-cols-1 gap-6 md:grid-cols-2">
             <AnimatePresence mode="popLayout" initial={false}>
               {visibleSignals.map((signal) => (
+                // Same treatment as Gazete's grid tiles: lit at rest via
+                // `edge-lit`, brightening into `glow-edge` on hover, wearing
+                // its region's donut hue as --glow-color.
                 <MotionItem
                   key={signal.id}
-                  lift={!reduceMotion}
+                  // No `lift`: the hover lift is now the CSS
+                  // `hover:-translate-y-1` below, the same one Gazete's tiles
+                  // use. Keeping both would compose Framer's inline
+                  // `transform: translateY(-2px)` with the class's separate
+                  // `translate` property into a doubled 6px jump.
                   exit="exit"
-                  className="flex flex-col gap-2 rounded-lg border border-border bg-card p-4"
+                  style={
+                    {
+                      "--glow-color": theme.series[signal.colorIndex % theme.series.length],
+                    } as React.CSSProperties
+                  }
+                  className={cn(
+                    "edge-lit flex flex-col gap-2.5 rounded-xl border bg-card p-5 transition-all duration-200",
+                    "hover:glow-edge hover:-translate-y-1 motion-reduce:transform-none motion-reduce:transition-none",
+                  )}
                 >
-                  <h3 className="text-sm font-medium leading-snug">
-                    <span className="line-clamp-2">{signal.headline}</span>
-                  </h3>
-                  <div className="flex flex-wrap items-center gap-1.5">
+                  {/* Region badge + right-aligned date, mirroring the article
+                      tile's category-badge + time row. */}
+                  <div className="flex items-center gap-2">
                     <span className="rounded-full bg-secondary px-2 py-0.5 text-[10px] font-medium text-secondary-foreground">
                       {signal.region
                         ? (REGION_NAME[signal.region] ?? signal.region)
                         : "Bölge belirtilmemiş"}
                     </span>
-                    {signal.airlines.map((code) => (
-                      <span
-                        key={code}
-                        title={AIRLINE_NAME[code] ?? code}
-                        className="flex items-center gap-1 rounded-full border border-border px-1.5 py-0.5 text-[10px] font-semibold tabular-nums"
-                      >
-                        <AirlineLogo code={code} name={AIRLINE_NAME[code]} className="size-3.5" />
-                        {code}
-                      </span>
-                    ))}
-                  </div>
-                  <div className="mt-auto flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
-                    <span className="font-medium">{signal.source_name}</span>
                     {formatSignalDate(signal.published_at) && (
-                      <span>· {formatSignalDate(signal.published_at)}</span>
+                      <span className="ml-auto text-[10px] tabular-nums text-muted-foreground">
+                        {formatSignalDate(signal.published_at)}
+                      </span>
                     )}
+                  </div>
+
+                  <h3 className="text-sm font-medium leading-snug">
+                    <span className="line-clamp-2">{signal.headline}</span>
+                  </h3>
+
+                  {signal.airlines.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {signal.airlines.map((code) => (
+                        <span
+                          key={code}
+                          title={AIRLINE_NAME[code] ?? code}
+                          className="flex items-center gap-1 rounded-full border border-border px-1.5 py-0.5 text-[10px] font-semibold tabular-nums"
+                        >
+                          <AirlineLogo code={code} name={AIRLINE_NAME[code]} className="size-3.5" />
+                          {code}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* mt-auto bottom-aligns the footer across a row of cards
+                      with unequal headline lengths. */}
+                  <div className="mt-auto flex items-center gap-2 pt-1.5 text-[11px] text-muted-foreground">
+                    <span className="font-medium">{signal.source_name}</span>
                     <a
                       href={signal.url}
                       target="_blank"

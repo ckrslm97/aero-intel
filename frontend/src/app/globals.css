@@ -335,6 +335,16 @@
       color-mix(in srgb, var(--glow-color) calc(var(--glow-alpha) / 2), transparent);
 }
 
+/* A quieter glow for buttons/chips -- single thin layer, no elev-2 ring
+ * baked in, roughly half the effective brightness of `glow`. Cards/CTAs
+ * that want the full bloom keep using `glow`; anything button-shaped uses
+ * this instead so an active filter chip doesn't compete with the content
+ * around it. */
+@utility glow-soft {
+  box-shadow: 0 0 calc(var(--glow-blur) * 0.6)
+    color-mix(in srgb, var(--glow-color) calc(var(--glow-alpha) * 0.55), transparent);
+}
+
 /* The approach-light bar: a lit left rail with an inward bleed and a faint
  * outward spill. Used on article rows and severity-led cards. */
 @utility glow-edge {

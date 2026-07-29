@@ -90,7 +90,7 @@ const chip = (active: boolean) =>
   cn(
     "rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
     active
-      ? "bg-primary/12 text-primary ring-1 ring-primary/40 dark:glow"
+      ? "bg-primary/12 text-primary ring-1 ring-primary/40 dark:glow-soft"
       : "border border-border text-muted-foreground hover:bg-accent",
   );
 

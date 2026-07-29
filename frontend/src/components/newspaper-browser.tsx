@@ -144,7 +144,9 @@ export function NewspaperBrowser() {
   // Tab badges: one grouped request, refreshed when the window is entered.
   useEffect(() => {
     const controller = new AbortController();
-    apiFetch<Record<string, number>>(`/articles/counts?days=${DAYS_WINDOW}`, {
+    // translated_only mirrors the list query below, so a tab badge never
+    // promises 400 stories the filtered list will never show.
+    apiFetch<Record<string, number>>(`/articles/counts?days=${DAYS_WINDOW}&translated_only=true`, {
       cache: "default",
       signal: controller.signal,
     })
@@ -165,6 +167,11 @@ export function NewspaperBrowser() {
       days: String(DAYS_WINDOW),
       limit: String(PAGE_LIMIT),
       offset: String(offset),
+      // Gazete only shows stories that actually have a Turkish translation --
+      // an untranslated article falls back to its original-language headline
+      // and reads as raw German/English mixed into a Turkish paper. Filtered
+      // server-side so `total` / "Daha fazla yükle" stay in step with the list.
+      translated_only: "true",
     });
     if (subcategorySlug) params.set("subcategory", subcategorySlug);
     if (regionSlug) params.set("region", regionSlug);
@@ -475,7 +482,7 @@ export function NewspaperBrowser() {
                     } as React.CSSProperties
                   }
                   className={cn(
-                    "sticky top-[3.25rem] z-10 -mx-2 flex items-center gap-2 bg-background/85 px-2 py-1.5 text-xs font-semibold uppercase tracking-wider backdrop-blur supports-[backdrop-filter]:bg-background/60",
+                    "sticky top-[3.25rem] z-10 -mx-2 flex items-center gap-2 bg-background/85 px-2 py-2 text-lg font-bold backdrop-blur supports-[backdrop-filter]:bg-background/60",
                     isToday ? "text-signal" : "text-muted-foreground",
                   )}
                 >
@@ -483,14 +490,14 @@ export function NewspaperBrowser() {
                       for today the way a threshold light is. */}
                   <span aria-hidden className="hairline-glow w-6 shrink-0" />
                   {group.label}
-                  <span className="font-normal normal-case tracking-normal text-muted-foreground">
+                  <span className="text-sm font-normal normal-case tracking-normal text-muted-foreground">
                     {group.articles.length} haber
                   </span>
                 </motion.h2>
                 {/* An apron of individually-lit tiles: the day is already
                     delimited by the sticky glowing date header above, so the
                     tiles need no shared container of their own. */}
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
                   <AnimatePresence initial={false}>
                     {group.articles.map((article, index) => (
                       <motion.div
@@ -557,12 +564,12 @@ export function NewspaperBrowser() {
 
 function ArticleListSkeleton() {
   return (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+    <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
       {Array.from({ length: 6 }).map((_, i) => (
         <div
           key={i}
           className={cn(
-            "flex flex-col gap-2 rounded-xl border border-border bg-card p-4",
+            "flex flex-col gap-2 rounded-xl border border-border bg-card p-5",
             i === 0 && "sm:col-span-2",
           )}
         >
