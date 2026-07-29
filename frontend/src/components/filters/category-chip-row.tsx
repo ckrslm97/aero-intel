@@ -2,7 +2,8 @@
 
 import { motion, useReducedMotion } from "framer-motion";
 
-import { CATEGORIES } from "@/lib/taxonomy";
+import { chipPop, chipStagger, reduceVariants } from "@/lib/motion";
+import { CATEGORIES, categoryVar } from "@/lib/taxonomy";
 import { cn } from "@/lib/utils";
 
 const PINNED_DEFAULT = "revenue_management";
@@ -52,29 +53,77 @@ export function CategoryChipRow({
   const reduceMotion = useReducedMotion();
   const ordered = orderCategories(pinned);
 
+  const stagger = reduceMotion ? reduceVariants(chipStagger) : chipStagger;
+  const pop = reduceMotion ? reduceVariants(chipPop) : chipPop;
+
+  /** A selected chip burns in its own category color rather than in the one
+   * neutral primary fill every row used to share -- the whole point of having
+   * 11 validated category hues. Inline because the slug -> token name
+   * transform is invisible to Tailwind's scanner. */
+  const litStyle = (slug: string): React.CSSProperties => {
+    const hue = categoryVar(slug);
+    return {
+      "--glow-color": hue,
+      color: hue,
+      backgroundColor: `color-mix(in srgb, ${hue} 14%, transparent)`,
+    } as React.CSSProperties;
+  };
+
   if (variant === "plain") {
     const chip = (active: boolean) =>
       cn(
         "rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
         active
-          ? "bg-primary text-primary-foreground"
+          ? "ring-1 ring-current/40 dark:glow"
           : "border border-border text-muted-foreground hover:bg-accent",
       );
+    // Each chip drives its own entrance instead of a stagger-orchestrating
+    // parent: a `motion` parent set to `display:contents` (required so this
+    // row contributes no box of its own -- the caller's FilterRow owns the
+    // flex layout) can't be measured by Framer Motion, which left staggered
+    // children stuck mid-animation. A plain, non-animating div still gives
+    // the layout-only wrapper; the stagger becomes a per-index delay.
+    const popTransition = (index: number) =>
+      reduceMotion
+        ? { duration: 0 }
+        : { type: "spring" as const, stiffness: 600, damping: 28, mass: 0.6, delay: index * 0.025 };
+
     return (
-      <>
+      // Deliberately NOT re-keyed on `value`: remounting the row to re-pop
+      // the chips on every filter change would unmount the button the user
+      // just activated and drop keyboard focus to the body. The selection's
+      // colour change is the feedback; the pop is an entrance.
+      <div style={{ display: "contents" }}>
         {includeAll && (
-          <button type="button" onClick={() => onChange(null)} className={chip(!value)}>
+          <motion.button
+            initial="hidden"
+            animate="show"
+            variants={pop}
+            transition={popTransition(0)}
+            type="button"
+            onClick={() => onChange(null)}
+            className={cn(
+              chip(!value),
+              !value && "bg-primary/12 text-primary",
+            )}
+            style={!value ? ({ "--glow-color": "var(--primary)" } as React.CSSProperties) : undefined}
+          >
             Tümü
-          </button>
+          </motion.button>
         )}
-        {ordered.map((c) => {
+        {ordered.map((c, i) => {
           const active = value === c.slug;
           const isFocus = focusStyling && c.slug === pinned;
           return (
-            <button
+            <motion.button
               key={c.slug}
+              initial="hidden"
+              animate="show"
+              variants={pop}
+              transition={popTransition(includeAll ? i + 1 : i)}
               type="button"
               onClick={() => onChange(active ? null : c.slug)}
+              style={active ? litStyle(c.slug) : undefined}
               className={cn(
                 chip(active),
                 !active &&
@@ -83,33 +132,47 @@ export function CategoryChipRow({
               )}
             >
               {c.label}
-            </button>
+            </motion.button>
           );
         })}
-      </>
+      </div>
     );
   }
 
   return (
-    <div
+    // Deliberately NOT re-keyed on `value`, unlike the plain row above: this
+    // is the variant that carries the shared-element `layoutId` pill, and
+    // remounting the row on every click would destroy the element the pill
+    // slides between. The chips pop once, on mount; after that the pill is
+    // the thing that moves.
+    <motion.div
+      variants={stagger}
+      initial="hidden"
+      animate="show"
       className={cn(
         "flex gap-1.5 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
         className,
       )}
     >
       {includeAll && (
-        <button
+        <motion.button
+          variants={pop}
           type="button"
           onClick={() => onChange(null)}
+          style={
+            value === null
+              ? ({ "--glow-color": "var(--primary)" } as React.CSSProperties)
+              : undefined
+          }
           className={cn(
             "relative flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold transition-colors",
             value === null
-              ? "bg-primary text-primary-foreground"
+              ? "bg-primary/12 text-primary ring-1 ring-primary/40 dark:glow"
               : "text-muted-foreground hover:bg-accent",
           )}
         >
           Tümü
-        </button>
+        </motion.button>
       )}
       {ordered.map((c) => {
         const Icon = c.icon;
@@ -117,14 +180,20 @@ export function CategoryChipRow({
         const count = counts?.[c.slug];
         const isFocus = focusStyling && c.slug === pinned;
         return (
-          <button
+          <motion.button
             key={c.slug}
+            variants={pop}
             type="button"
             onClick={() => onChange(c.slug)}
+            style={
+              active
+                ? ({ "--glow-color": categoryVar(c.slug) } as React.CSSProperties)
+                : undefined
+            }
             className={cn(
               "relative flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold transition-colors",
               active
-                ? c.textClass
+                ? cn(c.textClass, "ring-1 ring-current/40 dark:glow")
                 : isFocus
                   ? "border border-category-revenue-management/50 bg-category-revenue-management/10 text-category-revenue-management hover:bg-category-revenue-management/20"
                   : "text-muted-foreground hover:bg-accent",
@@ -153,9 +222,9 @@ export function CategoryChipRow({
                 {count}
               </span>
             ) : null}
-          </button>
+          </motion.button>
         );
       })}
-    </div>
+    </motion.div>
   );
 }

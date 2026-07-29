@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 
 import { AirlineLogo } from "@/components/airline-logo";
 import { CategoryChipRow } from "@/components/filters/category-chip-row";
+import { CountUp } from "@/components/motion/count-up";
 import { MotionItem, MotionList } from "@/components/motion/motion-list";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiFetch } from "@/lib/api";
@@ -46,11 +47,31 @@ interface RecommendationsOut {
   items: Recommendation[];
 }
 
-// Color never carries the meaning on its own: every badge is icon + word.
+// Severity is the visual lead on this page: it drives the card's edge light,
+// its gradient border and its badge, so a high-severity item visibly burns
+// hotter than a low one -- in dark mode especially.
+//
+// Color still never carries the meaning on its own: every badge is icon +
+// word, exactly as before.
 const SEVERITY_META = {
-  high: { label: "Yüksek", icon: TriangleAlert, className: "border-critical/40 bg-critical/10 text-critical" },
-  medium: { label: "Orta", icon: CircleAlert, className: "border-warning/40 bg-warning/10 text-warning" },
-  low: { label: "Düşük", icon: Info, className: "border-border bg-muted text-muted-foreground" },
+  high: {
+    label: "Yüksek",
+    icon: TriangleAlert,
+    className: "bg-critical/12 text-critical ring-1 ring-critical/40",
+    glow: "var(--critical)",
+  },
+  medium: {
+    label: "Orta",
+    icon: CircleAlert,
+    className: "bg-warning/12 text-warning ring-1 ring-warning/40",
+    glow: "var(--warning)",
+  },
+  low: {
+    label: "Düşük",
+    icon: Info,
+    className: "bg-good/12 text-good ring-1 ring-good/35",
+    glow: "var(--good)",
+  },
 } as const;
 
 // The windows the backend compares against the window before them.
@@ -64,11 +85,12 @@ const AIRLINE_NAME: Record<string, string> = Object.fromEntries(
   airlineTabs.map((a) => [a.code, a.name]),
 );
 
+/** The lit-chip pattern shared with Gazete/İçgörüler. */
 const chip = (active: boolean) =>
   cn(
     "rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
     active
-      ? "bg-primary text-primary-foreground"
+      ? "bg-primary/12 text-primary ring-1 ring-primary/40 dark:glow"
       : "border border-border text-muted-foreground hover:bg-accent",
   );
 
@@ -220,7 +242,7 @@ export function RecommendationsClient() {
               must leave the flow instead of shoving the incoming ones down. */}
           <AnimatePresence mode="popLayout" initial={false}>
             {items.map((item) => (
-              <MotionItem key={item.id} lift exit="exit">
+              <MotionItem key={item.id} lift exit="exit" variant="scalePop">
                 <RecommendationCard item={item} />
               </MotionItem>
             ))}
@@ -271,11 +293,17 @@ function RecommendationCard({ item }: { item: Recommendation }) {
     : null;
 
   return (
-    <article className="flex h-full flex-col gap-3 rounded-xl border border-border bg-card p-5">
+    // glow-edge is the severity-colored runway light down the leading edge;
+    // border-gradient carries the same hue around the frame. No bg-card here
+    // -- border-gradient paints the surface itself (see globals.css).
+    <article
+      style={{ "--glow-color": severity.glow } as React.CSSProperties}
+      className="border-gradient glow-edge flex h-full flex-col gap-3 rounded-xl p-5"
+    >
       <div className="flex flex-wrap items-center gap-2">
         <span
           className={cn(
-            "flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold",
+            "flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold",
             severity.className,
           )}
         >
@@ -309,7 +337,10 @@ function RecommendationCard({ item }: { item: Recommendation }) {
           {item.metric.previous !== null && (
             <span className="tabular-nums">{item.metric.previous} → </span>
           )}
-          <span className="font-semibold tabular-nums text-foreground">{item.metric.value}</span>
+          <CountUp
+            value={item.metric.value}
+            className="font-semibold tabular-nums text-foreground"
+          />
         </p>
       )}
 

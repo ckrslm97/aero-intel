@@ -1,5 +1,6 @@
 "use client";
 
+import { motion, useReducedMotion } from "framer-motion";
 import {
   ExternalLink,
   Frown,
@@ -12,6 +13,8 @@ import {
 import { useEffect, useState } from "react";
 
 import { ArticleCard } from "@/components/article-card";
+import { CountUp } from "@/components/motion/count-up";
+import { MotionItem, MotionList } from "@/components/motion/motion-list";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiFetch } from "@/lib/api";
 import type { ArticleListOut, ArticleOut } from "@/lib/types";
@@ -66,7 +69,37 @@ function formatDate(iso: string | null): string | null {
   });
 }
 
+/** A bar that draws itself to its real width once, on mount, and then holds.
+ * Static under reduced motion -- it renders at its final width immediately. */
+function GrowBar({
+  width,
+  reduceMotion,
+  className,
+  style,
+  children,
+}: {
+  /** Final width as a CSS length, e.g. "42%". */
+  width: string;
+  reduceMotion: boolean | null;
+  className?: string;
+  style?: React.CSSProperties;
+  children?: React.ReactNode;
+}) {
+  return (
+    <motion.span
+      initial={reduceMotion ? false : { width: 0 }}
+      animate={{ width }}
+      transition={{ duration: reduceMotion ? 0 : 0.7, ease: [0.22, 1, 0.36, 1] }}
+      className={className}
+      style={{ width, ...style }}
+    >
+      {children}
+    </motion.span>
+  );
+}
+
 export function BizClient() {
+  const reduceMotion = useReducedMotion();
   const [data, setData] = useState<TkOut | null>(null);
   const [articles, setArticles] = useState<ArticleOut[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -119,18 +152,23 @@ export function BizClient() {
     ? Math.round((sentiment.positive / sentimentTotal) * 100)
     : 0;
   const maxThemeCount = Math.max(1, ...data.themes.map((t) => t.count));
-  const card = "rounded-xl border border-border bg-card p-5";
+  const card =
+    "rounded-xl border border-border bg-card bg-card-sheen p-5 shadow-elev-1 transition-shadow duration-300";
+  const litCard = cn(card, "hover:glow");
 
   return (
     <div className="flex flex-col gap-8">
       {/* THY-identity hero */}
+      {/* Deliberately NOT bg-hero-mesh: that mesh is blue/amber and this
+          banner is THY red. Same idea, brand-correct palette -- the red base
+          plus one static white highlight raking across it. */}
       <div
-        className="flex flex-wrap items-center justify-between gap-4 rounded-xl p-5 text-white"
+        className="relative flex flex-wrap items-center justify-between gap-4 overflow-hidden rounded-xl p-5 text-white shadow-elev-1 before:pointer-events-none before:absolute before:inset-0 before:bg-[radial-gradient(70%_120%_at_78%_-10%,rgba(255,255,255,0.16)_0%,transparent_62%)]"
         style={{
           background: `radial-gradient(circle at 20% 0%, ${THY_RED}55 0%, #16161a 65%)`,
         }}
       >
-        <div className="flex items-center gap-3">
+        <div className="relative flex items-center gap-3">
           <span
             className="flex size-11 items-center justify-center rounded-full"
             style={{ backgroundColor: THY_RED }}
@@ -144,49 +182,78 @@ export function BizClient() {
             </p>
           </div>
         </div>
-        <p className="text-xs text-white/50">
+        <p className="relative text-xs text-white/50">
           Kaynaklar:{" "}
           {data.sources.map((s) => `${s.name} (${s.count})`).join(" · ") || "henüz yok"}
         </p>
       </div>
 
       {/* Stat tiles */}
-      <div className="grid grid-cols-1 gap-5 sm:grid-cols-3">
-        <div className={card}>
+      <MotionList className="grid grid-cols-1 gap-5 sm:grid-cols-3">
+        <MotionItem
+          variant="scalePop"
+          className={litCard}
+          style={{ "--glow-color": "var(--signal)" } as React.CSSProperties}
+        >
           <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
             Ortalama Puan
           </p>
-          <p className="mt-1 text-3xl font-semibold tracking-tight">
-            {data.rating.average ?? "—"}
+          <p className="mt-1 text-3xl font-semibold tracking-tight tabular-nums dark:text-glow">
+            {data.rating.average === null ? (
+              "—"
+            ) : (
+              <CountUp
+                value={data.rating.average}
+                format={(v) => v.toFixed(1)}
+              />
+            )}
             <span className="text-base font-normal text-muted-foreground"> / 10</span>
           </p>
           <p className="text-xs text-muted-foreground">{data.rating.count} puanlı yorum</p>
-        </div>
-        <div className={card}>
+        </MotionItem>
+        <MotionItem
+          variant="scalePop"
+          className={litCard}
+          style={{ "--glow-color": "var(--primary)" } as React.CSSProperties}
+        >
           <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
             Toplanan Yorum
           </p>
-          <p className="mt-1 text-3xl font-semibold tracking-tight">{data.review_count}</p>
+          <CountUp
+            value={data.review_count}
+            className="mt-1 block text-3xl font-semibold tracking-tight tabular-nums dark:text-glow"
+          />
           <p className="text-xs text-muted-foreground">Skytrax · Reddit · App Store</p>
-        </div>
-        <div className={card}>
+        </MotionItem>
+        <MotionItem
+          variant="scalePop"
+          className={litCard}
+          style={{ "--glow-color": "var(--good)" } as React.CSSProperties}
+        >
           <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
             Olumlu Oranı
           </p>
-          <p className="mt-1 text-3xl font-semibold tracking-tight">%{positivePct}</p>
-          {/* Sentiment split -- status colors with icon+label, never color alone */}
+          <p className="mt-1 text-3xl font-semibold tracking-tight tabular-nums dark:text-glow">
+            %
+            <CountUp value={positivePct} />
+          </p>
+          {/* Sentiment split -- status colors with icon+label, never color
+              alone. The segments draw out from zero once, on mount. */}
           <div className="mt-2 flex h-2 w-full gap-0.5 overflow-hidden rounded-full">
-            <span
+            <GrowBar
+              reduceMotion={reduceMotion}
               className="bg-good"
-              style={{ width: `${sentimentTotal ? (sentiment.positive / sentimentTotal) * 100 : 0}%` }}
+              width={`${sentimentTotal ? (sentiment.positive / sentimentTotal) * 100 : 0}%`}
             />
-            <span
+            <GrowBar
+              reduceMotion={reduceMotion}
               className="bg-muted-foreground/40"
-              style={{ width: `${sentimentTotal ? (sentiment.neutral / sentimentTotal) * 100 : 0}%` }}
+              width={`${sentimentTotal ? (sentiment.neutral / sentimentTotal) * 100 : 0}%`}
             />
-            <span
+            <GrowBar
+              reduceMotion={reduceMotion}
               className="bg-critical"
-              style={{ width: `${sentimentTotal ? (sentiment.negative / sentimentTotal) * 100 : 0}%` }}
+              width={`${sentimentTotal ? (sentiment.negative / sentimentTotal) * 100 : 0}%`}
             />
           </div>
           <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
@@ -200,8 +267,8 @@ export function BizClient() {
               );
             })}
           </div>
-        </div>
-      </div>
+        </MotionItem>
+      </MotionList>
 
       {/* AI synthesis */}
       {data.digest && (
@@ -243,9 +310,11 @@ export function BizClient() {
                         {theme.count} yorum · {theme.positive}+ / {theme.negative}−
                       </span>
                     </div>
-                    <div
+                    <GrowBar
+                      reduceMotion={reduceMotion}
                       className="flex h-2.5 gap-0.5 overflow-hidden rounded-full"
-                      style={{ width: `${(theme.count / maxThemeCount) * 100}%`, minWidth: "10%" }}
+                      width={`${(theme.count / maxThemeCount) * 100}%`}
+                      style={{ minWidth: "10%" }}
                     >
                       {theme.positive > 0 && (
                         <span className="bg-good" style={{ flex: theme.positive }} />
@@ -256,7 +325,7 @@ export function BizClient() {
                       {theme.negative > 0 && (
                         <span className="bg-critical" style={{ flex: theme.negative }} />
                       )}
-                    </div>
+                    </GrowBar>
                     {theme.quote && (
                       <a
                         href={theme.quote.url}

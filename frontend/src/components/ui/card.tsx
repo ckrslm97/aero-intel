@@ -12,7 +12,12 @@ function Card({
       data-slot="card"
       data-size={size}
       className={cn(
-        "group/card flex flex-col gap-(--card-spacing) overflow-hidden rounded-xl bg-card py-(--card-spacing) text-sm text-card-foreground ring-1 ring-foreground/10 [--card-spacing:--spacing(4)] has-data-[slot=card-footer]:pb-0 has-[>img:first-child]:pt-0 data-[size=sm]:[--card-spacing:--spacing(3)] data-[size=sm]:has-data-[slot=card-footer]:pb-0 *:[img:first-child]:rounded-t-xl *:[img:last-child]:rounded-b-xl",
+        // shadow-elev-1 + bg-card-sheen are the "approach lights" base coat:
+        // every surface in the app (KPI cards, recommendation cards, hub
+        // panels, chart cards) lifts off the background and carries a faint
+        // diagonal wash instead of reading as one flat fill. transition-shadow
+        // is here so any surface can opt into hover:glow with no extra setup.
+        "group/card flex flex-col gap-(--card-spacing) overflow-hidden rounded-xl bg-card bg-card-sheen py-(--card-spacing) text-sm text-card-foreground shadow-elev-1 ring-1 ring-foreground/10 transition-shadow duration-300 [--card-spacing:--spacing(4)] has-data-[slot=card-footer]:pb-0 has-[>img:first-child]:pt-0 data-[size=sm]:[--card-spacing:--spacing(3)] data-[size=sm]:has-data-[slot=card-footer]:pb-0 *:[img:first-child]:rounded-t-xl *:[img:last-child]:rounded-b-xl",
         className
       )}
       {...props}

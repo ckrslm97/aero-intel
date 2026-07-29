@@ -11,9 +11,15 @@ import {
 import { useEffect } from "react";
 
 import { AirlineLogo } from "@/components/airline-logo";
-import { drawerPanel, overlayFade, reduceVariants } from "@/lib/motion";
+import {
+  drawerPanel,
+  drawerStagger,
+  fadeUpItem,
+  overlayFade,
+  reduceVariants,
+} from "@/lib/motion";
 import { worldRegions } from "@/lib/nav";
-import { getCategory, getSubcategoryLabel } from "@/lib/taxonomy";
+import { categoryVar, getCategory, getSubcategoryLabel } from "@/lib/taxonomy";
 import type { ArticleOut } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -59,6 +65,7 @@ export function ArticleAnalysisDrawer({
   onClose: () => void;
 }) {
   const reduceMotion = useReducedMotion();
+  const item = reduceMotion ? reduceVariants(fadeUpItem) : fadeUpItem;
 
   useEffect(() => {
     if (!article) return;
@@ -123,8 +130,19 @@ export function ArticleAnalysisDrawer({
             initial="hidden"
             animate="show"
             exit="exit"
+            style={
+              {
+                "--glow-color": categoryVar(enrichment?.category),
+              } as React.CSSProperties
+            }
             className="fixed inset-y-0 right-0 z-50 flex w-full max-w-lg flex-col border-l border-border bg-card shadow-2xl"
           >
+            {/* The story's category color, as a lit edge down the seam where
+                the panel meets the page. */}
+            <span
+              aria-hidden
+              className="pointer-events-none absolute inset-y-0 left-0 w-0.5 bg-gradient-to-b from-[var(--glow-color)] via-[var(--glow-color)]/40 to-transparent"
+            />
             <header className="flex items-start justify-between gap-4 border-b border-border px-6 py-5">
               <div className="flex flex-wrap items-center gap-2">
                 {category && CategoryIcon && (
@@ -171,8 +189,16 @@ export function ArticleAnalysisDrawer({
               </button>
             </header>
 
-            <div className="flex flex-1 flex-col gap-6 overflow-y-auto px-6 py-6">
-              <div className="flex flex-col gap-2">
+            {/* Interior cascades in after the panel spring has landed
+                (drawerStagger's delayChildren), so nothing is sliding while
+                the panel is still travelling. */}
+            <motion.div
+              variants={reduceMotion ? reduceVariants(drawerStagger) : drawerStagger}
+              initial="hidden"
+              animate="show"
+              className="flex flex-1 flex-col gap-6 overflow-y-auto px-6 py-6"
+            >
+              <motion.div variants={item} className="flex flex-col gap-2">
                 <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
                   <span className="font-semibold text-foreground">{article.source.name}</span>
                   <span aria-hidden>·</span>
@@ -192,16 +218,25 @@ export function ArticleAnalysisDrawer({
                     otomatik çeviri yok
                   </span>
                 )}
-              </div>
+              </motion.div>
 
               {summary && (
-                <p className="whitespace-pre-line text-[15px] leading-relaxed text-muted-foreground">
+                <motion.p
+                  variants={item}
+                  className="whitespace-pre-line text-[15px] leading-relaxed text-muted-foreground"
+                >
                   {summary}
-                </p>
+                </motion.p>
               )}
 
               {enrichment && (
-                <div className="flex flex-col gap-4 rounded-xl border border-border bg-background/60 p-5">
+                <motion.div
+                  variants={item}
+                  style={
+                    { "--gradient-surface": "var(--card)" } as React.CSSProperties
+                  }
+                  className="border-gradient flex flex-col gap-4 rounded-xl p-5"
+                >
                   <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                     Doğrulama
                   </h3>
@@ -231,11 +266,11 @@ export function ArticleAnalysisDrawer({
                       }
                     />
                   </div>
-                </div>
+                </motion.div>
               )}
 
               {article.airlines.length > 0 && (
-                <div className="flex flex-col gap-2.5">
+                <motion.div variants={item} className="flex flex-col gap-2.5">
                   <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                     Adı geçen taşıyıcılar
                   </h3>
@@ -256,11 +291,11 @@ export function ArticleAnalysisDrawer({
                       </span>
                     ))}
                   </div>
-                </div>
+                </motion.div>
               )}
 
               {article.airports.length > 0 && (
-                <div className="flex flex-col gap-2.5">
+                <motion.div variants={item} className="flex flex-col gap-2.5">
                   <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                     Adı geçen havalimanları
                   </h3>
@@ -279,11 +314,11 @@ export function ArticleAnalysisDrawer({
                       </span>
                     ))}
                   </div>
-                </div>
+                </motion.div>
               )}
 
               {tags.length > 0 && (
-                <div className="flex flex-col gap-2.5">
+                <motion.div variants={item} className="flex flex-col gap-2.5">
                   <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                     Etiketler
                   </h3>
@@ -297,21 +332,25 @@ export function ArticleAnalysisDrawer({
                       </span>
                     ))}
                   </div>
-                </div>
+                </motion.div>
               )}
 
-              <p className="text-[11px] leading-relaxed text-muted-foreground">
+              <motion.p
+                variants={item}
+                className="text-[11px] leading-relaxed text-muted-foreground"
+              >
                 Bu analiz, haber alındığında boru hattının ürettiği sınıflandırma ve
                 doğrulama verisinden oluşur — yeni bir model çağrısı yapılmaz.
-              </p>
-            </div>
+              </motion.p>
+            </motion.div>
 
             <footer className="border-t border-border px-6 py-4">
               <a
                 href={article.url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="flex w-full items-center justify-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground transition-opacity hover:opacity-90"
+                style={{ "--glow-color": "var(--primary)" } as React.CSSProperties}
+                className="flex w-full items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-primary to-chart-4 px-4 py-2.5 text-sm font-semibold text-primary-foreground transition-shadow duration-300 hover:glow"
               >
                 Kaynağa git
                 <ExternalLink className="size-4" />

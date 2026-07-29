@@ -67,6 +67,11 @@
   --radius-2xl: calc(var(--radius) * 1.8);
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
+  /* "Approach lights" elevation recipes -- see the --elev-1/--elev-2 block
+     below. Registered `inline` on purpose: the utility resolves to
+     `var(--elev-N)` at use time, so the .dark override still applies. */
+  --shadow-elev-1: var(--elev-1);
+  --shadow-elev-2: var(--elev-2);
 }
 
 /*
@@ -195,5 +200,245 @@
 @layer utilities {
   .tabular-nums {
     font-variant-numeric: tabular-nums;
+  }
+}
+
+/* ===========================================================================
+ * "Yaklaşma Işıkları" (Approach Lights) -- the visual language layer.
+ *
+ * Everything below is ADDITIVE. The category / chart / status hexes in the
+ * :root and .dark blocks above were validated by the dataviz palette checker
+ * and are deliberately untouched; this layer only derives glows, gradients
+ * and shadows from them via color-mix().
+ *
+ * The single override point is --glow-color. Set it inline per component
+ * (style={{ "--glow-color": "var(--category-fleet)" }}) and every utility
+ * here -- glow, glow-edge, text-glow, border-gradient, hairline-glow, and the
+ * --elev-2 recipe -- picks it up. That is how all 11 category hues, the 5
+ * chart hues and the status colors get glow variants without a single new
+ * per-color token pair.
+ *
+ * Intensity is dialed per mode: dark mode is the night approach (full neon),
+ * light mode is the same airport at midday (~1/3 of the intensity).
+ * ======================================================================== */
+
+:root {
+  /* Intensity dials -- light mode, deliberately restrained. */
+  --glow-color: var(--primary);
+  --glow-alpha: 14%;
+  --glow-alpha-strong: 22%;
+  --glow-blur: 10px;
+
+  /* Elevation. elev-1 is neutral lift; elev-2 adds the --glow-color tint.
+   *
+   * Both carry their own 1px ring on purpose. Tailwind's `ring-*` is itself a
+   * box-shadow, so any element that swaps to `glow` (which sets box-shadow
+   * outright) would otherwise lose its outline mid-hover. Baking the ring in
+   * means the hairline survives the swap -- tinted, which is the point. */
+  --elev-1:
+    0 0 0 1px rgba(11, 11, 11, 0.07),
+    0 1px 2px rgba(11, 11, 11, 0.04),
+    0 6px 16px -10px rgba(11, 11, 11, 0.1);
+  --elev-2:
+    0 0 0 1px color-mix(in srgb, var(--glow-color) 25%, transparent),
+    0 2px 4px rgba(11, 11, 11, 0.05),
+    0 12px 26px -12px color-mix(in srgb, var(--glow-color) 22%, transparent);
+
+  /* Night-horizon wash behind hero sections. 5-7% per layer in light mode. */
+  --hero-mesh:
+    radial-gradient(
+      62% 130% at 10% 0%,
+      color-mix(in srgb, var(--primary) 7%, transparent) 0%,
+      transparent 70%
+    ),
+    radial-gradient(
+      48% 110% at 88% 8%,
+      color-mix(in srgb, var(--chart-4) 6%, transparent) 0%,
+      transparent 72%
+    ),
+    radial-gradient(
+      70% 150% at 52% 118%,
+      color-mix(in srgb, var(--signal) 5%, transparent) 0%,
+      transparent 68%
+    );
+
+  /* Diagonal sheen across card surfaces -- barely there, but it stops every
+     panel reading as one flat fill. */
+  --card-sheen: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--primary) 3%, transparent) 0%,
+    transparent 44%,
+    transparent 100%
+  );
+
+  /* Base fill used under border-gradient. Override inline when the element
+     does not sit on --card (e.g. a panel on --background). */
+  --gradient-surface: var(--card);
+}
+
+.dark {
+  /* Full vivid treatment: roughly 3x the light-mode glow, 2x the blur. */
+  --glow-alpha: 38%;
+  --glow-alpha-strong: 55%;
+  --glow-blur: 22px;
+
+  --elev-1:
+    0 0 0 1px rgba(255, 255, 255, 0.06),
+    0 1px 2px rgba(0, 0, 0, 0.5),
+    0 8px 22px -14px rgba(0, 0, 0, 0.7);
+  --elev-2:
+    0 2px 6px rgba(0, 0, 0, 0.55),
+    0 0 0 1px color-mix(in srgb, var(--glow-color) 28%, transparent),
+    0 14px 34px -14px color-mix(in srgb, var(--glow-color) 40%, transparent);
+
+  --hero-mesh:
+    radial-gradient(
+      62% 130% at 10% 0%,
+      color-mix(in srgb, var(--primary) 17%, transparent) 0%,
+      transparent 70%
+    ),
+    radial-gradient(
+      48% 110% at 88% 8%,
+      color-mix(in srgb, var(--chart-4) 14%, transparent) 0%,
+      transparent 72%
+    ),
+    radial-gradient(
+      70% 150% at 52% 118%,
+      color-mix(in srgb, var(--signal) 10%, transparent) 0%,
+      transparent 68%
+    );
+
+  --card-sheen: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--primary) 8%, transparent) 0%,
+    transparent 46%,
+    transparent 100%
+  );
+}
+
+/* --- Utilities ----------------------------------------------------------
+ * Tailwind v4 @utility rules: these compose with hover:, dark:, group-hover:
+ * and every other variant exactly like a core utility.
+ * --------------------------------------------------------------------- */
+
+/* Runway edge lighting: the surface emits its --glow-color.
+ *
+ * Deliberately a SUPERSET of shadow-elev-2 (it opens with var(--elev-2)) so
+ * `glow` and `shadow-elev-2` never fight over the box-shadow property -- put
+ * `glow` on a surface and you get the elevation for free. */
+@utility glow {
+  box-shadow:
+    var(--elev-2),
+    0 0 var(--glow-blur)
+      color-mix(in srgb, var(--glow-color) var(--glow-alpha), transparent),
+    0 0 calc(var(--glow-blur) * 2.4)
+      color-mix(in srgb, var(--glow-color) calc(var(--glow-alpha) / 2), transparent);
+}
+
+/* The approach-light bar: a lit left rail with an inward bleed and a faint
+ * outward spill. Used on article rows and severity-led cards. */
+@utility glow-edge {
+  box-shadow:
+    inset 3px 0 0 0 color-mix(in srgb, var(--glow-color) 90%, transparent),
+    inset 14px 0 20px -14px
+      color-mix(in srgb, var(--glow-color) var(--glow-alpha-strong), transparent),
+    -4px 0 calc(var(--glow-blur) * 1.2) -6px
+      color-mix(in srgb, var(--glow-color) var(--glow-alpha), transparent),
+    var(--elev-1);
+}
+
+/* Instrument backlighting for numerals and headline text. */
+@utility text-glow {
+  text-shadow: 0 0 calc(var(--glow-blur) * 0.9)
+    color-mix(in srgb, var(--glow-color) var(--glow-alpha-strong), transparent);
+}
+
+/* Layered night-horizon wash. Needs `relative overflow-hidden` on the host so
+ * the radial gradients are clipped to the rounded corners. */
+@utility bg-hero-mesh {
+  background-image: var(--hero-mesh);
+}
+
+@utility bg-card-sheen {
+  background-image: var(--card-sheen);
+}
+
+/* Approach-light gradient on type: --primary running into --chart-4. */
+@utility gradient-text {
+  background-image: linear-gradient(
+    100deg,
+    var(--primary) 0%,
+    color-mix(in srgb, var(--primary) 45%, var(--chart-4)) 52%,
+    var(--chart-4) 100%
+  );
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+}
+
+/* Double-background gradient border (padding-box fill over border-box
+ * gradient). The first layer carries --card-sheen so this composes with the
+ * sheen instead of overwriting it -- background-image is a single property. */
+@utility border-gradient {
+  border: 1px solid transparent;
+  background-image:
+    var(--card-sheen),
+    linear-gradient(var(--gradient-surface), var(--gradient-surface)),
+    linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--glow-color) 70%, transparent) 0%,
+      color-mix(in srgb, var(--glow-color) 12%, transparent) 46%,
+      color-mix(in srgb, var(--chart-4) 34%, transparent) 100%
+    );
+  background-origin: border-box;
+  background-clip: padding-box, padding-box, border-box;
+}
+
+/* Approach light bar: a 1px transparent -> color -> transparent rail with a
+ * soft bloom. Used under section headings and before date headers. */
+@utility hairline-glow {
+  height: 1px;
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in srgb, var(--glow-color) 70%, transparent) 18%,
+    var(--glow-color) 50%,
+    color-mix(in srgb, var(--glow-color) 70%, transparent) 82%,
+    transparent 100%
+  );
+  box-shadow: 0 0 var(--glow-blur)
+    color-mix(in srgb, var(--glow-color) var(--glow-alpha), transparent);
+}
+
+/* --- The one keyframe animation in the system ---------------------------
+ * Entrance only: one pass on mount, then the UI holds still. The explicit
+ * iteration count of 1 (and `both` fill) is the whole point -- nothing in
+ * this design language loops.
+ * --------------------------------------------------------------------- */
+@keyframes pulse-once {
+  0% {
+    opacity: 0.35;
+    filter: brightness(1.32);
+  }
+  55% {
+    opacity: 1;
+    filter: brightness(1.08);
+  }
+  100% {
+    opacity: 1;
+    filter: none;
+  }
+}
+
+@utility animate-pulse-once {
+  animation-name: pulse-once;
+  animation-duration: 900ms;
+  animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+  animation-iteration-count: 1;
+  animation-fill-mode: both;
+
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
   }
 }

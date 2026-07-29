@@ -155,6 +155,19 @@ export function getCategory(slug: string): CategoryDef {
   return CATEGORY_BY_SLUG[slug] ?? CATEGORY_BY_SLUG.general;
 }
 
+/** A taxonomy slug as a CSS custom-property reference, e.g.
+ * `revenue_management` -> `var(--category-revenue-management)`.
+ *
+ * The slug uses underscores and the token hyphens, which is exactly the sort
+ * of transform Tailwind's scanner cannot follow -- so category color is
+ * carried through a CSS variable (usually assigned to `--glow-color`) rather
+ * than through a dynamically-built class name. Unknown slugs fall back to the
+ * "general" hue instead of producing an undefined var. */
+export function categoryVar(slug: string | null | undefined): string {
+  const known = slug && CATEGORY_BY_SLUG[slug] ? slug : "general";
+  return `var(--category-${known.replace(/_/g, "-")})`;
+}
+
 export function getSubcategoryLabel(categorySlug: string, subcategorySlug: string | null): string | null {
   if (!subcategorySlug) return null;
   const category = CATEGORY_BY_SLUG[categorySlug];

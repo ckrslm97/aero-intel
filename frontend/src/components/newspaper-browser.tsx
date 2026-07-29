@@ -206,6 +206,12 @@ export function NewspaperBrowser() {
 
   const today = new Date().toISOString().slice(0, 10);
   const hasMore = items.length < total;
+  // Same local-calendar key `groupByDay` builds, so "today" can be picked out
+  // of the date headers without re-parsing every article.
+  const todayGroupKey = (() => {
+    const now = new Date();
+    return `${now.getFullYear()}-${now.getMonth()}-${now.getDate()}`;
+  })();
 
   const dayGroups = useMemo(() => groupByDay(items), [items]);
 
@@ -455,16 +461,29 @@ export function NewspaperBrowser() {
               published_at desc, so grouping is a pure client-side pass over
               the list and re-runs whenever a page is appended. */}
           <div className={cn("flex flex-col gap-8 transition-opacity", loading && "opacity-60")}>
-            {dayGroups.map((group, groupIndex) => (
+            {dayGroups.map((group, groupIndex) => {
+              const isToday = group.key === todayGroupKey;
+              return (
               <section key={group.key ?? "undated"} className="flex flex-col gap-3">
                 <motion.h2
                   initial={reduceMotion ? false : { opacity: 0, y: 6 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: reduceMotion ? 0 : 0.2 }}
-                  className="sticky top-[3.25rem] z-10 -mx-2 bg-background/85 px-2 py-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground backdrop-blur supports-[backdrop-filter]:bg-background/60"
+                  style={
+                    {
+                      "--glow-color": isToday ? "var(--signal)" : "var(--primary)",
+                    } as React.CSSProperties
+                  }
+                  className={cn(
+                    "sticky top-[3.25rem] z-10 -mx-2 flex items-center gap-2 bg-background/85 px-2 py-1.5 text-xs font-semibold uppercase tracking-wider backdrop-blur supports-[backdrop-filter]:bg-background/60",
+                    isToday ? "text-signal" : "text-muted-foreground",
+                  )}
                 >
+                  {/* A short approach-light bar leading into the date, amber
+                      for today the way a threshold light is. */}
+                  <span aria-hidden className="hairline-glow w-6 shrink-0" />
                   {group.label}
-                  <span className="ml-2 font-normal normal-case tracking-normal">
+                  <span className="font-normal normal-case tracking-normal text-muted-foreground">
                     {group.articles.length} haber
                   </span>
                 </motion.h2>
@@ -491,7 +510,8 @@ export function NewspaperBrowser() {
                   </AnimatePresence>
                 </div>
               </section>
-            ))}
+              );
+            })}
           </div>
 
           {hasMore && (

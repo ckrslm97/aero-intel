@@ -4,6 +4,7 @@ import { CircleDashed, Minus, TrendingDown, TrendingUp } from "lucide-react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 
+import { CountUp } from "@/components/motion/count-up";
 import { formatCompactNumber, formatDelta } from "@/lib/format";
 import { KPI_ICONS } from "@/lib/kpi-icons";
 import type { KpiOut } from "@/lib/types";
@@ -22,6 +23,14 @@ const SHORT_LABEL: Record<string, string> = {
   fuel_price: "Jet Yakıtı",
 };
 
+/** One runway-light color per instrument, so the strip reads as three
+ * distinct channels rather than one blue block. */
+const GLOW_VAR: Record<string, string> = {
+  oil_price: "var(--chart-5)",
+  fuel_price: "var(--chart-3)",
+  fx_usd_try: "var(--chart-2)",
+};
+
 /** Market context for the dashboard: fuel, oil and FX.
  *
  * Deliberately quieter than `KpiCard` -- muted surface, small type, a 26px
@@ -31,7 +40,9 @@ export function MarketTicker({ items }: { items: KpiOut[] }) {
   if (items.length === 0) return null;
 
   return (
-    <div className="flex flex-wrap gap-2.5">
+    // One-shot entrance flash as the strip powers on. `animate-pulse-once`
+    // runs exactly once and is disabled under prefers-reduced-motion.
+    <div className="animate-pulse-once flex flex-wrap gap-2.5">
       {items.map((kpi) => {
         const Icon = KPI_ICONS[kpi.metric_key] ?? CircleDashed;
         const delta = kpi.delta_pct;
@@ -44,7 +55,12 @@ export function MarketTicker({ items }: { items: KpiOut[] }) {
           <Link
             key={kpi.metric_key}
             href={`/kpi/${kpi.metric_key}`}
-            className="flex min-w-[13rem] flex-1 items-center gap-3 rounded-lg border border-border/60 bg-muted/40 px-3.5 py-2.5 transition-colors hover:bg-accent/40"
+            style={
+              {
+                "--glow-color": GLOW_VAR[kpi.metric_key] ?? "var(--primary)",
+              } as React.CSSProperties
+            }
+            className="glow-edge flex min-w-[13rem] flex-1 items-center gap-3 rounded-lg bg-muted/40 px-3.5 py-2.5 transition-[box-shadow,background-color] duration-300 hover:bg-accent/40 hover:glow"
           >
             <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-background/70 text-muted-foreground">
               <Icon className="size-3.5" />
@@ -54,9 +70,11 @@ export function MarketTicker({ items }: { items: KpiOut[] }) {
                 {SHORT_LABEL[kpi.metric_key] ?? kpi.label}
               </span>
               <span className="flex items-baseline gap-1">
-                <span className="text-sm font-semibold tabular-nums">
-                  {formatCompactNumber(kpi.value)}
-                </span>
+                <CountUp
+                  value={kpi.value}
+                  format={formatCompactNumber}
+                  className="text-sm font-semibold tabular-nums"
+                />
                 {kpi.unit && (
                   <span className="text-[10px] text-muted-foreground">{kpi.unit}</span>
                 )}
@@ -65,12 +83,12 @@ export function MarketTicker({ items }: { items: KpiOut[] }) {
             {delta !== null && (
               <span
                 className={cn(
-                  "flex shrink-0 items-center gap-0.5 text-xs font-medium tabular-nums",
+                  "flex shrink-0 items-center gap-0.5 rounded-full px-1.5 py-0.5 text-xs font-medium tabular-nums",
                   isFlat
-                    ? "text-muted-foreground"
+                    ? "bg-muted text-muted-foreground"
                     : isGoodDirection
-                      ? "text-good"
-                      : "text-critical",
+                      ? "bg-good/10 text-good"
+                      : "bg-critical/10 text-critical",
                 )}
               >
                 <DeltaIcon className="size-3" />
