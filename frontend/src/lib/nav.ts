@@ -28,8 +28,8 @@ export const primaryNav: NavItem[] = [
   { href: "/insights", label: "İçgörüler", icon: Lightbulb },
   { href: "/oneriler", label: "Öneriler", icon: Sparkles },
   { href: "/hublar", label: "Hub'lar", icon: Globe2 },
-  { href: "/know-how", label: "Know How", icon: GraduationCap },
   { href: "/biz", label: "BİZ", icon: Star },
+  { href: "/know-how", label: "Know How", icon: GraduationCap },
   { href: "/archive", label: "Arşiv", icon: Archive },
   { href: "/search", label: "Ara", icon: Search },
 ];

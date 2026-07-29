@@ -67,7 +67,7 @@ export function KpiCard({
   const Icon = KPI_ICONS[metricKey] ?? CircleDashed;
 
   return (
-    <Link href={`/kpi/${metricKey}`} className="block">
+    <Link href={`/kpi/${metricKey}`} className="block h-full">
       <Card
         style={{ "--glow-color": "var(--primary)" } as React.CSSProperties}
         className="relative h-full transition-all duration-300 hover:-translate-y-0.5 hover:border-primary/50 hover:bg-accent/30 hover:glow motion-reduce:transform-none"
