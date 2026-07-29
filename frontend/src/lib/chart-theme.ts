@@ -3,6 +3,8 @@
 import { useTheme } from "next-themes";
 import { useMemo } from "react";
 
+import { formatCompactNumber } from "@/lib/format";
+
 /* ===========================================================================
  * The one place chart colors live.
  *
@@ -151,11 +153,20 @@ export function categoryAxis(theme: ChartTheme) {
   };
 }
 
-/** Axis defaults -- spread into an xAxis/yAxis of `type: "value"`. */
+/** Axis defaults -- spread into an xAxis/yAxis of `type: "value"`. The
+ * compact formatter is the default rather than a per-chart opt-in: an
+ * unformatted value axis renders raw magnitudes ("1.200.000.000"), which no
+ * axis in this app ever wants. A chart that needs a different label (a "%"
+ * axis, say) still wins -- object-spread means its own `axisLabel` replaces
+ * this one wholesale. */
 export function valueAxis(theme: ChartTheme) {
   return {
     splitLine: { lineStyle: { color: theme.gridline } },
-    axisLabel: { color: theme.ink, fontSize: 11 },
+    axisLabel: {
+      color: theme.ink,
+      fontSize: 11,
+      formatter: (v: number) => formatCompactNumber(v),
+    },
   };
 }
 
