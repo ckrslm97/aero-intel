@@ -16,6 +16,10 @@ const PUBLISHED_FORMAT = new Intl.DateTimeFormat("tr-TR", {
   timeStyle: "short",
 });
 
+// Grid tiles carry the day in their sticky date header, so the tile itself
+// only needs the clock time -- "14:32".
+const TIME_FORMAT = new Intl.DateTimeFormat("tr-TR", { hour: "2-digit", minute: "2-digit" });
+
 function formatPublished(iso: string | null): string {
   if (!iso) return "Tarih bilinmiyor";
   return PUBLISHED_FORMAT.format(new Date(iso));
@@ -26,7 +30,7 @@ function ArticleCardComponent({
   variant = "compact",
 }: {
   article: ArticleOut;
-  variant?: "top" | "compact";
+  variant?: "top" | "compact" | "grid";
 }) {
   const { open } = useArticleDrawer();
   const enrichment = article.enrichment;
@@ -50,6 +54,57 @@ function ArticleCardComponent({
   // on this very element: the hover background was being painted in the
   // category hue at 30% instead of the theme's accent surface.
   const glowVar = category ? categoryVar(category.slug) : undefined;
+
+  // The Gazete grid: an apron of individually-lit tiles rather than one long
+  // taxiway. `edge-lit` paints the resting perimeter/rail; hover:glow-edge
+  // takes the box-shadow over on hover so the rail brightens, never flickers.
+  if (variant === "grid") {
+    const time = article.published_at ? TIME_FORMAT.format(new Date(article.published_at)) : null;
+    return (
+      <button
+        type="button"
+        onClick={() => open(article)}
+        style={glowVar ? ({ "--glow-color": glowVar } as React.CSSProperties) : undefined}
+        className={cn(
+          "group relative flex h-full w-full flex-col gap-2 overflow-hidden rounded-xl border bg-card p-4 text-left transition-all duration-200",
+          "hover:-translate-y-1 motion-reduce:transform-none motion-reduce:transition-none",
+          glowVar ? "edge-lit hover:glow-edge" : "border-border hover:bg-accent/30",
+        )}
+      >
+        <div className="flex items-center gap-2">
+          {category && CategoryIcon && (
+            <span
+              className={cn(
+                "flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
+                category.textClass,
+                category.bgClass,
+              )}
+            >
+              <CategoryIcon className="size-3" />
+              {category.label}
+            </span>
+          )}
+          {time && (
+            <span className="ml-auto text-[10px] tabular-nums text-muted-foreground">{time}</span>
+          )}
+        </div>
+
+        <span className="line-clamp-2 text-sm font-medium leading-snug text-card-foreground group-hover:text-primary">
+          {headline}
+        </span>
+
+        {summary && (
+          <p className="line-clamp-2 text-xs leading-relaxed text-muted-foreground">{summary}</p>
+        )}
+
+        {/* mt-auto pins the source to the bottom so tiles with unequal
+            content still bottom-align across a row. */}
+        <div className="mt-auto flex items-center pt-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+          {article.source.name}
+        </div>
+      </button>
+    );
+  }
 
   return (
     /* The card no longer navigates away: it opens the in-app analysis drawer,

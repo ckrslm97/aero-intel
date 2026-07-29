@@ -347,6 +347,22 @@
     var(--elev-1);
 }
 
+/* Resting-state runway edge for grid tiles: tinted perimeter, solid left
+ * approach-rail, faint corner wash. hover:glow-edge takes over the
+ * box-shadow on hover (it carries its own inset rail), so the rail never
+ * flickers -- it brightens. Host must set border-width (`border`) itself. */
+@utility edge-lit {
+  border-color: color-mix(in srgb, var(--glow-color) 35%, var(--border));
+  background-image: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--glow-color) calc(var(--glow-alpha) / 2), transparent) 0%,
+    transparent 55%
+  );
+  box-shadow:
+    inset 3px 0 0 0 color-mix(in srgb, var(--glow-color) 80%, transparent),
+    var(--elev-1);
+}
+
 /* Instrument backlighting for numerals and headline text. */
 @utility text-glow {
   text-shadow: 0 0 calc(var(--glow-blur) * 0.9)

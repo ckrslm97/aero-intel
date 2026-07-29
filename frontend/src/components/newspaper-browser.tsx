@@ -487,24 +487,38 @@ export function NewspaperBrowser() {
                     {group.articles.length} haber
                   </span>
                 </motion.h2>
-                <div className="flex flex-col divide-y divide-border rounded-xl border border-border bg-card">
+                {/* An apron of individually-lit tiles: the day is already
+                    delimited by the sticky glowing date header above, so the
+                    tiles need no shared container of their own. */}
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                   <AnimatePresence initial={false}>
                     {group.articles.map((article, index) => (
                       <motion.div
                         key={article.id}
-                        initial={reduceMotion ? false : { opacity: 0, y: 8 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{
-                          duration: reduceMotion ? 0 : 0.18,
-                          // Cap the stagger at 8 items (~160ms). It used to cap
-                          // at PAGE_LIMIT, so the last row of a 30-item page
-                          // only finished animating ~800ms after the data had
-                          // arrived -- the single most visible part of "the
-                          // buttons feel slow".
-                          delay: reduceMotion ? 0 : Math.min(index + groupIndex, 8) * 0.02,
-                        }}
+                        // Each wrapper is a direct grid child carrying its own
+                        // initial/animate: variant propagation from a
+                        // `display:contents` parent cannot be measured by
+                        // Framer Motion and freezes the animation permanently.
+                        className={cn("h-full", groupIndex === 0 && index === 0 && "sm:col-span-2")}
+                        initial={reduceMotion ? false : { opacity: 0, y: 12, scale: 0.96 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        transition={
+                          reduceMotion
+                            ? { duration: 0 }
+                            : {
+                                type: "spring",
+                                stiffness: 320,
+                                damping: 28,
+                                mass: 0.9,
+                                // Cap the stagger at 8 items. It used to cap at
+                                // PAGE_LIMIT, so the last tile of a 30-item
+                                // page only finished animating long after the
+                                // data had arrived.
+                                delay: Math.min(index + groupIndex, 8) * 0.03,
+                              }
+                        }
                       >
-                        <ArticleCard article={article} />
+                        <ArticleCard article={article} variant="grid" />
                       </motion.div>
                     ))}
                   </AnimatePresence>
@@ -543,17 +557,24 @@ export function NewspaperBrowser() {
 
 function ArticleListSkeleton() {
   return (
-    <div className="flex flex-col divide-y divide-border rounded-xl border border-border bg-card">
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
       {Array.from({ length: 6 }).map((_, i) => (
-        <div key={i} className="flex flex-col gap-2 p-4">
+        <div
+          key={i}
+          className={cn(
+            "flex flex-col gap-2 rounded-xl border border-border bg-card p-4",
+            i === 0 && "sm:col-span-2",
+          )}
+        >
           <div className="flex items-center gap-2">
             <Skeleton className="h-4 w-20 rounded-full" />
-            <Skeleton className="h-4 w-16 rounded-full" />
-            <Skeleton className="h-4 w-24 rounded-full" />
+            <Skeleton className="ml-auto h-3 w-8 rounded-full" />
           </div>
+          <Skeleton className="h-4 w-full" />
           <Skeleton className="h-4 w-3/4" />
           <Skeleton className="h-3 w-full" />
           <Skeleton className="h-3 w-5/6" />
+          <Skeleton className="mt-1.5 h-2.5 w-16" />
         </div>
       ))}
     </div>
