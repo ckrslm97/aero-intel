@@ -1,14 +1,18 @@
 "use client";
 
 import ReactECharts from "echarts-for-react";
+import { AnimatePresence, useReducedMotion } from "framer-motion";
 import { ExternalLink, Lightbulb } from "lucide-react";
 import { useTheme } from "next-themes";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
+import { AirlineLogo } from "@/components/airline-logo";
+import { MotionItem, MotionList } from "@/components/motion/motion-list";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiFetch } from "@/lib/api";
 import { getCategory } from "@/lib/taxonomy";
-import { worldRegions } from "@/lib/nav";
+import { airlineTabs, worldRegions } from "@/lib/nav";
+import { cn } from "@/lib/utils";
 
 interface RouteSignalArticle {
   id: string;
@@ -41,8 +45,22 @@ interface InsightsOut {
   digest: { date: string; body: string; provider: string } | null;
 }
 
+/** One route signal, flattened out of its region group so the list can be
+ * filtered as a single set. */
+interface FlatSignal extends RouteSignalArticle {
+  region: string | null;
+}
+
 const REGION_NAME: Record<string, string> = Object.fromEntries(
   worldRegions.map((r) => [r.slug, r.name]),
+);
+
+const AIRLINE_COLOR: Record<string, string> = Object.fromEntries(
+  airlineTabs.map((a) => [a.code, a.color]),
+);
+
+const AIRLINE_NAME: Record<string, string> = Object.fromEntries(
+  airlineTabs.map((a) => [a.code, a.name]),
 );
 
 function formatSignalDate(iso: string | null): string | null {
@@ -50,12 +68,30 @@ function formatSignalDate(iso: string | null): string | null {
   return new Date(iso).toLocaleDateString("tr-TR", { day: "numeric", month: "short" });
 }
 
+const chip = (active: boolean) =>
+  cn(
+    "rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
+    active
+      ? "bg-primary text-primary-foreground"
+      : "border border-border text-muted-foreground hover:bg-accent",
+  );
+
 export function InsightsClient() {
   const { resolvedTheme } = useTheme();
   const isDark = resolvedTheme === "dark";
+  const reduceMotion = useReducedMotion();
 
   const [data, setData] = useState<InsightsOut | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Signal filters. Deliberately client-side: /insights returns the whole
+  // (already capped) signal set in one payload, so filtering in memory is
+  // exact -- no backend query params, no second round trip. There is no
+  // Kategori row here because every route signal is network/new_route by
+  // construction (see backend/app/services/insights_service.py), so a
+  // category filter would have exactly one non-empty value.
+  const [signalRegion, setSignalRegion] = useState<string | null>(null);
+  const [signalAirline, setSignalAirline] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -71,6 +107,43 @@ export function InsightsClient() {
     };
   }, []);
 
+  const flatSignals = useMemo<FlatSignal[]>(
+    () =>
+      (data?.new_route_signals ?? []).flatMap((group) =>
+        group.articles.map((article) => ({ ...article, region: group.region })),
+      ),
+    [data],
+  );
+
+  const visibleSignals = useMemo(
+    () =>
+      flatSignals.filter((signal) => {
+        if (signalRegion && signal.region !== signalRegion) return false;
+        if (signalAirline && !signal.airlines.includes(signalAirline)) return false;
+        return true;
+      }),
+    [flatSignals, signalRegion, signalAirline],
+  );
+
+  // Only offer chips that can actually match something -- an empty filter row
+  // that returns "0 sonuç" for eight of nine regions is noise.
+  const regionsWithSignals = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const signal of flatSignals) {
+      if (!signal.region) continue;
+      counts.set(signal.region, (counts.get(signal.region) ?? 0) + 1);
+    }
+    return worldRegions.filter((r) => counts.has(r.slug)).map((r) => ({ ...r, count: counts.get(r.slug)! }));
+  }, [flatSignals]);
+
+  const airlinesWithSignals = useMemo(() => {
+    const seen = new Set<string>();
+    for (const signal of flatSignals) {
+      for (const code of signal.airlines) seen.add(code);
+    }
+    return airlineTabs.filter((a) => seen.has(a.code));
+  }, [flatSignals]);
+
   // Remaining-chart colors, validated with the dataviz palette checker for
   // both surfaces -- do not restyle.
   const good = "#0ca30c";
@@ -79,6 +152,7 @@ export function InsightsClient() {
   const ink = isDark ? "#c3c2b7" : "#52514e";
   const surface = isDark ? "#1a1a19" : "#fcfcfb";
   const neutralBar = isDark ? "#4a4a47" : "#c8c7c0";
+  const accent = isDark ? "#3987e5" : "#2a78d6";
 
   const base = {
     grid: { left: 8, right: 24, top: 28, bottom: 8, containLabel: true },
@@ -99,10 +173,10 @@ export function InsightsClient() {
   }
   if (!data) {
     return (
-      <div className="flex flex-col gap-4">
+      <div className="flex flex-col gap-6">
         <Skeleton className="h-28 w-full rounded-xl" />
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          {Array.from({ length: 2 }).map((_, i) => (
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+          {Array.from({ length: 4 }).map((_, i) => (
             <Skeleton key={i} className="h-72 w-full rounded-xl" />
           ))}
         </div>
@@ -190,20 +264,110 @@ export function InsightsClient() {
     })),
   };
 
-  const chartCard = "rounded-xl border border-border bg-card p-4";
+  // NEW: where the route news is coming from. Straight off new_route_signals'
+  // region + count -- no extra aggregation.
+  const regionSlices = data.new_route_signals
+    .map((s) => ({
+      name: s.region ? (REGION_NAME[s.region] ?? s.region) : "Bölge belirtilmemiş",
+      value: s.count,
+    }))
+    .filter((s) => s.value > 0);
+
+  const regionOption = {
+    ...base,
+    grid: undefined,
+    tooltip: {
+      ...base.tooltip,
+      trigger: "item",
+      formatter: (p: { name: string; value: number; percent: number }) =>
+        `${p.name}<br/>${p.value} sinyal · %${p.percent}`,
+    },
+    legend: {
+      type: "scroll",
+      orient: "vertical",
+      right: 0,
+      top: "middle",
+      textStyle: { color: ink, fontSize: 11 },
+    },
+    series: [
+      {
+        type: "pie",
+        radius: ["48%", "72%"],
+        center: ["36%", "52%"],
+        avoidLabelOverlap: true,
+        itemStyle: { borderColor: surface, borderWidth: 2 },
+        label: { show: false },
+        labelLine: { show: false },
+        data: regionSlices,
+      },
+    ],
+  };
+
+  // NEW: absolute mention volume behind the momentum delta -- the delta chart
+  // says "who moved", this says "off what base".
+  const volumeAirlines = [...data.airline_momentum]
+    .sort((a, b) => b.current - a.current)
+    .slice(0, 8);
+
+  const volumeOption = {
+    ...base,
+    tooltip: { ...base.tooltip, trigger: "axis", axisPointer: { type: "shadow" } },
+    legend: {
+      top: 0,
+      icon: "roundRect",
+      itemWidth: 10,
+      itemHeight: 10,
+      textStyle: { color: ink, fontSize: 11 },
+    },
+    xAxis: {
+      type: "category",
+      data: volumeAirlines.map((m) => m.code),
+      axisLine: { lineStyle: { color: gridline } },
+      axisTick: { show: false },
+      axisLabel: { color: ink, fontSize: 11 },
+    },
+    yAxis: {
+      type: "value",
+      splitLine: { lineStyle: { color: gridline } },
+      axisLabel: { color: ink, fontSize: 11 },
+    },
+    series: [
+      {
+        name: "Önceki 7 gün",
+        type: "bar",
+        barMaxWidth: 16,
+        data: volumeAirlines.map((m) => m.previous),
+        itemStyle: { color: neutralBar, borderRadius: [3, 3, 0, 0] },
+      },
+      {
+        name: "Son 7 gün",
+        type: "bar",
+        barMaxWidth: 16,
+        data: volumeAirlines.map((m) => ({
+          value: m.current,
+          itemStyle: {
+            color: AIRLINE_COLOR[m.code] ?? accent,
+            borderRadius: [3, 3, 0, 0],
+          },
+        })),
+      },
+    ],
+  };
+
+  const chartCard = "rounded-xl border border-border bg-card p-5";
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-8">
       <div className="flex flex-col gap-1">
         <h1 className="text-2xl font-semibold tracking-tight">İçgörüler</h1>
-        <p className="text-sm text-muted-foreground">
+        <p className="text-sm leading-relaxed text-muted-foreground">
           Haber arşivinden otomatik çıkarılan örüntüler — her sayı veritabanındaki
           satırlara kadar izlenebilir.
         </p>
       </div>
 
       {data.digest && (
-        <div className="flex flex-col gap-2 rounded-xl border border-border bg-card p-4">
+        <div className="flex flex-col gap-2 rounded-xl border border-border bg-card p-5">
           <div className="flex items-center gap-2">
             <Lightbulb className="size-4 text-category-revenue-management" />
             <h2 className="text-sm font-semibold">Günün Örüntüsü</h2>
@@ -216,77 +380,216 @@ export function InsightsClient() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <div className={chartCard}>
+      <MotionList className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        <MotionItem className={chartCard}>
           <h2 className="mb-2 text-sm font-semibold">
-            Havayolu momentumu <span className="font-normal text-muted-foreground">(son 7 gün vs önceki 7 gün, haber sayısı farkı)</span>
+            Havayolu momentumu{" "}
+            <span className="font-normal text-muted-foreground">
+              (son 7 gün vs önceki 7 gün, haber sayısı farkı)
+            </span>
           </h2>
-          <ReactECharts option={momentumOption} style={{ height: 280 }} opts={{ renderer: "svg" }} notMerge />
-        </div>
-        <div className={chartCard}>
-          <h2 className="mb-2 text-sm font-semibold">Duygu dengesi <span className="font-normal text-muted-foreground">(son 30 gün)</span></h2>
-          <ReactECharts option={sentimentOption} style={{ height: 280 }} opts={{ renderer: "svg" }} notMerge />
-        </div>
-      </div>
+          <ReactECharts
+            option={momentumOption}
+            style={{ height: 280 }}
+            opts={{ renderer: "svg" }}
+            notMerge
+          />
+        </MotionItem>
 
-      <div className={chartCard}>
-        <h2 className="mb-2 text-sm font-semibold">
-          Yeni hat sinyalleri <span className="font-normal text-muted-foreground">(son 30 gün, kaynakçalı)</span>
-        </h2>
-        {data.new_route_signals.length === 0 ? (
-          <p className="py-16 text-center text-sm text-muted-foreground">
-            Son 30 günde yeni hat duyurusu yakalanmadı.
-          </p>
-        ) : (
-          <div className="flex flex-col gap-4">
-            {data.new_route_signals.map((signal) => (
-              <div key={signal.region ?? "unspecified"} className="flex flex-col gap-1">
-                <div className="flex items-center gap-2">
-                  <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                    {signal.region
-                      ? (REGION_NAME[signal.region] ?? signal.region)
-                      : "Bölge belirtilmemiş"}
-                  </h3>
-                  <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-muted-foreground">
-                    {signal.count}
-                  </span>
-                </div>
-                <ul className="flex flex-col divide-y divide-border">
-                  {signal.articles.map((article) => (
-                    <li key={article.id}>
-                      <a
-                        href={article.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="group flex flex-col gap-1 py-2.5"
-                      >
-                        <span className="flex items-start gap-1.5 text-sm font-medium text-card-foreground group-hover:text-primary">
-                          <span className="line-clamp-2">{article.headline}</span>
-                          <ExternalLink className="mt-1 size-3.5 shrink-0 opacity-0 transition-opacity group-hover:opacity-100" />
-                        </span>
-                        <span className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
-                          <span className="font-medium">{article.source_name}</span>
-                          {formatSignalDate(article.published_at) && (
-                            <span>· {formatSignalDate(article.published_at)}</span>
-                          )}
-                          {article.airlines.map((code) => (
-                            <span
-                              key={code}
-                              className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-semibold tabular-nums"
-                            >
-                              {code}
-                            </span>
-                          ))}
-                        </span>
-                      </a>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            ))}
+        <MotionItem className={chartCard}>
+          <h2 className="mb-2 text-sm font-semibold">
+            Duygu dengesi <span className="font-normal text-muted-foreground">(son 30 gün)</span>
+          </h2>
+          <ReactECharts
+            option={sentimentOption}
+            style={{ height: 280 }}
+            opts={{ renderer: "svg" }}
+            notMerge
+          />
+        </MotionItem>
+
+        <MotionItem className={chartCard}>
+          <h2 className="mb-2 text-sm font-semibold">
+            Haber hacmi{" "}
+            <span className="font-normal text-muted-foreground">
+              (taşıyıcı bazında, son 7 gün vs önceki 7 gün)
+            </span>
+          </h2>
+          {volumeAirlines.length > 0 ? (
+            <ReactECharts
+              option={volumeOption}
+              style={{ height: 280 }}
+              opts={{ renderer: "svg" }}
+              notMerge
+            />
+          ) : (
+            <p className="py-24 text-center text-sm text-muted-foreground">
+              Bu dönemde taşıyıcı bazında haber sayılmadı.
+            </p>
+          )}
+        </MotionItem>
+
+        <MotionItem className={chartCard}>
+          <h2 className="mb-2 text-sm font-semibold">
+            Yeni hat sinyallerinin dağılımı{" "}
+            <span className="font-normal text-muted-foreground">(bölgeye göre, son 30 gün)</span>
+          </h2>
+          {regionSlices.length > 0 ? (
+            <ReactECharts
+              option={regionOption}
+              style={{ height: 280 }}
+              opts={{ renderer: "svg" }}
+              notMerge
+            />
+          ) : (
+            <p className="py-24 text-center text-sm text-muted-foreground">
+              Son 30 günde yeni hat duyurusu yakalanmadı.
+            </p>
+          )}
+        </MotionItem>
+      </MotionList>
+
+      <div className={cn(chartCard, "flex flex-col gap-4")}>
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <h2 className="text-sm font-semibold">
+            Yeni hat sinyalleri{" "}
+            <span className="font-normal text-muted-foreground">(son 30 gün, kaynakçalı)</span>
+          </h2>
+          <span className="text-xs tabular-nums text-muted-foreground">
+            {visibleSignals.length} / {flatSignals.length} sinyal
+          </span>
+        </div>
+
+        {flatSignals.length > 0 && (
+          <div className="flex flex-col gap-2 rounded-lg border border-border bg-background/50 p-4">
+            <SignalFilterRow label="Bölge">
+              <button
+                type="button"
+                onClick={() => setSignalRegion(null)}
+                className={chip(!signalRegion)}
+              >
+                Tümü
+              </button>
+              {regionsWithSignals.map((r) => (
+                <button
+                  key={r.slug}
+                  type="button"
+                  onClick={() => setSignalRegion(signalRegion === r.slug ? null : r.slug)}
+                  className={chip(signalRegion === r.slug)}
+                >
+                  {r.name}
+                  <span className="ml-1 tabular-nums opacity-70">{r.count}</span>
+                </button>
+              ))}
+            </SignalFilterRow>
+
+            {airlinesWithSignals.length > 0 && (
+              <SignalFilterRow label="Havayolu">
+                <button
+                  type="button"
+                  onClick={() => setSignalAirline(null)}
+                  className={chip(!signalAirline)}
+                >
+                  Tümü
+                </button>
+                {airlinesWithSignals.map((a) => (
+                  <button
+                    key={a.code}
+                    type="button"
+                    title={a.name}
+                    onClick={() => setSignalAirline(signalAirline === a.code ? null : a.code)}
+                    className={cn(chip(signalAirline === a.code), "flex items-center gap-1 tabular-nums")}
+                  >
+                    <span
+                      className={cn(
+                        "flex size-4 items-center justify-center overflow-hidden rounded-[3px]",
+                        signalAirline === a.code && "bg-white/85",
+                      )}
+                    >
+                      <AirlineLogo code={a.code} name={a.name} className="size-4" />
+                    </span>
+                    {a.code}
+                  </button>
+                ))}
+              </SignalFilterRow>
+            )}
           </div>
         )}
+
+        {visibleSignals.length === 0 ? (
+          <p className="py-16 text-center text-sm text-muted-foreground">
+            {flatSignals.length === 0
+              ? "Son 30 günde yeni hat duyurusu yakalanmadı."
+              : "Bu filtrelerle sinyal yok. Bölge ya da taşıyıcı seçimini kaldırın."}
+          </p>
+        ) : (
+          <MotionList className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <AnimatePresence mode="popLayout" initial={false}>
+              {visibleSignals.map((signal) => (
+                <MotionItem
+                  key={signal.id}
+                  lift={!reduceMotion}
+                  exit="exit"
+                  className="flex flex-col gap-2 rounded-lg border border-border bg-card p-4"
+                >
+                  <h3 className="text-sm font-medium leading-snug">
+                    <span className="line-clamp-2">{signal.headline}</span>
+                  </h3>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="rounded-full bg-secondary px-2 py-0.5 text-[10px] font-medium text-secondary-foreground">
+                      {signal.region
+                        ? (REGION_NAME[signal.region] ?? signal.region)
+                        : "Bölge belirtilmemiş"}
+                    </span>
+                    {signal.airlines.map((code) => (
+                      <span
+                        key={code}
+                        title={AIRLINE_NAME[code] ?? code}
+                        className="flex items-center gap-1 rounded-full border border-border px-1.5 py-0.5 text-[10px] font-semibold tabular-nums"
+                      >
+                        <AirlineLogo code={code} name={AIRLINE_NAME[code]} className="size-3.5" />
+                        {code}
+                      </span>
+                    ))}
+                  </div>
+                  <div className="mt-auto flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
+                    <span className="font-medium">{signal.source_name}</span>
+                    {formatSignalDate(signal.published_at) && (
+                      <span>· {formatSignalDate(signal.published_at)}</span>
+                    )}
+                    <a
+                      href={signal.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="ml-auto flex items-center gap-1 font-medium text-primary hover:underline"
+                    >
+                      Kaynak
+                      <ExternalLink className="size-3" />
+                    </a>
+                  </div>
+                </MotionItem>
+              ))}
+            </AnimatePresence>
+          </MotionList>
+        )}
       </div>
+    </div>
+  );
+}
+
+function SignalFilterRow({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <span className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+        {label}
+      </span>
+      {children}
     </div>
   );
 }

@@ -1,13 +1,16 @@
 "use client";
 
+import { AnimatePresence } from "framer-motion";
 import { ChevronDown, CircleAlert, ExternalLink, Info, TriangleAlert } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { AirlineLogo } from "@/components/airline-logo";
+import { CategoryChipRow } from "@/components/filters/category-chip-row";
+import { MotionItem, MotionList } from "@/components/motion/motion-list";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiFetch } from "@/lib/api";
 import { airlineTabs, worldRegions } from "@/lib/nav";
-import { CATEGORY_BY_SLUG, CATEGORIES } from "@/lib/taxonomy";
+import { CATEGORY_BY_SLUG } from "@/lib/taxonomy";
 import { cn } from "@/lib/utils";
 
 // Mirrors the dict built by backend/app/services/recommendations.py. Declared
@@ -57,6 +60,10 @@ const REGION_NAME: Record<string, string> = Object.fromEntries(
   worldRegions.map((r) => [r.slug, r.name]),
 );
 
+const AIRLINE_NAME: Record<string, string> = Object.fromEntries(
+  airlineTabs.map((a) => [a.code, a.name]),
+);
+
 const chip = (active: boolean) =>
   cn(
     "rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
@@ -76,7 +83,9 @@ function formatEvidenceDate(iso: string | null): string | null {
 
 export function RecommendationsClient() {
   const [days, setDays] = useState<number>(DAY_OPTIONS[0]);
-  const [category, setCategory] = useState<string | null>(null);
+  // Gelir Yönetimi is the portal's focus category, so it is both pinned first
+  // and pre-selected; "Tümü" still clears back to every category.
+  const [category, setCategory] = useState<string | null>("revenue_management");
   const [region, setRegion] = useState<string | null>(null);
   const [airline, setAirline] = useState<string | null>(null);
 
@@ -117,10 +126,8 @@ export function RecommendationsClient() {
     };
   }, [days, category, region, airline]);
 
-  const sortedCategories = [...CATEGORIES].sort((a, b) => a.label.localeCompare(b.label, "tr"));
-
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-8">
       <div className="flex flex-col gap-1">
         <h1 className="text-2xl font-semibold tracking-tight">Öneriler</h1>
         <p className="text-sm text-muted-foreground">
@@ -131,7 +138,7 @@ export function RecommendationsClient() {
 
       {/* Filters. Each row narrows the same question: hangi dönem, hangi başlık,
           hangi bölge, hangi taşıyıcı. */}
-      <div className="flex flex-col gap-2 rounded-xl border border-border bg-card p-3">
+      <div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-5">
         <FilterRow label="Dönem">
           {DAY_OPTIONS.map((option) => (
             <button
@@ -145,18 +152,14 @@ export function RecommendationsClient() {
         </FilterRow>
 
         <FilterRow label="Kategori">
-          <button onClick={() => setCategory(null)} className={chip(!category)}>
-            Tümü
-          </button>
-          {sortedCategories.map((c) => (
-            <button
-              key={c.slug}
-              onClick={() => setCategory(category === c.slug ? null : c.slug)}
-              className={chip(category === c.slug)}
-            >
-              {c.label}
-            </button>
-          ))}
+          <CategoryChipRow
+            value={category}
+            onChange={setCategory}
+            pinned="revenue_management"
+            includeAll
+            focusStyling
+            variant="plain"
+          />
         </FilterRow>
 
         <FilterRow label="Bölge">
@@ -210,11 +213,19 @@ export function RecommendationsClient() {
           ))}
         </div>
       ) : items && items.length > 0 ? (
-        <div className={cn("flex flex-col gap-3 transition-opacity", loading && "opacity-60")}>
-          {items.map((item) => (
-            <RecommendationCard key={item.id} item={item} />
-          ))}
-        </div>
+        <MotionList
+          className={cn("flex flex-col gap-5 transition-opacity", loading && "opacity-60")}
+        >
+          {/* popLayout: filter changes swap the whole set, so outgoing cards
+              must leave the flow instead of shoving the incoming ones down. */}
+          <AnimatePresence mode="popLayout" initial={false}>
+            {items.map((item) => (
+              <MotionItem key={item.id} lift exit="exit">
+                <RecommendationCard item={item} />
+              </MotionItem>
+            ))}
+          </AnimatePresence>
+        </MotionList>
       ) : (
         <div className="rounded-lg border border-dashed border-border p-10 text-center">
           <p className="text-sm font-medium text-foreground">
@@ -253,8 +264,14 @@ function RecommendationCard({ item }: { item: Recommendation }) {
   const categoryLabel = item.category ? CATEGORY_BY_SLUG[item.category]?.label : null;
   const regionLabel = item.region ? (REGION_NAME[item.region] ?? item.region) : null;
 
+  // The "kuyruk görseli": the carrier's real logo, falling back to our drawn
+  // tail fin (components/tail-icon.tsx) when the CDN image doesn't load.
+  const airlineName = item.airline_code
+    ? (AIRLINE_NAME[item.airline_code] ?? item.airline_code)
+    : null;
+
   return (
-    <article className="flex flex-col gap-2 rounded-xl border border-border bg-card p-4">
+    <article className="flex h-full flex-col gap-3 rounded-xl border border-border bg-card p-5">
       <div className="flex flex-wrap items-center gap-2">
         <span
           className={cn(
@@ -267,11 +284,24 @@ function RecommendationCard({ item }: { item: Recommendation }) {
         </span>
         {categoryLabel && <Tag>{categoryLabel}</Tag>}
         {regionLabel && <Tag>{regionLabel}</Tag>}
-        {item.airline_code && <Tag>{item.airline_code}</Tag>}
+        {item.airline_code && airlineName && (
+          <span className="flex items-center gap-1.5 rounded-full border border-border px-2 py-0.5 text-[11px] font-medium">
+            <AirlineLogo
+              code={item.airline_code}
+              name={airlineName}
+              className="size-4"
+            />
+            {airlineName}
+          </span>
+        )}
       </div>
 
       <h2 className="text-base font-semibold leading-snug">{item.title}</h2>
-      <p className="text-sm leading-relaxed text-muted-foreground">{item.rationale}</p>
+      {/* Clamped: the title is the recommendation, the rationale is context.
+          The evidence block below is the deep-dive path. */}
+      <p className="line-clamp-2 text-sm leading-relaxed text-muted-foreground">
+        {item.rationale}
+      </p>
 
       {item.metric && (
         <p className="text-xs text-muted-foreground">

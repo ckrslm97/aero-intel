@@ -2,8 +2,13 @@ import { Download } from "lucide-react";
 import { notFound } from "next/navigation";
 
 import { ArticleCard } from "@/components/article-card";
+import { MotionItem, MotionList } from "@/components/motion/motion-list";
 import { API_BASE_URL, ApiError, apiFetch } from "@/lib/api";
 import type { EditionOut } from "@/lib/types";
+
+// Cards open the in-app analysis drawer, which lives on ArticleDrawerProvider
+// in the app shell (components/layout/app-shell.tsx) -- every route is inside
+// it, so this page needs no wrapper of its own.
 
 const SECTION_LABELS: Record<string, string> = {
   top_story: "Öne Çıkanlar",
@@ -65,7 +70,7 @@ export default async function EditionPage({
     : restTopStories;
 
   return (
-    <div className="flex flex-col gap-8">
+    <div className="flex flex-col gap-10">
       <div className="flex flex-col gap-2">
         <div className="flex items-center justify-between gap-4">
           <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
@@ -90,45 +95,54 @@ export default async function EditionPage({
           {edition.headline}
         </h1>
         {edition.executive_summary && (
-          <p className="line-clamp-3 max-w-3xl text-sm text-muted-foreground">
+          <p className="line-clamp-3 max-w-3xl text-sm leading-relaxed text-muted-foreground">
             {edition.executive_summary}
           </p>
         )}
       </div>
 
       {leadStory && (
-        <section className="flex flex-col gap-3">
+        <section className="flex flex-col gap-4">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
             {leadRepeatsMasthead ? "Öne çıkan haberler" : "Öne çıkan haber"}
           </h2>
           {!leadRepeatsMasthead && (
-            <div className="rounded-xl border border-border bg-card">
-              <ArticleCard article={leadStory} variant="top" />
-            </div>
+            <MotionList>
+              <MotionItem className="rounded-xl border border-border bg-card">
+                <ArticleCard article={leadStory} variant="top" />
+              </MotionItem>
+            </MotionList>
           )}
 
           {topStoryCards.length > 0 && (
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <MotionList className="grid grid-cols-1 gap-5 md:grid-cols-2">
               {topStoryCards.map((article) => (
-                <div key={article.id} className="rounded-xl border border-border bg-card">
+                <MotionItem
+                  key={article.id}
+                  className="rounded-xl border border-border bg-card"
+                >
                   <ArticleCard article={article} />
-                </div>
+                </MotionItem>
               ))}
-            </div>
+            </MotionList>
           )}
         </section>
       )}
 
+      {/* This page stays section-grouped -- it is already one date, so the
+          Gazete browser's day headers would say the same thing nine times. */}
       {otherSections.map((section) => (
-        <section key={section.section} className="flex flex-col gap-2">
+        <section key={section.section} className="flex flex-col gap-3">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
             {SECTION_LABELS[section.section] ?? section.section}
           </h2>
-          <div className="flex flex-col divide-y divide-border rounded-xl border border-border bg-card">
+          <MotionList className="flex flex-col divide-y divide-border rounded-xl border border-border bg-card">
             {section.articles.map((article) => (
-              <ArticleCard key={article.id} article={article} />
+              <MotionItem key={article.id}>
+                <ArticleCard article={article} />
+              </MotionItem>
             ))}
-          </div>
+          </MotionList>
         </section>
       ))}
 

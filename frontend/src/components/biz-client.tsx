@@ -119,10 +119,10 @@ export function BizClient() {
     ? Math.round((sentiment.positive / sentimentTotal) * 100)
     : 0;
   const maxThemeCount = Math.max(1, ...data.themes.map((t) => t.count));
-  const card = "rounded-xl border border-border bg-card p-4";
+  const card = "rounded-xl border border-border bg-card p-5";
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-8">
       {/* THY-identity hero */}
       <div
         className="flex flex-wrap items-center justify-between gap-4 rounded-xl p-5 text-white"
@@ -151,7 +151,7 @@ export function BizClient() {
       </div>
 
       {/* Stat tiles */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+      <div className="grid grid-cols-1 gap-5 sm:grid-cols-3">
         <div className={card}>
           <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
             Ortalama Puan
@@ -220,7 +220,7 @@ export function BizClient() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
         {/* Theme breakdown -- plain HTML bars, count = width, +/- split inside */}
         <div className={card}>
           <h2 className="mb-3 text-sm font-semibold">
@@ -278,8 +278,14 @@ export function BizClient() {
           )}
         </div>
 
-        {/* Recent quotes with citations */}
-        <div className={card}>
+        {/* Recent quotes with citations.
+            The card is a grid item, so it already stretches to match Temalar
+            next to it -- but the list inside used to carry a hard max-height,
+            so the card grew and the list didn't, leaving dead space at the
+            bottom. The card is now a flex column and the list is the flexible
+            child. On mobile there is no neighbour to stretch to, so the cap
+            comes back below lg. */}
+        <div className={cn(card, "flex min-h-0 flex-col")}>
           <h2 className="mb-3 text-sm font-semibold">
             Son Yorumlar{" "}
             <span className="font-normal text-muted-foreground">(kaynağa bağlantılı)</span>
@@ -289,7 +295,7 @@ export function BizClient() {
               Henüz yorum toplanmadı.
             </p>
           ) : (
-            <ul className="flex max-h-[560px] flex-col divide-y divide-border overflow-y-auto">
+            <ul className="flex max-h-[560px] min-h-0 flex-1 flex-col divide-y divide-border overflow-y-auto lg:max-h-none">
               {data.quotes.map((quote) => {
                 const meta =
                   SENTIMENT_META[quote.sentiment as keyof typeof SENTIMENT_META] ??
@@ -335,7 +341,7 @@ export function BizClient() {
       </div>
 
       {/* TK news -- same endpoint and cards the newspaper uses */}
-      <div className="flex flex-col gap-2">
+      <div className="flex flex-col gap-3">
         <h2 className="text-sm font-semibold">
           TK Haberleri{" "}
           <span className="font-normal text-muted-foreground">(son 60 gün)</span>

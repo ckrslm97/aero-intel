@@ -3,6 +3,7 @@
 import dynamic from "next/dynamic";
 import { useEffect, useState } from "react";
 
+import { ArticleDrawerProvider } from "@/components/article-drawer-context";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Topbar } from "@/components/layout/topbar";
 
@@ -34,13 +35,21 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="flex min-h-screen bg-background">
-      <Sidebar collapsed={collapsed} onToggleCollapsed={toggleCollapsed} />
-      <MobileSidebar open={mobileOpen} onClose={() => setMobileOpen(false)} />
-      <div className="flex min-w-0 flex-1 flex-col">
-        <Topbar onMenuClick={() => setMobileOpen(true)} />
-        <main className="flex-1 px-4 py-6 md:px-8 md:py-8">{children}</main>
+    // ArticleCard opens the analysis drawer instead of navigating away, so the
+    // provider lives at the shell: six different pages render article cards
+    // (Gazete, edition, Hub'lar, BİZ, Arşiv, Ara) and a per-page wrap would be
+    // one missed import away from a dead card. The drawer itself is lazily
+    // loaded from inside the provider, so the shell pays nothing until a card
+    // is actually clicked.
+    <ArticleDrawerProvider>
+      <div className="flex min-h-screen bg-background">
+        <Sidebar collapsed={collapsed} onToggleCollapsed={toggleCollapsed} />
+        <MobileSidebar open={mobileOpen} onClose={() => setMobileOpen(false)} />
+        <div className="flex min-w-0 flex-1 flex-col">
+          <Topbar onMenuClick={() => setMobileOpen(true)} />
+          <main className="flex-1 px-4 py-6 md:px-8 md:py-8">{children}</main>
+        </div>
       </div>
-    </div>
+    </ArticleDrawerProvider>
   );
 }
