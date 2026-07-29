@@ -46,8 +46,13 @@ def translate_prompt(text: str, target: str = "tr") -> str:
     target_name = "Turkish" if target == "tr" else target
     return (
         f"Translate the following aviation news text into {target_name}. Preserve "
-        "airline names, airport names, and IATA/ICAO codes unchanged. Respond with "
-        f"ONLY the translation, no explanation, no quotes.\n\nText: {text}\n\nTranslation:"
+        "airline names, airport names, IATA/ICAO codes, aircraft type "
+        "designators (e.g. A321neo, 777X), and standard aviation/travel industry "
+        "terms (e.g. Business Class, Economy, Premium Economy, First Class, "
+        "codeshare, layover, slot, hub, ferry flight) in their original English or "
+        "internationally recognized form rather than translating them literally. "
+        "Respond with ONLY the translation, no explanation, no quotes.\n\n"
+        f"Text: {text}\n\nTranslation:"
     )
 
 
@@ -62,7 +67,11 @@ def translate_pair_prompt(headline: str, summary: str, target: str = "tr") -> st
     target_name = "Turkish" if target == "tr" else target
     return (
         f"Translate the aviation news below into {target_name}. Preserve airline "
-        "names, airport names, and IATA/ICAO codes unchanged.\n"
+        "names, airport names, IATA/ICAO codes, aircraft type designators "
+        "(e.g. A321neo, 777X), and standard aviation/travel industry terms "
+        "(e.g. Business Class, Economy, Premium Economy, First Class, codeshare, "
+        "layover, slot, hub, ferry flight) in their original English or "
+        "internationally recognized form rather than translating them literally.\n"
         "Respond in EXACTLY this format, with these two markers and nothing else:\n"
         "HEADLINE: <translated headline>\n"
         "SUMMARY: <translated summary>\n\n"

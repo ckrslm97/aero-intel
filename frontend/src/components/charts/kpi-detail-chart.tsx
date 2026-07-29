@@ -81,6 +81,7 @@ export function KpiDetailChart({ history, period, unit }: KpiDetailChartProps) {
       {
         type: "line",
         data: values,
+        smooth: true,
         symbol: "circle",
         symbolSize: 6,
         showSymbol: false,

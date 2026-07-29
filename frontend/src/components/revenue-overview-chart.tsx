@@ -101,6 +101,13 @@ export function RevenueOverviewChart({ kpis }: { kpis: KpiOut[] }) {
         barMaxWidth: 28,
         yAxisIndex: 0,
         data: series.map((k) => k.value),
+        label: {
+          show: true,
+          position: "top",
+          color: theme.ink,
+          fontSize: 10,
+          formatter: (p: { value: number }) => formatCompactNumber(p.value),
+        },
         // This year's bars are the lit ones: a vertical gradient from full
         // primary at the cap down toward the axis, so the current year reads
         // as emitting and last year as printed.
@@ -129,6 +136,7 @@ export function RevenueOverviewChart({ kpis }: { kpis: KpiOut[] }) {
               type: "line",
               yAxisIndex: 1,
               data: series.map((k) => k.ly_delta_pct),
+              smooth: true,
               symbol: "circle",
               symbolSize: 7,
               connectNulls: true,

@@ -186,6 +186,8 @@ export function InsightsClient() {
     }))
     .filter((s) => s.value > 0);
 
+  const totalSignals = regionSlices.reduce((sum, s) => sum + s.value, 0);
+
   const regionOption = {
     ...base,
     // Finally uses the app's own --chart-1..5 tokens: this pie was falling
@@ -205,6 +207,61 @@ export function InsightsClient() {
       right: 0,
       top: "middle",
       textStyle: { color: ink, fontSize: 11 },
+    },
+    // The total, sitting in the ring's hole. `graphic` text rather than a
+    // second (label-only) pie series, so nothing extra enters the chart's
+    // tooltip/legend/hover surface.
+    //
+    // The two texts hang off a positioning group rather than carrying
+    // `left`/`top` each. ECharts places a graphic element by its bounding
+    // box's top-left corner, so a bare text at `left: "36%"` starts at the
+    // pie's center and runs off to the right of it -- and the correction is
+    // half the rendered text width, a pixel amount that a percentage nudge
+    // can only match at one container width. A *group* with
+    // `bounding: "raw"` is measured by its own origin instead of its
+    // children, so `left`/`top` land that origin exactly on the pie's
+    // center ["36%", "52%"], and the children (textAlign/textVerticalAlign
+    // centered, offset only in px) stay centered at every width and for any
+    // digit count.
+    //
+    // Only ever rendered alongside the ring itself: this option object is
+    // consumed inside the `regionSlices.length > 0` branch below.
+    graphic: {
+      elements: [
+        {
+          type: "group",
+          left: "36%",
+          top: "52%",
+          bounding: "raw",
+          children: [
+            {
+              type: "text",
+              x: 0,
+              y: -8,
+              style: {
+                text: String(totalSignals),
+                fontSize: 28,
+                fontWeight: 700,
+                fill: theme.inkStrong,
+                textAlign: "center",
+                textVerticalAlign: "middle",
+              },
+            },
+            {
+              type: "text",
+              x: 0,
+              y: 16,
+              style: {
+                text: "sinyal",
+                fontSize: 11,
+                fill: ink,
+                textAlign: "center",
+                textVerticalAlign: "middle",
+              },
+            },
+          ],
+        },
+      ],
     },
     series: [
       {
