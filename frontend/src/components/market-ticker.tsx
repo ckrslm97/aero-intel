@@ -60,7 +60,7 @@ export function MarketTicker({ items }: { items: KpiOut[] }) {
                 "--glow-color": GLOW_VAR[kpi.metric_key] ?? "var(--primary)",
               } as React.CSSProperties
             }
-            className="glow-edge flex min-w-[13rem] flex-1 items-center gap-3 rounded-lg bg-muted/40 px-3.5 py-2.5 transition-[box-shadow,background-color] duration-300 hover:bg-accent/40 hover:glow"
+            className="glow-edge flex min-w-[13rem] flex-1 items-center gap-3 rounded-lg bg-muted/40 px-3.5 py-2.5 transition-[box-shadow,background-color] duration-300 hover:bg-accent/40 hover:glow-soft"
           >
             <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-background/70 text-muted-foreground">
               <Icon className="size-3.5" />

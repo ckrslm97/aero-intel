@@ -71,6 +71,7 @@ class ArticleRepository:
         on_date: date | None = None,
         country: str | None = None,
         airport: str | None = None,
+        translated_only: bool = False,
     ):
         """Shared filter clause for list_recent and count, so the "load more"
         pagination in the newspaper can trust that total counts the same rows
@@ -83,7 +84,10 @@ class ArticleRepository:
             query = query.where(
                 _DAY_EXPR >= day_start, _DAY_EXPR < day_start + timedelta(days=1)
             )
-        if category or subcategory or region:
+        if category or subcategory or region or translated_only:
+            # One join covers every enrichment-backed filter; the condition
+            # mirrors the clauses below so translated_only can pull the join in
+            # on its own without double-joining when a category already did.
             query = query.join(ArticleEnrichment)
             if category:
                 query = query.where(ArticleEnrichment.category == category)
@@ -91,6 +95,12 @@ class ArticleRepository:
                 query = query.where(ArticleEnrichment.subcategory == subcategory)
             if region:
                 query = query.where(ArticleEnrichment.region == region)
+            if translated_only:
+                # translated_at is only stamped when the LLM actually produced
+                # Turkish text -- articles that never got translated (or whose
+                # translation failed) fall back to their original-language
+                # headline, which has no business in a Turkish paper.
+                query = query.where(ArticleEnrichment.translated_at.isnot(None))
         if airline:
             # Entity-based: the "Ana Rakipler" filter matches any article that
             # *mentions* the airline, regardless of category -- rival news lives
@@ -134,6 +144,7 @@ class ArticleRepository:
         on_date: date | None = None,
         country: str | None = None,
         airport: str | None = None,
+        translated_only: bool = False,
     ) -> list[Article]:
         query = (
             select(Article)
@@ -159,6 +170,7 @@ class ArticleRepository:
             on_date=on_date,
             country=country,
             airport=airport,
+            translated_only=translated_only,
         )
         result = await self.db.execute(query)
         return list(result.scalars().unique().all())
@@ -173,6 +185,7 @@ class ArticleRepository:
         on_date: date | None = None,
         country: str | None = None,
         airport: str | None = None,
+        translated_only: bool = False,
     ) -> int:
         # Plain COUNT, not COUNT(DISTINCT): the airline filter is a semi-join
         # now, so no clause can multiply rows, and COUNT(DISTINCT uuid) forces
@@ -187,6 +200,7 @@ class ArticleRepository:
             on_date=on_date,
             country=country,
             airport=airport,
+            translated_only=translated_only,
         )
         result = await self.db.execute(query)
         return int(result.scalar_one())
@@ -212,7 +226,9 @@ class ArticleRepository:
         result = await self.db.execute(query)
         return {day.date().isoformat(): count for day, count in result.all()}
 
-    async def count_by_category(self, since: datetime | None = None) -> dict[str, int]:
+    async def count_by_category(
+        self, since: datetime | None = None, translated_only: bool = False
+    ) -> dict[str, int]:
         """One grouped query behind the newspaper's tab badges -- the alternative
         is a request per category every time the page loads."""
         query = (
@@ -223,6 +239,10 @@ class ArticleRepository:
         )
         if since is not None:
             query = query.where(Article.published_at >= since)
+        # Same clause the list uses, so a badge counts exactly the rows the
+        # filtered list will render (this query already joins the enrichment).
+        if translated_only:
+            query = query.where(ArticleEnrichment.translated_at.isnot(None))
         result = await self.db.execute(query)
         return {category: count for category, count in result.all()}
 

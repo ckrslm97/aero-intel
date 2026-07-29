@@ -40,6 +40,9 @@ async def list_articles(
     airport: str | None = Query(
         None, max_length=4, description="Airport IATA code; the Hub Explorer's filter"
     ),
+    translated_only: bool = Query(
+        False, description="Only articles with a real Turkish translation -- Gazete's default"
+    ),
     response: Response = None,  # type: ignore[assignment]  -- FastAPI injects it
     db: AsyncSession = Depends(get_db),
 ) -> ArticleListOut:
@@ -49,7 +52,7 @@ async def list_articles(
     items = await repo.list_recent(
         limit=limit, offset=offset, category=category, subcategory=subcategory,
         region=region, since=since, airline=airline, on_date=date,
-        country=country, airport=airport,
+        country=country, airport=airport, translated_only=translated_only,
     )
     # Filtered total (same clause as the list) so "load more" knows when to stop.
     # A short page IS the end of the result set, so the count query -- the more
@@ -61,6 +64,7 @@ async def list_articles(
         total = await repo.count(
             category=category, subcategory=subcategory, region=region, since=since,
             airline=airline, on_date=date, country=country, airport=airport,
+            translated_only=translated_only,
         )
     return ArticleListOut(total=total, items=[ArticleOut.model_validate(a) for a in items])
 
@@ -68,13 +72,18 @@ async def list_articles(
 @router.get("/counts")
 async def article_counts(
     days: int | None = Query(None, ge=1, le=365),
+    translated_only: bool = Query(
+        False, description="Only articles with a real Turkish translation -- Gazete's default"
+    ),
     response: Response = None,  # type: ignore[assignment]
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, int]:
     """Article count per category, for the newspaper's tab badges."""
     public_cache(response, AGGREGATES)
     since = datetime.now(timezone.utc) - timedelta(days=days) if days else None
-    return await ArticleRepository(db).count_by_category(since=since)
+    return await ArticleRepository(db).count_by_category(
+        since=since, translated_only=translated_only
+    )
 
 
 @router.get("/daily-counts")

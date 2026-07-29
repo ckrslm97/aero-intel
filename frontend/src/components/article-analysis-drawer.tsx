@@ -350,7 +350,7 @@ export function ArticleAnalysisDrawer({
                 target="_blank"
                 rel="noopener noreferrer"
                 style={{ "--glow-color": "var(--primary)" } as React.CSSProperties}
-                className="flex w-full items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-primary to-chart-4 px-4 py-2.5 text-sm font-semibold text-primary-foreground transition-shadow duration-300 hover:glow"
+                className="flex w-full items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-primary to-chart-4 px-4 py-2.5 text-sm font-semibold text-primary-foreground transition-shadow duration-300 hover:glow-soft"
               >
                 Kaynağa git
                 <ExternalLink className="size-4" />
