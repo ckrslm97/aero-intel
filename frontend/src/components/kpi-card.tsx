@@ -12,6 +12,7 @@ const Sparkline = dynamic(
   () => import("@/components/charts/sparkline").then((m) => m.Sparkline),
   { ssr: false, loading: () => <div style={{ height: 36 }} /> },
 );
+import { CountUp } from "@/components/motion/count-up";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { formatCompactNumber, formatDelta } from "@/lib/format";
 import { KPI_ICONS } from "@/lib/kpi-icons";
@@ -37,6 +38,13 @@ export interface KpiCardProps {
   lyComparisonLabel?: string;
 }
 
+/** Delta rows are pills rather than bare colored text, but the icon and the
+ * signed number still carry the whole meaning -- color only reinforces it. */
+function deltaPill(isFlat: boolean, isGoodDirection: boolean) {
+  if (isFlat) return "bg-muted text-muted-foreground";
+  return isGoodDirection ? "bg-good/10 text-good" : "bg-critical/10 text-critical";
+}
+
 export function KpiCard({
   metricKey,
   label,
@@ -60,10 +68,18 @@ export function KpiCard({
 
   return (
     <Link href={`/kpi/${metricKey}`} className="block">
-      <Card className="h-full transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/50 hover:bg-accent/30 hover:shadow-sm">
+      <Card
+        style={{ "--glow-color": "var(--primary)" } as React.CSSProperties}
+        className="relative h-full transition-all duration-300 hover:-translate-y-0.5 hover:border-primary/50 hover:bg-accent/30 hover:glow motion-reduce:transform-none"
+      >
+        {/* Runway edge light along the top of the card, lit on approach. */}
+        <span
+          aria-hidden
+          className="pointer-events-none absolute inset-x-0 top-0 hairline-glow opacity-0 transition-opacity duration-300 group-hover/card:opacity-100"
+        />
         <CardHeader className="flex-row items-center justify-between gap-2">
           <div className="flex items-center gap-2">
-            <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-accent text-accent-foreground">
+            <span className="flex size-9 shrink-0 items-center justify-center rounded-md bg-gradient-to-br from-primary/15 to-chart-4/20 text-primary ring-1 ring-primary/15 dark:from-primary/25 dark:to-chart-4/30 dark:ring-primary/30">
               <Icon className="size-5" />
             </span>
             <p className="text-sm font-medium text-muted-foreground">{label}</p>
@@ -79,39 +95,31 @@ export function KpiCard({
         </CardHeader>
         <CardContent className="flex flex-col gap-2">
           <div className="flex items-baseline gap-1.5">
-            <span className="text-3xl font-semibold tracking-tight">
-              {formatCompactNumber(value)}
-            </span>
+            <CountUp
+              value={value}
+              format={formatCompactNumber}
+              className="text-3xl font-semibold tracking-tight tabular-nums dark:text-glow"
+            />
             {unit && (
               <span className="text-base text-muted-foreground">{unit}</span>
             )}
           </div>
 
           {deltaPct !== undefined && (
-            <div className="flex items-center gap-1 text-sm">
-              {isFlat ? (
-                <Minus className="size-4 text-muted-foreground" />
-              ) : isPositive ? (
-                <ArrowUpRight
-                  className={cn(
-                    "size-4",
-                    isGoodDirection ? "text-good" : "text-critical",
-                  )}
-                />
-              ) : (
-                <ArrowDownRight
-                  className={cn(
-                    "size-4",
-                    isGoodDirection ? "text-good" : "text-critical",
-                  )}
-                />
-              )}
+            <div className="flex items-center gap-1.5 text-sm">
               <span
                 className={cn(
-                  "font-medium",
-                  isFlat ? "text-muted-foreground" : isGoodDirection ? "text-good" : "text-critical",
+                  "flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold tabular-nums",
+                  deltaPill(isFlat, isGoodDirection),
                 )}
               >
+                {isFlat ? (
+                  <Minus className="size-3.5" />
+                ) : isPositive ? (
+                  <ArrowUpRight className="size-3.5" />
+                ) : (
+                  <ArrowDownRight className="size-3.5" />
+                )}
                 {formatDelta(deltaPct)}
               </span>
               <span className="text-muted-foreground">{comparisonLabel}</span>
@@ -119,30 +127,20 @@ export function KpiCard({
           )}
 
           {lyDeltaPct !== undefined && (
-            <div className="flex items-center gap-1 text-xs">
-              {lyIsFlat ? (
-                <Minus className="size-3.5 text-muted-foreground" />
-              ) : lyIsPositive ? (
-                <ArrowUpRight
-                  className={cn(
-                    "size-3.5",
-                    lyIsGoodDirection ? "text-good" : "text-critical",
-                  )}
-                />
-              ) : (
-                <ArrowDownRight
-                  className={cn(
-                    "size-3.5",
-                    lyIsGoodDirection ? "text-good" : "text-critical",
-                  )}
-                />
-              )}
+            <div className="flex items-center gap-1.5 text-xs">
               <span
                 className={cn(
-                  "font-medium",
-                  lyIsFlat ? "text-muted-foreground" : lyIsGoodDirection ? "text-good" : "text-critical",
+                  "flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[11px] font-semibold tabular-nums",
+                  deltaPill(lyIsFlat, lyIsGoodDirection),
                 )}
               >
+                {lyIsFlat ? (
+                  <Minus className="size-3" />
+                ) : lyIsPositive ? (
+                  <ArrowUpRight className="size-3" />
+                ) : (
+                  <ArrowDownRight className="size-3" />
+                )}
                 {formatDelta(lyDeltaPct)}
               </span>
               <span className="text-muted-foreground">{lyComparisonLabel}</span>

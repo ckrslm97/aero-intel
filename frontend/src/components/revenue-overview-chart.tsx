@@ -1,8 +1,16 @@
 "use client";
 
 import ReactECharts from "echarts-for-react";
-import { useTheme } from "next-themes";
+import { useReducedMotion } from "framer-motion";
 
+import {
+  baseOption,
+  categoryAxis,
+  lineGlow,
+  useChartTheme,
+  valueAxis,
+  withAlpha,
+} from "@/lib/chart-theme";
 import { formatCompactNumber } from "@/lib/format";
 import { REVENUE_BAR_KEYS } from "@/lib/kpi-groups";
 import type { KpiOut } from "@/lib/types";
@@ -14,16 +22,9 @@ import type { KpiOut } from "@/lib/types";
  * `ly_delta_pct`. Nothing is derived, interpolated or invented.
  */
 export function RevenueOverviewChart({ kpis }: { kpis: KpiOut[] }) {
-  const { resolvedTheme } = useTheme();
-  const isDark = resolvedTheme === "dark";
-
-  // Same theme-aware tokens the insights and KPI-detail charts use.
-  const gridline = isDark ? "#2c2c2a" : "#e1e0d9";
-  const ink = isDark ? "#c3c2b7" : "#52514e";
-  const surface = isDark ? "#1a1a19" : "#fcfcfb";
-  const current = isDark ? "#3987e5" : "#2a78d6";
-  const lastYear = isDark ? "#4a4a47" : "#c8c7c0";
-  const trendLine = isDark ? "#d99b2c" : "#b87d12";
+  const theme = useChartTheme();
+  const reduceMotion = useReducedMotion();
+  const base = baseOption(theme, reduceMotion);
 
   const byKey = new Map(kpis.map((k) => [k.metric_key, k]));
   const series = REVENUE_BAR_KEYS.map((key) => byKey.get(key)).filter(
@@ -37,49 +38,48 @@ export function RevenueOverviewChart({ kpis }: { kpis: KpiOut[] }) {
   const unit = series[0].unit;
 
   const option = {
+    ...base,
     grid: { left: 8, right: 8, top: 36, bottom: 8, containLabel: true },
-    textStyle: { fontFamily: "inherit" },
     legend: {
       top: 0,
       icon: "roundRect",
       itemWidth: 10,
       itemHeight: 10,
-      textStyle: { color: ink, fontSize: 11 },
+      textStyle: { color: theme.ink, fontSize: 11 },
     },
     tooltip: {
+      ...base.tooltip,
       trigger: "axis",
       axisPointer: { type: "shadow" },
-      backgroundColor: surface,
-      borderColor: gridline,
-      textStyle: { color: isDark ? "#ffffff" : "#0b0b0b", fontSize: 12 },
       valueFormatter: (v: number | null) =>
         v === null || v === undefined ? "—" : formatCompactNumber(v),
     },
     xAxis: {
+      ...categoryAxis(theme),
       type: "category",
       data: series.map((k) => k.label),
-      axisLine: { lineStyle: { color: gridline } },
-      axisTick: { show: false },
-      axisLabel: { color: ink, fontSize: 11, interval: 0, width: 96, overflow: "break" },
+      axisLabel: {
+        color: theme.ink,
+        fontSize: 11,
+        interval: 0,
+        width: 96,
+        overflow: "break",
+      },
     },
     yAxis: [
       {
+        ...valueAxis(theme),
         type: "value",
         name: unit,
-        nameTextStyle: { color: ink, fontSize: 10 },
-        splitLine: { lineStyle: { color: gridline } },
-        axisLabel: {
-          color: ink,
-          fontSize: 11,
-          formatter: (v: number) => formatCompactNumber(v),
-        },
+        nameTextStyle: { color: theme.ink, fontSize: 10 },
       },
       {
+        ...valueAxis(theme),
         type: "value",
         name: "%",
-        nameTextStyle: { color: ink, fontSize: 10 },
+        nameTextStyle: { color: theme.ink, fontSize: 10 },
         splitLine: { show: false },
-        axisLabel: { color: ink, fontSize: 11, formatter: (v: number) => `${v}%` },
+        axisLabel: { color: theme.ink, fontSize: 11, formatter: (v: number) => `${v}%` },
       },
     ],
     series: [
@@ -91,7 +91,7 @@ export function RevenueOverviewChart({ kpis }: { kpis: KpiOut[] }) {
               barMaxWidth: 28,
               yAxisIndex: 0,
               data: series.map((k) => k.ly_value),
-              itemStyle: { color: lastYear, borderRadius: [4, 4, 0, 0] },
+              itemStyle: { color: theme.neutral, borderRadius: [4, 4, 0, 0] },
             },
           ]
         : []),
@@ -101,7 +101,26 @@ export function RevenueOverviewChart({ kpis }: { kpis: KpiOut[] }) {
         barMaxWidth: 28,
         yAxisIndex: 0,
         data: series.map((k) => k.value),
-        itemStyle: { color: current, borderRadius: [4, 4, 0, 0] },
+        // This year's bars are the lit ones: a vertical gradient from full
+        // primary at the cap down toward the axis, so the current year reads
+        // as emitting and last year as printed.
+        itemStyle: {
+          color: {
+            type: "linear",
+            x: 0,
+            y: 0,
+            x2: 0,
+            y2: 1,
+            colorStops: [
+              { offset: 0, color: theme.primary },
+              {
+                offset: 1,
+                color: withAlpha(theme.primary, theme.isDark ? 0.35 : 0.45),
+              },
+            ],
+          },
+          borderRadius: [4, 4, 0, 0],
+        },
       },
       ...(hasDelta
         ? [
@@ -113,9 +132,17 @@ export function RevenueOverviewChart({ kpis }: { kpis: KpiOut[] }) {
               symbol: "circle",
               symbolSize: 7,
               connectNulls: true,
-              lineStyle: { width: 2, color: trendLine },
-              itemStyle: { color: trendLine, borderColor: surface, borderWidth: 2 },
-              tooltip: { valueFormatter: (v: number | null) => (v === null ? "—" : `${v}%`) },
+              // The YoY line is the instrument reading over the bars, so it
+              // takes the brand amber rather than a second blue.
+              lineStyle: lineGlow(theme.signal, theme.isDark),
+              itemStyle: {
+                color: theme.signal,
+                borderColor: theme.surface,
+                borderWidth: 2,
+              },
+              tooltip: {
+                valueFormatter: (v: number | null) => (v === null ? "—" : `${v}%`),
+              },
             },
           ]
         : []),

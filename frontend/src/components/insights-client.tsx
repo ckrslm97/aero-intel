@@ -3,13 +3,18 @@
 import ReactECharts from "echarts-for-react";
 import { AnimatePresence, useReducedMotion } from "framer-motion";
 import { ExternalLink, Lightbulb } from "lucide-react";
-import { useTheme } from "next-themes";
 import { useEffect, useMemo, useState } from "react";
 
 import { AirlineLogo } from "@/components/airline-logo";
 import { MotionItem, MotionList } from "@/components/motion/motion-list";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiFetch } from "@/lib/api";
+import {
+  baseOption,
+  categoryAxis,
+  useChartTheme,
+  valueAxis,
+} from "@/lib/chart-theme";
 import { getCategory } from "@/lib/taxonomy";
 import { airlineTabs, worldRegions } from "@/lib/nav";
 import { cn } from "@/lib/utils";
@@ -68,17 +73,19 @@ function formatSignalDate(iso: string | null): string | null {
   return new Date(iso).toLocaleDateString("tr-TR", { day: "numeric", month: "short" });
 }
 
+/** The lit-chip pattern shared with Gazete/Öneriler: a selected filter burns
+ * in its own color with a ring and (in dark mode) a glow, instead of a flat
+ * primary fill. */
 const chip = (active: boolean) =>
   cn(
     "rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
     active
-      ? "bg-primary text-primary-foreground"
+      ? "bg-primary/12 text-primary ring-1 ring-primary/40 dark:glow"
       : "border border-border text-muted-foreground hover:bg-accent",
   );
 
 export function InsightsClient() {
-  const { resolvedTheme } = useTheme();
-  const isDark = resolvedTheme === "dark";
+  const theme = useChartTheme();
   const reduceMotion = useReducedMotion();
 
   const [data, setData] = useState<InsightsOut | null>(null);
@@ -144,24 +151,14 @@ export function InsightsClient() {
     return airlineTabs.filter((a) => seen.has(a.code));
   }, [flatSignals]);
 
-  // Remaining-chart colors, validated with the dataviz palette checker for
-  // both surfaces -- do not restyle.
-  const good = "#0ca30c";
-  const critical = isDark ? "#e66767" : "#d03b3b";
-  const gridline = isDark ? "#2c2c2a" : "#e1e0d9";
-  const ink = isDark ? "#c3c2b7" : "#52514e";
-  const surface = isDark ? "#1a1a19" : "#fcfcfb";
-  const neutralBar = isDark ? "#4a4a47" : "#c8c7c0";
-  const accent = isDark ? "#3987e5" : "#2a78d6";
+  // All chart colors now come from lib/chart-theme.ts -- one mirror of
+  // globals.css instead of a ternary per file. The hues are the same
+  // dataviz-validated ones; they are just no longer duplicated here.
+  const { good, critical, ink, surface, neutral: neutralBar } = theme;
 
   const base = {
+    ...baseOption(theme, reduceMotion),
     grid: { left: 8, right: 24, top: 28, bottom: 8, containLabel: true },
-    tooltip: {
-      backgroundColor: surface,
-      borderColor: gridline,
-      textStyle: { color: isDark ? "#ffffff" : "#0b0b0b", fontSize: 12 },
-    },
-    textStyle: { fontFamily: "inherit" },
   };
 
   if (error) {
@@ -196,17 +193,11 @@ export function InsightsClient() {
         return `${m.name}<br/>Son 7 gün: ${m.current} haber · Önceki: ${m.previous}`;
       },
     },
-    xAxis: {
-      type: "value",
-      splitLine: { lineStyle: { color: gridline } },
-      axisLabel: { color: ink, fontSize: 11 },
-    },
+    xAxis: { ...valueAxis(theme), type: "value" },
     yAxis: {
+      ...categoryAxis(theme),
       type: "category",
       data: movers.map((m) => `${m.name}`),
-      axisLine: { lineStyle: { color: gridline } },
-      axisTick: { show: false },
-      axisLabel: { color: ink, fontSize: 11 },
     },
     series: [
       {
@@ -235,17 +226,11 @@ export function InsightsClient() {
     ...base,
     tooltip: { ...base.tooltip, trigger: "axis" },
     legend: { top: 0, textStyle: { color: ink, fontSize: 11 } },
-    xAxis: {
-      type: "value",
-      splitLine: { lineStyle: { color: gridline } },
-      axisLabel: { color: ink, fontSize: 11 },
-    },
+    xAxis: { ...valueAxis(theme), type: "value" },
     yAxis: {
+      ...categoryAxis(theme),
       type: "category",
       data: sentimentCats.map((s) => getCategory(s.category).label).reverse(),
-      axisLine: { lineStyle: { color: gridline } },
-      axisTick: { show: false },
-      axisLabel: { color: ink, fontSize: 11 },
     },
     series: (
       [
@@ -275,6 +260,10 @@ export function InsightsClient() {
 
   const regionOption = {
     ...base,
+    // Finally uses the app's own --chart-1..5 tokens: this pie was falling
+    // through to ECharts' stock palette, the only chart in the app that was
+    // not on the validated hues at all.
+    color: theme.series,
     grid: undefined,
     tooltip: {
       ...base.tooltip,
@@ -320,17 +309,11 @@ export function InsightsClient() {
       textStyle: { color: ink, fontSize: 11 },
     },
     xAxis: {
+      ...categoryAxis(theme),
       type: "category",
       data: volumeAirlines.map((m) => m.code),
-      axisLine: { lineStyle: { color: gridline } },
-      axisTick: { show: false },
-      axisLabel: { color: ink, fontSize: 11 },
     },
-    yAxis: {
-      type: "value",
-      splitLine: { lineStyle: { color: gridline } },
-      axisLabel: { color: ink, fontSize: 11 },
-    },
+    yAxis: { ...valueAxis(theme), type: "value" },
     series: [
       {
         name: "Önceki 7 gün",
@@ -343,10 +326,13 @@ export function InsightsClient() {
         name: "Son 7 gün",
         type: "bar",
         barMaxWidth: 16,
-        data: volumeAirlines.map((m) => ({
+        // Carrier livery where we know it, otherwise the app's own series
+        // ramp cycled per carrier -- previously every unknown carrier
+        // collapsed onto one hardcoded blue.
+        data: volumeAirlines.map((m, i) => ({
           value: m.current,
           itemStyle: {
-            color: AIRLINE_COLOR[m.code] ?? accent,
+            color: AIRLINE_COLOR[m.code] ?? theme.series[i % theme.series.length],
             borderRadius: [3, 3, 0, 0],
           },
         })),
@@ -354,7 +340,14 @@ export function InsightsClient() {
     ],
   };
 
-  const chartCard = "rounded-xl border border-border bg-card p-5";
+  // These panels are plain divs rather than <Card>, so they take the Task 4
+  // base coat (elevation + sheen + shadow transition) explicitly.
+  const chartCard =
+    "rounded-xl border border-border bg-card bg-card-sheen p-5 shadow-elev-1 transition-shadow duration-300";
+  const litCard = cn(chartCard, "hover:glow");
+
+  /** Each chart card carries its lead series color as its edge light. */
+  const glow = (token: string) => ({ "--glow-color": token }) as React.CSSProperties;
 
   return (
     <div className="flex flex-col gap-8">
@@ -367,7 +360,10 @@ export function InsightsClient() {
       </div>
 
       {data.digest && (
-        <div className="flex flex-col gap-2 rounded-xl border border-border bg-card p-5">
+        <div
+          style={glow("var(--category-revenue-management)")}
+          className="border-gradient flex flex-col gap-2 rounded-xl p-5 shadow-elev-1"
+        >
           <div className="flex items-center gap-2">
             <Lightbulb className="size-4 text-category-revenue-management" />
             <h2 className="text-sm font-semibold">Günün Örüntüsü</h2>
@@ -381,7 +377,7 @@ export function InsightsClient() {
       )}
 
       <MotionList className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        <MotionItem className={chartCard}>
+        <MotionItem className={litCard} style={glow("var(--chart-1)")}>
           <h2 className="mb-2 text-sm font-semibold">
             Havayolu momentumu{" "}
             <span className="font-normal text-muted-foreground">
@@ -396,7 +392,7 @@ export function InsightsClient() {
           />
         </MotionItem>
 
-        <MotionItem className={chartCard}>
+        <MotionItem className={litCard} style={glow("var(--good)")}>
           <h2 className="mb-2 text-sm font-semibold">
             Duygu dengesi <span className="font-normal text-muted-foreground">(son 30 gün)</span>
           </h2>
@@ -408,7 +404,7 @@ export function InsightsClient() {
           />
         </MotionItem>
 
-        <MotionItem className={chartCard}>
+        <MotionItem className={litCard} style={glow("var(--chart-4)")}>
           <h2 className="mb-2 text-sm font-semibold">
             Haber hacmi{" "}
             <span className="font-normal text-muted-foreground">
@@ -429,7 +425,7 @@ export function InsightsClient() {
           )}
         </MotionItem>
 
-        <MotionItem className={chartCard}>
+        <MotionItem className={litCard} style={glow("var(--chart-5)")}>
           <h2 className="mb-2 text-sm font-semibold">
             Yeni hat sinyallerinin dağılımı{" "}
             <span className="font-normal text-muted-foreground">(bölgeye göre, son 30 gün)</span>

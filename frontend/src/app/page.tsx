@@ -1,6 +1,6 @@
 import { KpiCard } from "@/components/kpi-card";
 import { MarketTicker } from "@/components/market-ticker";
-import { MotionItem, MotionList } from "@/components/motion/motion-list";
+import { MotionItem, MotionList, MotionRail } from "@/components/motion/motion-list";
 import { RevenueOverviewChart } from "@/components/revenue-overview-chart";
 import { apiFetch } from "@/lib/api";
 import {
@@ -14,7 +14,7 @@ function KpiGrid({ kpis }: { kpis: KpiOut[] }) {
   return (
     <MotionList className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
       {kpis.map((kpi) => (
-        <MotionItem key={kpi.metric_key}>
+        <MotionItem key={kpi.metric_key} variant="scalePop">
           <KpiCard
             metricKey={kpi.metric_key}
             label={kpi.label}
@@ -72,16 +72,22 @@ export default async function DashboardPage() {
 
   return (
     <div className="flex flex-col gap-10">
-      <div className="flex flex-col gap-3">
-        <div className="flex flex-col gap-1">
-          <h1 className="text-2xl font-semibold tracking-tight">
-            Havacılık Kontrol Paneli
-          </h1>
-          <p className="text-sm leading-relaxed text-muted-foreground">
-            Dünya genelinde operasyonel ve piyasa KPI&apos;ları · {asOf} UTC itibarıyla
-          </p>
+      {/* The one structural hook this visual pass adds: a hero shell so the
+          night-horizon mesh has something to sit behind. Layout inside is
+          unchanged from the structural pass. */}
+      <div className="relative overflow-hidden rounded-2xl bg-hero-mesh p-5 sm:p-6">
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-1">
+            <h1 className="text-2xl font-semibold tracking-tight">
+              Havacılık{" "}
+              <span className="gradient-text">Kontrol Paneli</span>
+            </h1>
+            <p className="text-sm leading-relaxed text-muted-foreground">
+              Dünya genelinde operasyonel ve piyasa KPI&apos;ları · {asOf} UTC itibarıyla
+            </p>
+          </div>
+          <MarketTicker items={marketKpis} />
         </div>
-        <MarketTicker items={marketKpis} />
       </div>
 
       {error && (
@@ -102,13 +108,22 @@ export default async function DashboardPage() {
           the section rather than sitting under a wall of tiles. */}
       {revenueManagementKpis.length > 0 && (
         <div className="flex flex-col gap-5">
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-            Gelir Yönetimi
-          </h2>
+          <div className="flex flex-col gap-2">
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+              Gelir Yönetimi
+            </h2>
+            <MotionRail style={{ "--glow-color": "var(--signal)" } as React.CSSProperties} />
+          </div>
 
           <MotionList className="grid grid-cols-1 gap-5 lg:grid-cols-4">
             <MotionItem className="lg:col-span-2">
-              <div className="flex h-full flex-col gap-2 rounded-xl border border-border bg-card p-5">
+              {/* No bg-card here on purpose: border-gradient paints the card
+                  fill itself (padding-box) so the gradient border stays
+                  visible -- a background-color would cover it. */}
+              <div
+                style={{ "--glow-color": "var(--signal)" } as React.CSSProperties}
+                className="flex h-full flex-col gap-2 rounded-xl border-gradient p-5 shadow-elev-1"
+              >
                 <h3 className="text-sm font-semibold">
                   Gelir tabanı{" "}
                   <span className="font-normal text-muted-foreground">
@@ -119,7 +134,7 @@ export default async function DashboardPage() {
               </div>
             </MotionItem>
             {chartCompanions.slice(0, 2).map((kpi) => (
-              <MotionItem key={kpi.metric_key}>
+              <MotionItem key={kpi.metric_key} variant="scalePop">
                 <KpiCard
                   metricKey={kpi.metric_key}
                   label={kpi.label}
@@ -142,9 +157,12 @@ export default async function DashboardPage() {
 
       {operationalKpis.length > 0 && (
         <div className="flex flex-col gap-5">
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-            Operasyonel
-          </h2>
+          <div className="flex flex-col gap-2">
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+              Operasyonel
+            </h2>
+            <MotionRail style={{ "--glow-color": "var(--primary)" } as React.CSSProperties} />
+          </div>
           <KpiGrid kpis={operationalKpis} />
         </div>
       )}

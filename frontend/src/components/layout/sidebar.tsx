@@ -1,6 +1,6 @@
 "use client";
 
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { ChevronLeft, ChevronRight, Plane, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -11,11 +11,16 @@ import { cn } from "@/lib/utils";
 function NavLinks({
   onNavigate,
   collapsed,
+  /** Distinct per mounted nav so the desktop rail and the mobile drawer don't
+   * share (and fight over) one shared-element pill. */
+  layoutId,
 }: {
   onNavigate?: () => void;
   collapsed?: boolean;
+  layoutId: string;
 }) {
   const pathname = usePathname();
+  const reduceMotion = useReducedMotion();
 
   const renderItems = (items: typeof primaryNav) =>
     items.map((item) => {
@@ -29,15 +34,40 @@ function NavLinks({
           onClick={onNavigate}
           title={collapsed ? item.label : undefined}
           className={cn(
-            "group flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+            "group relative flex items-center gap-3 overflow-hidden rounded-md px-3 py-2 text-sm font-medium transition-colors",
             collapsed && "justify-center px-0",
             active
-              ? "bg-sidebar-accent text-sidebar-accent-foreground"
+              ? "text-sidebar-accent-foreground"
               : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
           )}
         >
-          <Icon className="size-4 shrink-0" />
-          {!collapsed && <span className="flex-1 truncate">{item.label}</span>}
+          {active &&
+            // The lit approach light for "you are here". Under reduced motion
+            // it is a plain span with no layoutId, so navigating swaps it
+            // instantly instead of sliding it between items.
+            (reduceMotion ? (
+              <span
+                aria-hidden
+                className="absolute inset-0 rounded-md bg-gradient-to-r from-primary/15 via-primary/8 to-transparent ring-1 ring-primary/25"
+              />
+            ) : (
+              <motion.span
+                aria-hidden
+                layoutId={layoutId}
+                className="absolute inset-0 rounded-md bg-gradient-to-r from-primary/15 via-primary/8 to-transparent ring-1 ring-primary/25"
+                transition={{ type: "spring", stiffness: 480, damping: 38 }}
+              />
+            ))}
+          {active && (
+            <span
+              aria-hidden
+              className="absolute inset-y-1 left-0 w-0.5 rounded-full bg-gradient-to-b from-primary to-chart-4"
+            />
+          )}
+          <Icon className="relative z-10 size-4 shrink-0" />
+          {!collapsed && (
+            <span className="relative z-10 flex-1 truncate">{item.label}</span>
+          )}
         </Link>
       );
     });
@@ -63,7 +93,7 @@ function Brand({
         collapsed && "justify-center px-0",
       )}
     >
-      <div className="flex size-8 shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground">
+      <div className="flex size-8 shrink-0 items-center justify-center rounded-md bg-gradient-to-br from-primary to-chart-4 text-primary-foreground dark:glow">
         <Plane className="size-4" />
       </div>
       {!collapsed && (
@@ -94,7 +124,7 @@ export function Sidebar({
       )}
     >
       <Brand collapsed={collapsed} />
-      <NavLinks collapsed={collapsed} />
+      <NavLinks collapsed={collapsed} layoutId="sidebar-active" />
       <button
         onClick={onToggleCollapsed}
         aria-label={collapsed ? "Kenar çubuğunu genişlet" : "Kenar çubuğunu daralt"}
@@ -141,7 +171,7 @@ export function MobileSidebar({
                 <X className="size-4" />
               </button>
             </Brand>
-            <NavLinks onNavigate={onClose} />
+            <NavLinks onNavigate={onClose} layoutId="mobile-sidebar-active" />
           </motion.aside>
         </>
       )}

@@ -4,7 +4,7 @@ import { memo } from "react";
 
 import { useArticleDrawer } from "@/components/article-drawer-context";
 import { Badge } from "@/components/ui/badge";
-import { getCategory } from "@/lib/taxonomy";
+import { categoryVar, getCategory } from "@/lib/taxonomy";
 import { cn } from "@/lib/utils";
 import type { ArticleOut } from "@/lib/types";
 
@@ -41,12 +41,15 @@ function ArticleCardComponent({
   const headline = (enrichment?.is_translated && enrichment.headline_tr) || enrichment?.headline || article.title;
   const summary = (enrichment?.is_translated && enrichment.summary_tr) || enrichment?.summary;
 
-  // A category-tinted left edge that lights up on hover. The color lives in a
-  // CSS var (defined per slug in globals.css) so Tailwind's scanner never has
-  // to see a dynamic class name -- the slug uses underscores, the token hyphens.
-  const accentVar = category
-    ? `var(--category-${category.slug.replace(/_/g, "-")})`
-    : undefined;
+  // A category-tinted runway edge light that comes on when the row is
+  // approached. The color rides on --glow-color (see globals.css), which is
+  // also the override point every glow utility reads.
+  //
+  // This used to be an inline custom property literally named --accent, which
+  // collided with the theme's own --accent token used by `hover:bg-accent/30`
+  // on this very element: the hover background was being painted in the
+  // category hue at 30% instead of the theme's accent surface.
+  const glowVar = category ? categoryVar(category.slug) : undefined;
 
   return (
     /* The card no longer navigates away: it opens the in-app analysis drawer,
@@ -55,11 +58,11 @@ function ArticleCardComponent({
     <button
       type="button"
       onClick={() => open(article)}
-      style={accentVar ? ({ "--accent": accentVar } as React.CSSProperties) : undefined}
+      style={glowVar ? ({ "--glow-color": glowVar } as React.CSSProperties) : undefined}
       className={cn(
-        "group flex w-full flex-col gap-2.5 border-l-2 border-l-transparent p-5 text-left transition-all duration-200",
+        "group flex w-full flex-col gap-2.5 p-5 text-left transition-all duration-200",
         "hover:bg-accent/30 hover:-translate-y-0.5 motion-reduce:transform-none motion-reduce:transition-none",
-        accentVar && "hover:[border-left-color:var(--accent)]",
+        glowVar && "hover:glow-edge",
         isTop && "gap-3 p-6",
       )}
     >

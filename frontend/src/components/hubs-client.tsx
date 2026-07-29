@@ -27,11 +27,12 @@ const REGION_NAME: Record<string, string> = Object.fromEntries(
   worldRegions.map((r) => [r.slug, r.name]),
 );
 
+/** The lit-chip pattern shared across Gazete / İçgörüler / Öneriler. */
 const chip = (active: boolean) =>
   cn(
     "rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
     active
-      ? "bg-primary text-primary-foreground"
+      ? "bg-primary/12 text-primary ring-1 ring-primary/40 dark:glow"
       : "border border-border text-muted-foreground hover:bg-accent",
   );
 
@@ -204,12 +205,14 @@ export function HubsClient() {
       </div>
 
       {overview ? (
-        <HubMap
-          hubs={overview.hubs}
-          routes={overview.routes}
-          selected={selected}
-          onSelect={setSelected}
-        />
+        <div className="overflow-hidden rounded-xl shadow-elev-1">
+          <HubMap
+            hubs={overview.hubs}
+            routes={overview.routes}
+            selected={selected}
+            onSelect={setSelected}
+          />
+        </div>
       ) : (
         <Skeleton className="h-[380px] w-full rounded-xl" />
       )}
@@ -250,7 +253,7 @@ export function HubsClient() {
             articles.items.length > 0 ? (
               <MotionList className="divide-y divide-border rounded-xl border border-border bg-card">
                 {articles.items.map((article) => (
-                  <MotionItem key={article.id}>
+                  <MotionItem key={article.id} variant="scalePop">
                     <ArticleCard article={article} />
                   </MotionItem>
                 ))}
@@ -297,7 +300,11 @@ function HubDetailPanel({ detail }: { detail: HubDetailOut }) {
       initial="hidden"
       animate="show"
       exit="exit"
-      className="flex h-fit flex-col gap-5 rounded-xl border border-border bg-card p-5"
+      style={{ "--glow-color": "var(--primary)" } as React.CSSProperties}
+      /* border-gradient already layers --card-sheen as its first background
+         layer, so it composes the sheen and the gradient frame in one
+         background-image instead of the two fighting over the property. */
+      className="border-gradient flex h-fit flex-col gap-5 rounded-xl p-5 shadow-elev-1"
     >
       <div className="flex items-start justify-between gap-2">
         <div className="flex flex-col gap-0.5">
@@ -306,7 +313,7 @@ function HubDetailPanel({ detail }: { detail: HubDetailOut }) {
             {detail.city} · {detail.country} · {REGION_NAME[detail.region] ?? detail.region}
           </p>
         </div>
-        <span className="rounded-md bg-muted px-2 py-1 font-mono text-xs font-semibold">
+        <span className="rounded-md bg-gradient-to-br from-primary/20 to-chart-4/25 px-2 py-1 font-mono text-xs font-semibold text-primary ring-1 ring-primary/20 dark:from-primary/30 dark:to-chart-4/35 dark:ring-primary/35">
           {detail.code}
         </span>
       </div>
