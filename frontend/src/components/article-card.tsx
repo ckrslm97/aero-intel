@@ -1,9 +1,10 @@
-import { ExternalLink, Minus, TrendingDown, TrendingUp } from "lucide-react";
+"use client";
+
 import { memo } from "react";
 
-import { AirlineLogo } from "@/components/airline-logo";
+import { useArticleDrawer } from "@/components/article-drawer-context";
 import { Badge } from "@/components/ui/badge";
-import { getCategory, getSubcategoryLabel } from "@/lib/taxonomy";
+import { getCategory } from "@/lib/taxonomy";
 import { cn } from "@/lib/utils";
 import type { ArticleOut } from "@/lib/types";
 
@@ -20,16 +21,6 @@ function formatPublished(iso: string | null): string {
   return PUBLISHED_FORMAT.format(new Date(iso));
 }
 
-function SentimentIcon({ sentiment }: { sentiment: string }) {
-  if (sentiment === "positive") {
-    return <TrendingUp className="size-3.5 text-good" />;
-  }
-  if (sentiment === "negative") {
-    return <TrendingDown className="size-3.5 text-critical" />;
-  }
-  return <Minus className="size-3.5 text-muted-foreground" />;
-}
-
 function ArticleCardComponent({
   article,
   variant = "compact",
@@ -37,12 +28,10 @@ function ArticleCardComponent({
   article: ArticleOut;
   variant?: "top" | "compact";
 }) {
+  const { open } = useArticleDrawer();
   const enrichment = article.enrichment;
   const isTop = variant === "top";
   const category = enrichment ? getCategory(enrichment.category) : null;
-  const subcategoryLabel = enrichment
-    ? getSubcategoryLabel(enrichment.category, enrichment.subcategory)
-    : null;
   const CategoryIcon = category?.icon;
 
   // Prefer the Turkish translation when a translation-capable LLM actually
@@ -60,15 +49,18 @@ function ArticleCardComponent({
     : undefined;
 
   return (
-    <a
-      href={article.url}
-      target="_blank"
-      rel="noopener noreferrer"
+    /* The card no longer navigates away: it opens the in-app analysis drawer,
+       which carries the sentiment/confidence/carrier detail this row used to
+       cram in, and holds the only link out to the source. */
+    <button
+      type="button"
+      onClick={() => open(article)}
       style={accentVar ? ({ "--accent": accentVar } as React.CSSProperties) : undefined}
       className={cn(
-        "group flex flex-col gap-2 border-l-2 border-l-transparent p-4 transition-colors hover:bg-accent/30",
+        "group flex w-full flex-col gap-2.5 border-l-2 border-l-transparent p-5 text-left transition-all duration-200",
+        "hover:bg-accent/30 hover:-translate-y-0.5 motion-reduce:transform-none motion-reduce:transition-none",
         accentVar && "hover:[border-left-color:var(--accent)]",
-        isTop && "gap-3 p-5",
+        isTop && "gap-3 p-6",
       )}
     >
       <div className="flex flex-wrap items-center gap-2">
@@ -82,79 +74,38 @@ function ArticleCardComponent({
           >
             <CategoryIcon className="size-3" />
             {category.label}
-            {subcategoryLabel && (
-              <span className="font-normal normal-case opacity-80">· {subcategoryLabel}</span>
-            )}
           </span>
         )}
         <Badge variant="secondary" className="text-[10px] uppercase">
           {article.source.name}
         </Badge>
-        {/* Who the story is about, read at a glance. Capped at three: a wire
-            round-up can name a dozen carriers, and a row of twelve logos stops
-            being information. */}
-        {article.airlines.length > 0 && (
-          <span className="flex items-center gap-1" title={article.airlines.map((a) => a.name).join(", ")}>
-            {article.airlines.slice(0, 3).map((airline) =>
-              airline.code ? (
-                <AirlineLogo
-                  key={airline.code}
-                  code={airline.code}
-                  name={airline.name}
-                  className="size-3.5"
-                />
-              ) : null,
-            )}
-            {article.airlines.length > 3 && (
-              <span className="text-[10px] text-muted-foreground">
-                +{article.airlines.length - 3}
-              </span>
-            )}
-          </span>
-        )}
-        {enrichment && (
-          <span className="flex items-center gap-1 text-[10px] font-medium text-muted-foreground">
-            <SentimentIcon sentiment={enrichment.sentiment} />
-            %{Math.round(enrichment.confidence_score * 100)} güven ·{" "}
-            {enrichment.corroborating_source_count} kaynak
-          </span>
-        )}
-        {enrichment && !enrichment.is_translated && (
-          <span
-            title="Çeviri için bir LLM sağlayıcısı yapılandırılmadı -- başlık ve özet İngilizce"
-            className="rounded-full bg-secondary px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-secondary-foreground"
-          >
-            otomatik çeviri yok
-          </span>
-        )}
         <span className="text-[10px] text-muted-foreground">
           {formatPublished(article.published_at)}
         </span>
       </div>
 
-      <div className="flex items-start justify-between gap-3">
-        <div
-          className={cn(
-            "flex items-start gap-1.5 font-medium text-card-foreground group-hover:text-primary",
-            isTop ? "text-xl leading-snug" : "text-sm",
-          )}
-        >
-          {/* Clamp as a safety belt: a runaway "headline" (e.g. a bad LLM
-              translation) must never render as a wall of text. */}
-          <span className="line-clamp-2">{headline}</span>
-          <ExternalLink className="mt-1 size-3.5 shrink-0 opacity-0 transition-opacity group-hover:opacity-100" />
-        </div>
-        <span className="shrink-0 whitespace-nowrap pt-0.5 text-[10px] text-muted-foreground">
-          {article.reading_time_minutes} dk okuma
-        </span>
+      <div
+        className={cn(
+          "font-medium text-card-foreground group-hover:text-primary",
+          isTop ? "text-xl leading-snug" : "text-sm leading-snug",
+        )}
+      >
+        {/* Clamp as a safety belt: a runaway "headline" (e.g. a bad LLM
+            translation) must never render as a wall of text. */}
+        <span className="line-clamp-2">{headline}</span>
       </div>
 
       {summary && (
-        <p className={cn("text-muted-foreground", isTop ? "text-sm" : "line-clamp-2 text-xs")}>
+        <p
+          className={cn(
+            "text-muted-foreground",
+            isTop ? "line-clamp-2 text-sm leading-relaxed" : "line-clamp-1 text-xs",
+          )}
+        >
           {summary}
         </p>
       )}
-    </a>
+    </button>
   );
 }
 

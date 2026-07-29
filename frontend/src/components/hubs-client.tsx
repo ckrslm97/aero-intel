@@ -1,13 +1,16 @@
 "use client";
 
-import { Plane } from "lucide-react";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import { ChevronDown, Plane } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { AirlineLogo } from "@/components/airline-logo";
 import { ArticleCard } from "@/components/article-card";
 import { HubMap } from "@/components/hub-map";
+import { MotionItem, MotionList } from "@/components/motion/motion-list";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiFetch } from "@/lib/api";
+import { collapseSection, fadeUpItem, reduceVariants } from "@/lib/motion";
 import { worldRegions } from "@/lib/nav";
 import { CATEGORY_BY_SLUG } from "@/lib/taxonomy";
 import type {
@@ -31,6 +34,14 @@ const chip = (active: boolean) =>
       ? "bg-primary text-primary-foreground"
       : "border border-border text-muted-foreground hover:bg-accent",
   );
+
+// How many carriers/categories the panel shows before "+N daha". Five keeps
+// the sidebar scannable at a glance; the rest is one click away.
+const PANEL_PREVIEW = 5;
+// Above this the note plausibly overflows three clamped lines. A character
+// count is imprecise by design -- measuring real overflow costs a layout pass
+// per hub selection and buys nothing the reader can see.
+const NOTE_CLAMP_THRESHOLD = 180;
 
 export function HubsClient() {
   const [days, setDays] = useState<number>(DAY_OPTIONS[1]);
@@ -126,10 +137,10 @@ export function HubsClient() {
   }, [countries]);
 
   return (
-    <div className="flex flex-col gap-5 p-4 md:p-6">
+    <div className="flex flex-col gap-6 p-4 md:p-6">
       <header className="flex flex-col gap-1">
         <h1 className="text-2xl font-semibold tracking-tight">Hub&apos;lar</h1>
-        <p className="max-w-2xl text-sm text-muted-foreground">
+        <p className="max-w-2xl text-sm leading-relaxed text-muted-foreground">
           İzlenen aktarma merkezleri ve haber arşivinin onlar hakkında biriktirdikleri.
           Bir hub seçin ya da ülkeye göre daraltın.
         </p>
@@ -141,7 +152,7 @@ export function HubsClient() {
         </p>
       )}
 
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-border bg-card p-3">
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-3 rounded-xl border border-border bg-card p-5">
         <div className="flex items-center gap-2">
           <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
             Dönem
@@ -221,86 +232,14 @@ export function HubsClient() {
         ))}
       </div>
 
-      <div className="grid gap-5 lg:grid-cols-[minmax(0,20rem)_minmax(0,1fr)]">
-        {detail && (
-          <aside className="flex h-fit flex-col gap-3 rounded-xl border border-border bg-card p-4">
-            <div className="flex items-start justify-between gap-2">
-              <div>
-                <h2 className="text-lg font-semibold leading-tight">{detail.name}</h2>
-                <p className="text-xs text-muted-foreground">
-                  {detail.city} · {detail.country} · {REGION_NAME[detail.region] ?? detail.region}
-                </p>
-              </div>
-              <span className="rounded-md bg-muted px-2 py-1 font-mono text-xs font-semibold">
-                {detail.code}
-              </span>
-            </div>
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,20rem)_minmax(0,1fr)]">
+        {/* Keyed on the hub code so switching hubs cross-fades the panel
+            instead of silently swapping its text. */}
+        <AnimatePresence mode="wait" initial={false}>
+          {detail && <HubDetailPanel key={detail.code} detail={detail} />}
+        </AnimatePresence>
 
-            <p className="text-sm text-muted-foreground">{detail.note_tr}</p>
-
-            {detail.carriers.length > 0 && (
-              <div className="flex flex-col gap-1.5">
-                <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  Üssü burada
-                </span>
-                <div className="flex flex-wrap gap-1.5">
-                  {detail.carriers.map((code) => (
-                    <span
-                      key={code}
-                      className="flex items-center gap-1.5 rounded-full border border-border px-2 py-1 text-xs"
-                    >
-                      <AirlineLogo code={code} className="size-3.5" />
-                      {code}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            <div className="flex flex-col gap-1.5">
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                Son {detail.days} günde adı geçen taşıyıcılar
-              </span>
-              {detail.carriers_seen.length > 0 ? (
-                <div className="flex flex-col gap-1">
-                  {detail.carriers_seen.map((carrier) => (
-                    <div key={carrier.code} className="flex items-center gap-2 text-xs">
-                      <AirlineLogo code={carrier.code} name={carrier.name} className="size-3.5" />
-                      <span className="flex-1 truncate">{carrier.name}</span>
-                      <span className="font-mono tabular-nums text-muted-foreground">
-                        {carrier.article_count}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-xs text-muted-foreground">
-                  Bu dönemde bu hub&apos;la birlikte anılan taşıyıcı yok.
-                </p>
-              )}
-            </div>
-
-            {detail.categories.length > 0 && (
-              <div className="flex flex-col gap-1.5">
-                <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  Konu dağılımı
-                </span>
-                <div className="flex flex-wrap gap-1.5">
-                  {detail.categories.map((entry) => (
-                    <span
-                      key={entry.slug}
-                      className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground"
-                    >
-                      {CATEGORY_BY_SLUG[entry.slug]?.label ?? entry.slug} · {entry.count}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-          </aside>
-        )}
-
-        <section className="flex flex-col gap-2">
+        <section className="flex flex-col gap-3">
           <h2 className="flex items-center gap-2 text-sm font-semibold">
             <Plane className="size-4 text-muted-foreground" />
             {selected ? `${selected} haberleri` : "Haberler"}
@@ -309,11 +248,13 @@ export function HubsClient() {
 
           {articles ? (
             articles.items.length > 0 ? (
-              <div className="divide-y divide-border rounded-xl border border-border bg-card">
+              <MotionList className="divide-y divide-border rounded-xl border border-border bg-card">
                 {articles.items.map((article) => (
-                  <ArticleCard key={article.id} article={article} />
+                  <MotionItem key={article.id}>
+                    <ArticleCard article={article} />
+                  </MotionItem>
                 ))}
-              </div>
+              </MotionList>
             ) : (
               <p className="rounded-xl border border-border bg-card p-6 text-sm text-muted-foreground">
                 Bu seçim için haber yok. Arşiv bu hub ya da ülke hakkında henüz bir şey
@@ -326,5 +267,222 @@ export function HubsClient() {
         </section>
       </div>
     </div>
+  );
+}
+
+/** The hub sidebar. Everything long is capped and expandable: the panel used
+ * to print a full paragraph plus every carrier and every category, which made
+ * a 20rem column scroll for hubs like IST. */
+function HubDetailPanel({ detail }: { detail: HubDetailOut }) {
+  const reduceMotion = useReducedMotion();
+  const [noteOpen, setNoteOpen] = useState(false);
+  const [carriersOpen, setCarriersOpen] = useState(false);
+  const [categoriesOpen, setCategoriesOpen] = useState(false);
+
+  const noteIsLong = detail.note_tr.length > NOTE_CLAMP_THRESHOLD;
+
+  const carriersSeen = [...detail.carriers_seen].sort(
+    (a, b) => b.article_count - a.article_count,
+  );
+  const previewCarriers = carriersSeen.slice(0, PANEL_PREVIEW);
+  const restCarriers = carriersSeen.slice(PANEL_PREVIEW);
+
+  const categories = [...detail.categories].sort((a, b) => b.count - a.count);
+  const previewCategories = categories.slice(0, PANEL_PREVIEW);
+  const restCategories = categories.slice(PANEL_PREVIEW);
+
+  return (
+    <motion.aside
+      variants={reduceMotion ? reduceVariants(fadeUpItem) : fadeUpItem}
+      initial="hidden"
+      animate="show"
+      exit="exit"
+      className="flex h-fit flex-col gap-5 rounded-xl border border-border bg-card p-5"
+    >
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex flex-col gap-0.5">
+          <h2 className="text-lg font-semibold leading-tight">{detail.name}</h2>
+          <p className="text-xs text-muted-foreground">
+            {detail.city} · {detail.country} · {REGION_NAME[detail.region] ?? detail.region}
+          </p>
+        </div>
+        <span className="rounded-md bg-muted px-2 py-1 font-mono text-xs font-semibold">
+          {detail.code}
+        </span>
+      </div>
+
+      <div className="flex flex-col gap-1">
+        <p
+          className={cn(
+            "text-sm leading-relaxed text-muted-foreground",
+            noteIsLong && !noteOpen && "line-clamp-3",
+          )}
+        >
+          {detail.note_tr}
+        </p>
+        {noteIsLong && (
+          <button
+            type="button"
+            onClick={() => setNoteOpen((open) => !open)}
+            className="w-fit text-xs font-medium text-primary hover:underline"
+          >
+            {noteOpen ? "gizle" : "devamını gör"}
+          </button>
+        )}
+      </div>
+
+      {detail.carriers.length > 0 && (
+        <div className="flex flex-col gap-2">
+          <PanelLabel>Üssü burada</PanelLabel>
+          <div className="flex flex-wrap gap-1.5">
+            {detail.carriers.map((code) => (
+              <span
+                key={code}
+                className="flex items-center gap-1.5 rounded-full border border-border px-2 py-1 text-xs"
+              >
+                <AirlineLogo code={code} className="size-3.5" />
+                {code}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="flex flex-col gap-2">
+        <PanelLabel>Son {detail.days} günde adı geçen taşıyıcılar</PanelLabel>
+        {carriersSeen.length > 0 ? (
+          <>
+            <div className="flex flex-col gap-1.5">
+              {previewCarriers.map((carrier) => (
+                <CarrierRow key={carrier.code} carrier={carrier} />
+              ))}
+            </div>
+            <Expandable open={carriersOpen} reduceMotion={reduceMotion}>
+              <div className="flex flex-col gap-1.5 pt-1.5">
+                {restCarriers.map((carrier) => (
+                  <CarrierRow key={carrier.code} carrier={carrier} />
+                ))}
+              </div>
+            </Expandable>
+            <MoreToggle
+              open={carriersOpen}
+              hidden={restCarriers.length}
+              onToggle={() => setCarriersOpen((open) => !open)}
+            />
+          </>
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            Bu dönemde bu hub&apos;la birlikte anılan taşıyıcı yok.
+          </p>
+        )}
+      </div>
+
+      {categories.length > 0 && (
+        <div className="flex flex-col gap-2">
+          <PanelLabel>Konu dağılımı</PanelLabel>
+          <div className="flex flex-wrap gap-1.5">
+            {previewCategories.map((entry) => (
+              <CategoryChip key={entry.slug} entry={entry} />
+            ))}
+          </div>
+          <Expandable open={categoriesOpen} reduceMotion={reduceMotion}>
+            <div className="flex flex-wrap gap-1.5 pt-1.5">
+              {restCategories.map((entry) => (
+                <CategoryChip key={entry.slug} entry={entry} />
+              ))}
+            </div>
+          </Expandable>
+          <MoreToggle
+            open={categoriesOpen}
+            hidden={restCategories.length}
+            onToggle={() => setCategoriesOpen((open) => !open)}
+          />
+        </div>
+      )}
+    </motion.aside>
+  );
+}
+
+function PanelLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+      {children}
+    </span>
+  );
+}
+
+function CarrierRow({
+  carrier,
+}: {
+  carrier: HubDetailOut["carriers_seen"][number];
+}) {
+  return (
+    <div className="flex items-center gap-2 text-xs">
+      <AirlineLogo code={carrier.code} name={carrier.name} className="size-3.5" />
+      <span className="flex-1 truncate">{carrier.name}</span>
+      <span className="font-mono tabular-nums text-muted-foreground">
+        {carrier.article_count}
+      </span>
+    </div>
+  );
+}
+
+function CategoryChip({ entry }: { entry: HubDetailOut["categories"][number] }) {
+  return (
+    <span className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground">
+      {CATEGORY_BY_SLUG[entry.slug]?.label ?? entry.slug} · {entry.count}
+    </span>
+  );
+}
+
+/** Animated-height reveal for the tail of a capped list. */
+function Expandable({
+  open,
+  reduceMotion,
+  children,
+}: {
+  open: boolean;
+  reduceMotion: boolean | null;
+  children: React.ReactNode;
+}) {
+  return (
+    <AnimatePresence initial={false}>
+      {open && (
+        <motion.div
+          variants={reduceMotion ? reduceVariants(collapseSection) : collapseSection}
+          initial="hidden"
+          animate="show"
+          exit="exit"
+          className="overflow-hidden"
+        >
+          {children}
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+}
+
+function MoreToggle({
+  open,
+  hidden,
+  onToggle,
+}: {
+  open: boolean;
+  hidden: number;
+  onToggle: () => void;
+}) {
+  // Nothing to reveal and nothing revealed -- render no control at all.
+  if (hidden <= 0) return null;
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      className="flex w-fit items-center gap-1 text-xs font-medium text-primary hover:underline"
+    >
+      <ChevronDown
+        className={cn("size-3.5 transition-transform motion-reduce:transition-none", open && "rotate-180")}
+      />
+      {open ? "daha az göster" : `+${hidden} daha`}
+    </button>
   );
 }

@@ -8,6 +8,7 @@ import { useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
 import { ArticleCard } from "@/components/article-card";
+import { CategoryChipRow } from "@/components/filters/category-chip-row";
 import { EventsCalendar } from "@/components/events-calendar";
 import { AirlineLogo } from "@/components/airline-logo";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -38,6 +39,61 @@ const AIRLINE_FILTER_LABEL: Record<string, string> = {
 const DAYS_WINDOW = 30;
 const PAGE_LIMIT = 30;
 
+// "28 Temmuz 2026" -- one formatter for the whole list, same reasoning as
+// ArticleCard's PUBLISHED_FORMAT.
+const DAY_HEADER_FORMAT = new Intl.DateTimeFormat("tr-TR", {
+  day: "numeric",
+  month: "long",
+  year: "numeric",
+});
+
+interface DayGroup {
+  /** ISO calendar day, or null for the trailing "Tarihsiz" bucket. */
+  key: string | null;
+  label: string;
+  articles: ArticleOut[];
+}
+
+/** Group an already date-sorted list (the API returns published_at desc) into
+ * calendar days, preserving order. Undated stories fall into one trailing
+ * bucket rather than being silently dropped or dated to today. */
+function groupByDay(items: ArticleOut[]): DayGroup[] {
+  const groups: DayGroup[] = [];
+  const undated: ArticleOut[] = [];
+  const byKey = new Map<string, DayGroup>();
+
+  for (const article of items) {
+    if (!article.published_at) {
+      undated.push(article);
+      continue;
+    }
+    const published = new Date(article.published_at);
+    if (Number.isNaN(published.getTime())) {
+      undated.push(article);
+      continue;
+    }
+    // Local calendar day, so a reader in Istanbul sees Istanbul's dates.
+    const key = `${published.getFullYear()}-${published.getMonth()}-${published.getDate()}`;
+    const existing = byKey.get(key);
+    if (existing) {
+      existing.articles.push(article);
+    } else {
+      const group: DayGroup = {
+        key,
+        label: DAY_HEADER_FORMAT.format(published),
+        articles: [article],
+      };
+      byKey.set(key, group);
+      groups.push(group);
+    }
+  }
+
+  if (undated.length > 0) {
+    groups.push({ key: null, label: "Tarihsiz", articles: undated });
+  }
+  return groups;
+}
+
 export function NewspaperBrowser() {
   const reduceMotion = useReducedMotion();
 
@@ -65,13 +121,6 @@ export function NewspaperBrowser() {
   const [airlineCode, setAirlineCode] = useState<string | null>(initial.airline);
   const [eventView, setEventView] = useState<"news" | "calendar">("news");
   const [showMap, setShowMap] = useState(false);
-
-  // Display order is alphabetical (Turkish collation) per user request; the
-  // backend mirror keeps its own canonical order, so sort at render only.
-  const sortedCategories = useMemo(
-    () => [...CATEGORIES].sort((a, b) => a.label.localeCompare(b.label, "tr")),
-    [],
-  );
 
   const [items, setItems] = useState<ArticleOut[]>([]);
   const [total, setTotal] = useState(0);
@@ -158,8 +207,10 @@ export function NewspaperBrowser() {
   const today = new Date().toISOString().slice(0, 10);
   const hasMore = items.length < total;
 
+  const dayGroups = useMemo(() => groupByDay(items), [items]);
+
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-8">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-col gap-1">
           <h1 className="text-2xl font-semibold tracking-tight">Gazete</h1>
@@ -178,55 +229,17 @@ export function NewspaperBrowser() {
 
       {/* Sticky category bar -- horizontally scrollable on mobile, blurred so
           content reads through it while scrolling. */}
-      <div className="sticky top-0 z-10 -mx-2 border-b border-border bg-background/80 px-2 pb-3 pt-2 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-        <div className="flex gap-1.5 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          {sortedCategories.map((c) => {
-            const Icon = c.icon;
-            const active = c.slug === categorySlug;
-            const count = counts[c.slug];
-            // Gelir Yönetimi is the portal's focus category -- it keeps its
-            // amber identity even when inactive so it stands apart in the row.
-            const isFocus = c.slug === "revenue_management";
-            return (
-              <button
-                key={c.slug}
-                onClick={() => selectCategory(c.slug)}
-                className={cn(
-                  "relative flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold transition-colors",
-                  active
-                    ? c.textClass
-                    : isFocus
-                      ? "border border-category-revenue-management/50 bg-category-revenue-management/10 text-category-revenue-management hover:bg-category-revenue-management/20"
-                      : "text-muted-foreground hover:bg-accent",
-                )}
-              >
-                {active && (
-                  <motion.span
-                    layoutId="activeCategoryPill"
-                    className={cn("absolute inset-0 rounded-full", c.bgClass)}
-                    transition={
-                      reduceMotion
-                        ? { duration: 0 }
-                        : { type: "spring", stiffness: 500, damping: 34 }
-                    }
-                  />
-                )}
-                <Icon className="relative z-10 size-3.5" />
-                <span className="relative z-10">{c.label}</span>
-                {count ? (
-                  <span
-                    className={cn(
-                      "relative z-10 rounded-full px-1.5 text-[10px] font-semibold tabular-nums",
-                      active ? "bg-background/60" : "bg-muted text-muted-foreground",
-                    )}
-                  >
-                    {count}
-                  </span>
-                ) : null}
-              </button>
-            );
-          })}
-        </div>
+      <div className="sticky top-0 z-20 -mx-2 border-b border-border bg-background/80 px-2 pb-3 pt-2 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+        {/* Gelir Yönetimi is pinned first and keeps its amber identity even
+            when inactive -- see CategoryChipRow, shared with Öneriler. */}
+        <CategoryChipRow
+          value={categorySlug}
+          onChange={(slug) => selectCategory(slug ?? CATEGORIES[0].slug)}
+          pinned="revenue_management"
+          focusStyling
+          counts={counts}
+          layoutId="newspaperCategoryPill"
+        />
       </div>
 
       {/* The old standalone Takvim page lives here now: Etkinlik gets a
@@ -438,31 +451,47 @@ export function NewspaperBrowser() {
         <ArticleListSkeleton />
       ) : items.length > 0 ? (
         <>
-          <div
-            className={cn(
-              "flex flex-col divide-y divide-border rounded-xl border border-border bg-card transition-opacity",
-              loading && "opacity-60",
-            )}
-          >
-            <AnimatePresence initial={false}>
-              {items.map((article, index) => (
-                <motion.div
-                  key={article.id}
-                  initial={reduceMotion ? false : { opacity: 0, y: 8 }}
+          {/* Date-sorted reading order: the backend already returns
+              published_at desc, so grouping is a pure client-side pass over
+              the list and re-runs whenever a page is appended. */}
+          <div className={cn("flex flex-col gap-8 transition-opacity", loading && "opacity-60")}>
+            {dayGroups.map((group, groupIndex) => (
+              <section key={group.key ?? "undated"} className="flex flex-col gap-3">
+                <motion.h2
+                  initial={reduceMotion ? false : { opacity: 0, y: 6 }}
                   animate={{ opacity: 1, y: 0 }}
-                  transition={{
-                    duration: reduceMotion ? 0 : 0.18,
-                    // Cap the stagger at 8 items (~160ms). It used to cap at
-                    // PAGE_LIMIT, so the last row of a 30-item page only
-                    // finished animating ~800ms after the data had arrived --
-                    // the single most visible part of "the buttons feel slow".
-                    delay: reduceMotion ? 0 : Math.min(index, 8) * 0.02,
-                  }}
+                  transition={{ duration: reduceMotion ? 0 : 0.2 }}
+                  className="sticky top-[3.25rem] z-10 -mx-2 bg-background/85 px-2 py-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground backdrop-blur supports-[backdrop-filter]:bg-background/60"
                 >
-                  <ArticleCard article={article} />
-                </motion.div>
-              ))}
-            </AnimatePresence>
+                  {group.label}
+                  <span className="ml-2 font-normal normal-case tracking-normal">
+                    {group.articles.length} haber
+                  </span>
+                </motion.h2>
+                <div className="flex flex-col divide-y divide-border rounded-xl border border-border bg-card">
+                  <AnimatePresence initial={false}>
+                    {group.articles.map((article, index) => (
+                      <motion.div
+                        key={article.id}
+                        initial={reduceMotion ? false : { opacity: 0, y: 8 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{
+                          duration: reduceMotion ? 0 : 0.18,
+                          // Cap the stagger at 8 items (~160ms). It used to cap
+                          // at PAGE_LIMIT, so the last row of a 30-item page
+                          // only finished animating ~800ms after the data had
+                          // arrived -- the single most visible part of "the
+                          // buttons feel slow".
+                          delay: reduceMotion ? 0 : Math.min(index + groupIndex, 8) * 0.02,
+                        }}
+                      >
+                        <ArticleCard article={article} />
+                      </motion.div>
+                    ))}
+                  </AnimatePresence>
+                </div>
+              </section>
+            ))}
           </div>
 
           {hasMore && (

@@ -9,7 +9,6 @@ import {
   Search,
   Sparkles,
   Star,
-  Table2,
 } from "lucide-react";
 
 export interface NavItem {
@@ -19,15 +18,15 @@ export interface NavItem {
 }
 
 // The product's pages, plus Ara as a utility. The old Takvim page folded into
-// Gazete's Etkinlik category; the former scaffold sections and the admin/login
-// surface are gone. Öneriler and Analiz sit next to İçgörüler because all three
-// answer "what does the data say", as opposed to "what happened" (Gazete).
+// Gazete's Etkinlik category; the former scaffold sections, the admin/login
+// surface and the Analiz pivot table are gone. Öneriler sits next to İçgörüler
+// because both answer "what does the data say", as opposed to "what happened"
+// (Gazete).
 export const primaryNav: NavItem[] = [
   { href: "/", label: "Kontrol Paneli", icon: LayoutDashboard },
   { href: "/newspaper", label: "Gazete", icon: Newspaper },
   { href: "/insights", label: "İçgörüler", icon: Lightbulb },
   { href: "/oneriler", label: "Öneriler", icon: Sparkles },
-  { href: "/analiz", label: "Analiz", icon: Table2 },
   { href: "/hublar", label: "Hub'lar", icon: Globe2 },
   { href: "/know-how", label: "Know How", icon: GraduationCap },
   { href: "/biz", label: "BİZ", icon: Star },
