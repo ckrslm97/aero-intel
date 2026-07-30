@@ -150,7 +150,7 @@ async def test_home_carrier_campaigns_are_not_a_competitive_alert(db_session):
 
     assert [r for r in await build_recommendations(db_session) if r["id"] == "promo-tk"] == []
     # ... unless the reader explicitly asks about TK.
-    focused = await build_recommendations(db_session, airline="TK")
+    focused = await build_recommendations(db_session, airline=["TK"])
     assert any(r["id"] == "promo-tk" for r in focused)
 
 
@@ -205,17 +205,31 @@ async def test_filters_only_narrow_the_result(db_session):
     ids = {r["id"] for r in everything}
     assert {"promo-ek", "route-surge-europe"} <= ids
 
-    by_category = await build_recommendations(db_session, category="network")
+    by_category = await build_recommendations(db_session, category=["network"])
     assert {r["id"] for r in by_category} == {"route-surge-europe"}
 
-    by_region = await build_recommendations(db_session, region="europe")
+    by_region = await build_recommendations(db_session, region=["europe"])
     assert {r["id"] for r in by_region} == {"route-surge-europe"}
 
-    by_airline = await build_recommendations(db_session, airline="EK")
+    by_airline = await build_recommendations(db_session, airline=["EK"])
     assert {r["id"] for r in by_airline} == {"promo-ek"}
 
     # A filter combination nothing matches is an empty list, not an invention.
-    assert await build_recommendations(db_session, category="network", airline="EK") == []
+    assert (
+        await build_recommendations(db_session, category=["network"], airline=["EK"])
+        == []
+    )
+
+    # Multi-select is a union, not an intersection: asking for both categories
+    # brings both patterns back.
+    both = await build_recommendations(
+        db_session, category=["network", "revenue_management"]
+    )
+    assert {"promo-ek", "route-surge-europe"} <= {r["id"] for r in both}
+
+    # ... and an *empty* selection must not filter everything out -- it is the
+    # "Tümü" state, identical to passing nothing at all.
+    assert {r["id"] for r in await build_recommendations(db_session, category=[], region=[], airline=[])} == ids
 
 
 async def test_negative_sentiment_cluster_cites_the_negative_stories(db_session):

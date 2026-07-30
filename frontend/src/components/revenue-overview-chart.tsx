@@ -2,6 +2,7 @@
 
 import ReactECharts from "echarts-for-react";
 import { useReducedMotion } from "framer-motion";
+import { useMemo } from "react";
 
 import {
   baseOption,
@@ -24,20 +25,32 @@ import type { KpiOut } from "@/lib/types";
 export function RevenueOverviewChart({ kpis }: { kpis: KpiOut[] }) {
   const theme = useChartTheme();
   const reduceMotion = useReducedMotion();
-  const base = baseOption(theme, reduceMotion);
 
-  const byKey = new Map(kpis.map((k) => [k.metric_key, k]));
-  const series = REVENUE_BAR_KEYS.map((key) => byKey.get(key)).filter(
-    (k): k is KpiOut => k !== undefined,
-  );
+  const series = useMemo(() => {
+    const byKey = new Map(kpis.map((k) => [k.metric_key, k]));
+    return REVENUE_BAR_KEYS.map((key) => byKey.get(key)).filter(
+      (k): k is KpiOut => k !== undefined,
+    );
+  }, [kpis]);
 
-  if (series.length === 0) return null;
+  // `notMerge` below means every render that hands ReactECharts a fresh object
+  // tears the chart down and rebuilds it rather than diffing. The option only
+  // ever changes when the data or the theme does, so it is built once per real
+  // change. Everything the literal reads (`base`, `hasLastYear`, `hasDelta`,
+  // `unit`) is derived inside the memo, so the dependency list stays the three
+  // things it genuinely depends on rather than a list of intermediates that
+  // would each be rebuilt per render anyway.
+  const option = useMemo(() => {
+    // The empty case returns null here rather than in an early return above:
+    // hooks cannot sit behind a conditional return.
+    if (series.length === 0) return null;
 
-  const hasLastYear = series.some((k) => k.ly_value !== null);
-  const hasDelta = series.some((k) => k.ly_delta_pct !== null);
-  const unit = series[0].unit;
+    const base = baseOption(theme, reduceMotion);
+    const hasLastYear = series.some((k) => k.ly_value !== null);
+    const hasDelta = series.some((k) => k.ly_delta_pct !== null);
+    const unit = series[0].unit;
 
-  const option = {
+    return {
     ...base,
     grid: { left: 8, right: 8, top: 36, bottom: 8, containLabel: true },
     legend: {
@@ -155,7 +168,10 @@ export function RevenueOverviewChart({ kpis }: { kpis: KpiOut[] }) {
           ]
         : []),
     ],
-  };
+    };
+  }, [series, theme, reduceMotion]);
+
+  if (!option) return null;
 
   return (
     <ReactECharts

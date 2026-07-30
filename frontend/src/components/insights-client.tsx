@@ -154,10 +154,131 @@ export function InsightsClient() {
   // dataviz-validated ones; they are just no longer duplicated here.
   const { ink, surface } = theme;
 
-  const base = {
-    ...baseOption(theme, reduceMotion),
-    grid: { left: 8, right: 24, top: 28, bottom: 8, containLabel: true },
-  };
+  const base = useMemo(
+    () => ({
+      ...baseOption(theme, reduceMotion),
+      grid: { left: 8, right: 24, top: 28, bottom: 8, containLabel: true },
+    }),
+    [theme, reduceMotion],
+  );
+
+  // Where the route news is coming from. Straight off new_route_signals'
+  // region + count -- no extra aggregation.
+  // `slug` rides along so a click on a slice resolves back to the filter value
+  // directly, instead of reverse-parsing the translated display name.
+  //
+  // These three sit above the early returns because they are hooks now: the
+  // donut is the one chart in the app whose option was rebuilt from scratch on
+  // every render (every filter chip click, every hover-driven state change),
+  // which with `notMerge` meant a full ECharts teardown each time.
+  const regionSlices = useMemo(
+    () =>
+      (data?.new_route_signals ?? [])
+        .map((s) => ({
+          name: s.region ? (REGION_NAME[s.region] ?? s.region) : "Bölge belirtilmemiş",
+          value: s.count,
+          slug: s.region,
+        }))
+        .filter((s) => s.value > 0),
+    [data],
+  );
+
+  const totalSignals = useMemo(
+    () => regionSlices.reduce((sum, s) => sum + s.value, 0),
+    [regionSlices],
+  );
+
+  const regionOption = useMemo(
+    () => ({
+      ...base,
+      // Finally uses the app's own --chart-1..5 tokens: this pie was falling
+      // through to ECharts' stock palette, the only chart in the app that was
+      // not on the validated hues at all.
+      color: theme.series,
+      grid: undefined,
+      tooltip: {
+        ...base.tooltip,
+        trigger: "item",
+        formatter: (p: { name: string; value: number; percent: number }) =>
+          `${p.name}<br/>${p.value} sinyal · %${p.percent}`,
+      },
+      legend: {
+        type: "scroll",
+        orient: "vertical",
+        right: 0,
+        top: "middle",
+        textStyle: { color: ink, fontSize: 11 },
+      },
+      // The total, sitting in the ring's hole. `graphic` text rather than a
+      // second (label-only) pie series, so nothing extra enters the chart's
+      // tooltip/legend/hover surface.
+      //
+      // The two texts hang off a positioning group rather than carrying
+      // `left`/`top` each. ECharts places a graphic element by its bounding
+      // box's top-left corner, so a bare text at `left: "36%"` starts at the
+      // pie's center and runs off to the right of it -- and the correction is
+      // half the rendered text width, a pixel amount that a percentage nudge
+      // can only match at one container width. A *group* with
+      // `bounding: "raw"` is measured by its own origin instead of its
+      // children, so `left`/`top` land that origin exactly on the pie's
+      // center ["36%", "52%"], and the children (textAlign/textVerticalAlign
+      // centered, offset only in px) stay centered at every width and for any
+      // digit count.
+      //
+      // Only ever rendered alongside the ring itself: this option object is
+      // consumed inside the `regionSlices.length > 0` branch below.
+      graphic: {
+        elements: [
+          {
+            type: "group",
+            left: "36%",
+            top: "52%",
+            bounding: "raw",
+            children: [
+              {
+                type: "text",
+                x: 0,
+                y: -8,
+                style: {
+                  text: String(totalSignals),
+                  fontSize: 28,
+                  fontWeight: 700,
+                  fill: theme.inkStrong,
+                  textAlign: "center",
+                  textVerticalAlign: "middle",
+                },
+              },
+              {
+                type: "text",
+                x: 0,
+                y: 16,
+                style: {
+                  text: "sinyal",
+                  fontSize: 11,
+                  fill: ink,
+                  textAlign: "center",
+                  textVerticalAlign: "middle",
+                },
+              },
+            ],
+          },
+        ],
+      },
+      series: [
+        {
+          type: "pie",
+          radius: ["48%", "72%"],
+          center: ["36%", "52%"],
+          avoidLabelOverlap: true,
+          itemStyle: { borderColor: surface, borderWidth: 2 },
+          label: { show: false },
+          labelLine: { show: false },
+          data: regionSlices,
+        },
+      ],
+    }),
+    [base, regionSlices, totalSignals, theme, ink, surface],
+  );
 
   if (error) {
     return (
@@ -176,106 +297,6 @@ export function InsightsClient() {
       </div>
     );
   }
-
-  // Where the route news is coming from. Straight off new_route_signals'
-  // region + count -- no extra aggregation.
-  const regionSlices = data.new_route_signals
-    .map((s) => ({
-      name: s.region ? (REGION_NAME[s.region] ?? s.region) : "Bölge belirtilmemiş",
-      value: s.count,
-    }))
-    .filter((s) => s.value > 0);
-
-  const totalSignals = regionSlices.reduce((sum, s) => sum + s.value, 0);
-
-  const regionOption = {
-    ...base,
-    // Finally uses the app's own --chart-1..5 tokens: this pie was falling
-    // through to ECharts' stock palette, the only chart in the app that was
-    // not on the validated hues at all.
-    color: theme.series,
-    grid: undefined,
-    tooltip: {
-      ...base.tooltip,
-      trigger: "item",
-      formatter: (p: { name: string; value: number; percent: number }) =>
-        `${p.name}<br/>${p.value} sinyal · %${p.percent}`,
-    },
-    legend: {
-      type: "scroll",
-      orient: "vertical",
-      right: 0,
-      top: "middle",
-      textStyle: { color: ink, fontSize: 11 },
-    },
-    // The total, sitting in the ring's hole. `graphic` text rather than a
-    // second (label-only) pie series, so nothing extra enters the chart's
-    // tooltip/legend/hover surface.
-    //
-    // The two texts hang off a positioning group rather than carrying
-    // `left`/`top` each. ECharts places a graphic element by its bounding
-    // box's top-left corner, so a bare text at `left: "36%"` starts at the
-    // pie's center and runs off to the right of it -- and the correction is
-    // half the rendered text width, a pixel amount that a percentage nudge
-    // can only match at one container width. A *group* with
-    // `bounding: "raw"` is measured by its own origin instead of its
-    // children, so `left`/`top` land that origin exactly on the pie's
-    // center ["36%", "52%"], and the children (textAlign/textVerticalAlign
-    // centered, offset only in px) stay centered at every width and for any
-    // digit count.
-    //
-    // Only ever rendered alongside the ring itself: this option object is
-    // consumed inside the `regionSlices.length > 0` branch below.
-    graphic: {
-      elements: [
-        {
-          type: "group",
-          left: "36%",
-          top: "52%",
-          bounding: "raw",
-          children: [
-            {
-              type: "text",
-              x: 0,
-              y: -8,
-              style: {
-                text: String(totalSignals),
-                fontSize: 28,
-                fontWeight: 700,
-                fill: theme.inkStrong,
-                textAlign: "center",
-                textVerticalAlign: "middle",
-              },
-            },
-            {
-              type: "text",
-              x: 0,
-              y: 16,
-              style: {
-                text: "sinyal",
-                fontSize: 11,
-                fill: ink,
-                textAlign: "center",
-                textVerticalAlign: "middle",
-              },
-            },
-          ],
-        },
-      ],
-    },
-    series: [
-      {
-        type: "pie",
-        radius: ["48%", "72%"],
-        center: ["36%", "52%"],
-        avoidLabelOverlap: true,
-        itemStyle: { borderColor: surface, borderWidth: 2 },
-        label: { show: false },
-        labelLine: { show: false },
-        data: regionSlices,
-      },
-    ],
-  };
 
   // These panels are plain divs rather than <Card>, so they take the Task 4
   // base coat (elevation + sheen + shadow transition) explicitly.
@@ -325,6 +346,17 @@ export function InsightsClient() {
               style={{ height: 280 }}
               opts={{ renderer: "svg" }}
               notMerge
+              // The donut is the filter's map: clicking a slice narrows the
+              // signal list below to that region. The "Bölge belirtilmemiş"
+              // slice carries no slug, so it clears -- there is no distinct
+              // filterable state for that bucket, and "Tümü" is the honest
+              // answer rather than an empty list.
+              onEvents={{
+                click: (params: { dataIndex: number }) => {
+                  const slug = regionSlices[params.dataIndex]?.slug;
+                  setSignalRegion(slug ?? null);
+                },
+              }}
             />
           ) : (
             <p className="py-24 text-center text-sm text-muted-foreground">

@@ -2,6 +2,7 @@
 
 import ReactECharts from "echarts-for-react";
 import { useReducedMotion } from "framer-motion";
+import { useMemo } from "react";
 
 import {
   areaGlow,
@@ -33,24 +34,29 @@ const DATE_FORMAT_BY_PERIOD: Record<KpiPeriod, Intl.DateTimeFormatOptions> = {
 export function KpiDetailChart({ history, period, unit }: KpiDetailChartProps) {
   const theme = useChartTheme();
   const reduceMotion = useReducedMotion();
-  const base = baseOption(theme, reduceMotion);
 
-  const dateFormat = DATE_FORMAT_BY_PERIOD[period];
-  const labels = history.map((p) =>
-    new Date(p.as_of).toLocaleString("tr-TR", dateFormat),
-  );
-  const values = history.map((p) => p.value);
+  // Rebuilt only when the data, the period or the theme actually changes.
+  // `notMerge` on the element below makes every fresh object a full chart
+  // teardown, so an unmemoized literal cost a rebuild on every parent render.
+  const option = useMemo(() => {
+    const base = baseOption(theme, reduceMotion);
 
-  // Same defensive fix as the dashboard sparkline (see charts/sparkline.tsx):
-  // a metric that hasn't moved since the last reading has dataMin === dataMax,
-  // which can collapse a value axis to zero span. `scale: true` alone is
-  // usually robust to this, but computing an explicit padded range removes
-  // any doubt and keeps both charts' flat-series behavior identical.
-  const dataMin = Math.min(...values);
-  const dataMax = Math.max(...values);
-  const pad = dataMin === dataMax ? Math.abs(dataMin) * 0.05 || 1 : 0;
+    const dateFormat = DATE_FORMAT_BY_PERIOD[period];
+    const labels = history.map((p) =>
+      new Date(p.as_of).toLocaleString("tr-TR", dateFormat),
+    );
+    const values = history.map((p) => p.value);
 
-  const option = {
+    // Same defensive fix as the dashboard sparkline (see charts/sparkline.tsx):
+    // a metric that hasn't moved since the last reading has dataMin === dataMax,
+    // which can collapse a value axis to zero span. `scale: true` alone is
+    // usually robust to this, but computing an explicit padded range removes
+    // any doubt and keeps both charts' flat-series behavior identical.
+    const dataMin = Math.min(...values);
+    const dataMax = Math.max(...values);
+    const pad = dataMin === dataMax ? Math.abs(dataMin) * 0.05 || 1 : 0;
+
+    return {
     ...base,
     grid: { left: 8, right: 16, top: 16, bottom: 32, containLabel: true },
     xAxis: {
@@ -95,7 +101,8 @@ export function KpiDetailChart({ history, period, unit }: KpiDetailChartProps) {
         emphasis: { focus: "series" },
       },
     ],
-  };
+    };
+  }, [history, period, unit, theme, reduceMotion]);
 
   return (
     <ReactECharts

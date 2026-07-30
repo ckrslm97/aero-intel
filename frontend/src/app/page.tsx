@@ -1,7 +1,9 @@
 import { KpiCard } from "@/components/kpi-card";
 import { MarketTicker } from "@/components/market-ticker";
 import { MotionItem, MotionList, MotionRail } from "@/components/motion/motion-list";
-import { RevenueOverviewChart } from "@/components/revenue-overview-chart";
+// Lazily loaded, so echarts stays out of the landing page's initial bundle --
+// see the note in that file for why the boundary is a module of its own.
+import { RevenueOverviewChart } from "@/components/revenue-overview-chart-lazy";
 import { apiFetch } from "@/lib/api";
 import {
   MARKET_KEYS,

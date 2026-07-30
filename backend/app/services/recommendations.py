@@ -23,12 +23,14 @@ Shape of one recommendation::
 empty (the only sourceless-by-nature item is the calendar event, whose
 evidence is the calendar entry itself).
 """
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer, selectinload
 
+from app.core.db import run_with_own_session
 from app.core.logging import get_logger
 from app.core.tr_dates import format_date_range
 from app.models.article import Article, ArticleEnrichment
@@ -158,6 +160,33 @@ CATEGORY_LABELS_TR: dict[str, str] = {
 }
 
 
+# --- multi-select filter helpers -----------------------------------------
+#
+# `category`, `region` and `airline` arrive as lists (`?region=a&region=b`).
+# An empty list and `None` both mean "do not filter on this dimension" -- the
+# one mistake that must never happen here is an empty selection silently
+# filtering everything out.
+
+
+def _upper(values: list[str] | None) -> list[str]:
+    """Case-insensitive comparison set for the carrier codes."""
+    return [v.upper() for v in values] if values else []
+
+
+def _sole(values: list[str] | None) -> str | None:
+    """The one value a pre-filtered detector can honestly stamp on its items.
+
+    Detectors that apply a dimension in SQL but cannot derive it per item (a
+    campaign cluster spans whatever the query returned) used to echo the
+    single filter value back. With exactly one selection that is still true of
+    every row they saw; with several the bucket spans them all and no single
+    slug would be honest, so the item carries none -- and, as everywhere else
+    in this module, an item that does not carry a dimension does not survive a
+    filter on it.
+    """
+    return values[0] if values and len(values) == 1 else None
+
+
 def _region_label(slug: str | None) -> str:
     return REGION_LABELS_TR.get(slug or "", slug or "Genel")
 
@@ -183,7 +212,7 @@ def _article_evidence(article: Article, enrichment: ArticleEnrichment) -> dict:
 
 
 async def _competitor_promotions(
-    db: AsyncSession, *, days: int, region: str | None, airline: str | None
+    db: AsyncSession, *, days: int, region: list[str] | None, airline: list[str] | None
 ) -> list[dict]:
     """A rival stacking price/campaign announcements inside the window."""
     now = datetime.now(timezone.utc)
@@ -208,9 +237,9 @@ async def _competitor_promotions(
         .limit(MAX_SCAN_ARTICLES)
     )
     if region:
-        query = query.where(ArticleEnrichment.region == region)
+        query = query.where(ArticleEnrichment.region.in_(region))
     if airline:
-        query = query.where(func.upper(_airline_key_expr()) == airline.upper())
+        query = query.where(func.upper(_airline_key_expr()).in_(_upper(airline)))
 
     buckets: dict[str, dict] = {}
     for article, enrichment, code, name in (await db.execute(query)).all():
@@ -240,7 +269,7 @@ async def _competitor_promotions(
                 ),
                 "severity": "high" if count >= PROMO_HIGH_ARTICLES else "medium",
                 "category": PROMO_CATEGORY,
-                "region": region,
+                "region": _sole(region),
                 "airline_code": key,
                 "evidence": bucket["current"][:EVIDENCE_LIMIT],
                 "metric": {
@@ -254,7 +283,7 @@ async def _competitor_promotions(
 
 
 async def _regional_route_surge(
-    db: AsyncSession, *, days: int, region: str | None, airline: str | None
+    db: AsyncSession, *, days: int, region: list[str] | None, airline: list[str] | None
 ) -> list[dict]:
     """New-route announcements in a region clearly outpacing the window before."""
     now = datetime.now(timezone.utc)
@@ -275,14 +304,14 @@ async def _regional_route_surge(
         .limit(MAX_SCAN_ARTICLES)
     )
     if region:
-        query = query.where(ArticleEnrichment.region == region)
+        query = query.where(ArticleEnrichment.region.in_(region))
     if airline:
         query = (
             query.join(ArticleEntity, ArticleEntity.article_id == Article.id)
             .join(Entity, Entity.id == ArticleEntity.entity_id)
             .where(
                 Entity.entity_type == "airline",
-                func.upper(_airline_key_expr()) == airline.upper(),
+                func.upper(_airline_key_expr()).in_(_upper(airline)),
             )
         )
 
@@ -297,6 +326,7 @@ async def _regional_route_surge(
         else:
             bucket["previous"] += 1
 
+    sole_airline = _sole(airline)
     recommendations = []
     for region_slug, bucket in buckets.items():
         current = len(bucket["current"])
@@ -320,7 +350,7 @@ async def _regional_route_surge(
                 ),
                 "category": ROUTE_CATEGORY,
                 "region": region_slug,
-                "airline_code": airline.upper() if airline else None,
+                "airline_code": sole_airline.upper() if sole_airline else None,
                 "evidence": bucket["current"][:EVIDENCE_LIMIT],
                 "metric": {
                     "label": "Yeni hat duyurusu",
@@ -369,7 +399,7 @@ async def _windows_are_comparable(db: AsyncSession, days: int) -> bool:
 
 
 async def _airline_momentum_recs(
-    db: AsyncSession, *, days: int, region: str | None, airline: str | None
+    db: AsyncSession, *, days: int, region: list[str] | None, airline: list[str] | None
 ) -> list[dict]:
     """Carriers whose coverage volume moved sharply, straight off the existing
     insights aggregate (insights_service.airline_momentum)."""
@@ -390,7 +420,7 @@ async def _airline_momentum_recs(
         for m in movers
         if abs(m["delta"]) >= MOMENTUM_MIN_DELTA
         and max(m["current"], m["previous"]) >= MOMENTUM_MIN_MENTIONS
-        and (not airline or m["code"].upper() == airline.upper())
+        and (not airline or m["code"].upper() in _upper(airline))
     ][:MOMENTUM_MAX_RECS]
     if not selected:
         return []
@@ -464,7 +494,7 @@ async def _airline_momentum_recs(
 
 
 async def _negative_sentiment_clusters(
-    db: AsyncSession, *, days: int, region: str | None, airline: str | None
+    db: AsyncSession, *, days: int, region: list[str] | None, airline: list[str] | None
 ) -> list[dict]:
     """Categories where the window's coverage skews negative."""
     now = datetime.now(timezone.utc)
@@ -479,14 +509,14 @@ async def _negative_sentiment_clusters(
         .group_by(ArticleEnrichment.category, ArticleEnrichment.sentiment, is_current)
     )
     if region:
-        query = query.where(ArticleEnrichment.region == region)
+        query = query.where(ArticleEnrichment.region.in_(region))
     if airline:
         query = (
             query.join(ArticleEntity, ArticleEntity.article_id == Article.id)
             .join(Entity, Entity.id == ArticleEntity.entity_id)
             .where(
                 Entity.entity_type == "airline",
-                func.upper(_airline_key_expr()) == airline.upper(),
+                func.upper(_airline_key_expr()).in_(_upper(airline)),
             )
         )
 
@@ -531,14 +561,14 @@ async def _negative_sentiment_clusters(
         .limit(MAX_SCAN_ARTICLES)
     )
     if region:
-        evidence_query = evidence_query.where(ArticleEnrichment.region == region)
+        evidence_query = evidence_query.where(ArticleEnrichment.region.in_(region))
     if airline:
         evidence_query = (
             evidence_query.join(ArticleEntity, ArticleEntity.article_id == Article.id)
             .join(Entity, Entity.id == ArticleEntity.entity_id)
             .where(
                 Entity.entity_type == "airline",
-                func.upper(_airline_key_expr()) == airline.upper(),
+                func.upper(_airline_key_expr()).in_(_upper(airline)),
             )
         )
 
@@ -548,6 +578,8 @@ async def _negative_sentiment_clusters(
             _article_evidence(article, enrichment)
         )
 
+    sole_region = _sole(region)
+    sole_airline = _sole(airline)
     recommendations = []
     for category, bucket in hits.items():
         evidence = evidence_by_category.get(category, [])[:EVIDENCE_LIMIT]
@@ -575,8 +607,8 @@ async def _negative_sentiment_clusters(
                     else "medium"
                 ),
                 "category": category,
-                "region": region,
-                "airline_code": airline.upper() if airline else None,
+                "region": sole_region,
+                "airline_code": sole_airline.upper() if sole_airline else None,
                 "evidence": evidence,
                 "metric": {
                     "label": "Olumsuz haber oranı (%)",
@@ -589,12 +621,12 @@ async def _negative_sentiment_clusters(
 
 
 async def _tk_review_themes(
-    db: AsyncSession, *, days: int, region: str | None, airline: str | None
+    db: AsyncSession, *, days: int, region: list[str] | None, airline: list[str] | None
 ) -> list[dict]:
     """A theme rising in the curated TK passenger reviews."""
     if region:
         return []  # reviews carry no region dimension
-    if airline and airline.upper() != HOME_AIRLINE_CODE:
+    if airline and HOME_AIRLINE_CODE not in _upper(airline):
         return []
 
     window = days * TK_REVIEW_WINDOW_MULTIPLIER
@@ -676,7 +708,7 @@ async def _tk_review_themes(
 
 
 async def _upcoming_events(
-    db: AsyncSession, *, region: str | None, airline: str | None
+    db: AsyncSession, *, region: list[str] | None, airline: list[str] | None
 ) -> list[dict]:
     """Demand-moving calendar entries starting inside the planning horizon.
 
@@ -699,7 +731,7 @@ async def _upcoming_events(
         .limit(EVENT_MAX_RECS)
     )
     if region:
-        query = query.where(AviationEvent.region == region)
+        query = query.where(AviationEvent.region.in_(region))
 
     recommendations = []
     for event in (await db.execute(query)).scalars().all():
@@ -737,44 +769,64 @@ async def _upcoming_events(
 async def build_recommendations(
     db: AsyncSession,
     days: int = 7,
-    category: str | None = None,
-    region: str | None = None,
-    airline: str | None = None,
+    category: list[str] | None = None,
+    region: list[str] | None = None,
+    airline: list[str] | None = None,
 ) -> list[dict]:
     """Every pattern the data currently supports, most urgent first.
+
+    `category`, `region` and `airline` are multi-select: a list narrows to
+    "any of these", and an empty list (or `None`) does not narrow at all.
 
     Filters narrow, they never widen: an item survives a filter only when it
     actually carries that dimension. A momentum item has no category, so a
     category filter drops it -- claiming otherwise would attach the number to a
     focus it does not have.
     """
-    recommendations: list[dict] = []
-    recommendations += await _competitor_promotions(
-        db, days=days, region=region, airline=airline
+    # The six detectors are independent reads -- none of them sees another's
+    # rows -- so running them one after another only served to stack six round
+    # trips' latency on top of each other. They run concurrently now, each on
+    # its own session: `db` is a single connection and a single state machine
+    # and cannot be shared across gathered tasks (see `run_with_own_session`).
+    windowed = {"days": days, "region": region, "airline": airline}
+    (
+        promotions,
+        route_surges,
+        momentum,
+        negative_clusters,
+        review_themes,
+        events,
+    ) = await asyncio.gather(
+        run_with_own_session(_competitor_promotions, db, **windowed),
+        run_with_own_session(_regional_route_surge, db, **windowed),
+        run_with_own_session(_airline_momentum_recs, db, **windowed),
+        run_with_own_session(_negative_sentiment_clusters, db, **windowed),
+        run_with_own_session(_tk_review_themes, db, **windowed),
+        run_with_own_session(_upcoming_events, db, region=region, airline=airline),
     )
-    recommendations += await _regional_route_surge(
-        db, days=days, region=region, airline=airline
-    )
-    recommendations += await _airline_momentum_recs(
-        db, days=days, region=region, airline=airline
-    )
-    recommendations += await _negative_sentiment_clusters(
-        db, days=days, region=region, airline=airline
-    )
-    recommendations += await _tk_review_themes(
-        db, days=days, region=region, airline=airline
-    )
-    recommendations += await _upcoming_events(db, region=region, airline=airline)
+
+    # Concatenated in the original order: the final sort is not a total order
+    # (equal severity, equal evidence count and equal title would tie), so the
+    # order the detectors contribute in stays part of the observable output.
+    recommendations: list[dict] = [
+        *promotions,
+        *route_surges,
+        *momentum,
+        *negative_clusters,
+        *review_themes,
+        *events,
+    ]
 
     if category:
-        recommendations = [r for r in recommendations if r["category"] == category]
+        recommendations = [r for r in recommendations if r["category"] in category]
     if region:
-        recommendations = [r for r in recommendations if r["region"] == region]
+        recommendations = [r for r in recommendations if r["region"] in region]
     if airline:
+        wanted = _upper(airline)
         recommendations = [
             r
             for r in recommendations
-            if r["airline_code"] and r["airline_code"].upper() == airline.upper()
+            if r["airline_code"] and r["airline_code"].upper() in wanted
         ]
 
     # The invariant of this module, enforced once at the exit rather than

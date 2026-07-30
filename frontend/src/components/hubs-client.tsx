@@ -2,6 +2,7 @@
 
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { ChevronDown, Plane } from "lucide-react";
+import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
 import { AirlineLogo } from "@/components/airline-logo";
@@ -10,9 +11,14 @@ import { HubMap } from "@/components/hub-map";
 import { MotionItem, MotionList } from "@/components/motion/motion-list";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiFetch } from "@/lib/api";
-import { collapseSection, fadeUpItem, reduceVariants } from "@/lib/motion";
+import {
+  collapseSection,
+  fadeUpItem,
+  reduceVariants,
+  useMeasuredHeight,
+} from "@/lib/motion";
 import { worldRegions } from "@/lib/nav";
-import { CATEGORY_BY_SLUG } from "@/lib/taxonomy";
+import { CATEGORY_BY_SLUG, categoryVar } from "@/lib/taxonomy";
 import type {
   ArticleListOut,
   CountryOut,
@@ -48,6 +54,9 @@ export function HubsClient() {
   const [days, setDays] = useState<number>(DAY_OPTIONS[1]);
   const [selected, setSelected] = useState<string | null>("IST");
   const [country, setCountry] = useState<string>("");
+  // "Konu dağılımı" filters this hub's own already-scoped story list rather
+  // than navigating away -- the panel's counts and the list stay one view.
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
 
   const [overview, setOverview] = useState<HubOverviewOut | null>(null);
   const [detail, setDetail] = useState<HubDetailOut | null>(null);
@@ -93,6 +102,7 @@ export function HubsClient() {
     const params = new URLSearchParams({ limit: "12" });
     if (selected) params.set("airport", selected);
     if (country) params.set("country", country);
+    if (selectedCategory) params.set("category", selectedCategory);
 
     const detailRequest = selected
       ? apiFetch<HubDetailOut>(`/hubs/${selected}?days=${days}`, {
@@ -122,7 +132,15 @@ export function HubsClient() {
       cancelled = true;
       controller.abort();
     };
-  }, [selected, country, days]);
+  }, [selected, country, days, selectedCategory]);
+
+  /** Hub selection resets the category: the chips are that hub's own topic
+   * mix, so carrying one into a newly-picked hub would silently over-filter
+   * (or empty) its list. */
+  const selectHub = (code: string | null) => {
+    setSelected(code);
+    setSelectedCategory(null);
+  };
 
   const countriesByRegion = useMemo(() => {
     const groups = new Map<string, CountryOut[]>();
@@ -210,7 +228,7 @@ export function HubsClient() {
             hubs={overview.hubs}
             routes={overview.routes}
             selected={selected}
-            onSelect={setSelected}
+            onSelect={selectHub}
           />
         </div>
       ) : (
@@ -222,7 +240,7 @@ export function HubsClient() {
           <button
             key={hub.code}
             type="button"
-            onClick={() => setSelected(hub.code === selected ? null : hub.code)}
+            onClick={() => selectHub(hub.code === selected ? null : hub.code)}
             className={cn(
               chip(selected === hub.code),
               "flex items-center gap-1.5",
@@ -239,7 +257,16 @@ export function HubsClient() {
         {/* Keyed on the hub code so switching hubs cross-fades the panel
             instead of silently swapping its text. */}
         <AnimatePresence mode="wait" initial={false}>
-          {detail && <HubDetailPanel key={detail.code} detail={detail} />}
+          {detail && (
+            <HubDetailPanel
+              key={detail.code}
+              detail={detail}
+              selectedCategory={selectedCategory}
+              onToggleCategory={(slug) =>
+                setSelectedCategory((prev) => (prev === slug ? null : slug))
+              }
+            />
+          )}
         </AnimatePresence>
 
         <section className="flex flex-col gap-3">
@@ -276,7 +303,15 @@ export function HubsClient() {
 /** The hub sidebar. Everything long is capped and expandable: the panel used
  * to print a full paragraph plus every carrier and every category, which made
  * a 20rem column scroll for hubs like IST. */
-function HubDetailPanel({ detail }: { detail: HubDetailOut }) {
+function HubDetailPanel({
+  detail,
+  selectedCategory,
+  onToggleCategory,
+}: {
+  detail: HubDetailOut;
+  selectedCategory: string | null;
+  onToggleCategory: (slug: string) => void;
+}) {
   const reduceMotion = useReducedMotion();
   const [noteOpen, setNoteOpen] = useState(false);
   const [carriersOpen, setCarriersOpen] = useState(false);
@@ -341,15 +376,18 @@ function HubDetailPanel({ detail }: { detail: HubDetailOut }) {
       {detail.carriers.length > 0 && (
         <div className="flex flex-col gap-2">
           <PanelLabel>Üssü burada</PanelLabel>
+          {/* Straight into Gazete, pre-filtered to that carrier -- the same
+              deep-link mechanism knowhow-client.tsx uses for ?category=. */}
           <div className="flex flex-wrap gap-1.5">
             {detail.carriers.map((code) => (
-              <span
+              <Link
                 key={code}
-                className="flex items-center gap-1.5 rounded-full border border-border px-2 py-1 text-xs"
+                href={`/newspaper?airline=${code}`}
+                className="flex items-center gap-1.5 rounded-full border border-border px-2 py-1 text-xs transition-colors hover:border-primary/50 hover:text-primary"
               >
                 <AirlineLogo code={code} className="size-3.5" />
                 {code}
-              </span>
+              </Link>
             ))}
           </div>
         </div>
@@ -389,13 +427,23 @@ function HubDetailPanel({ detail }: { detail: HubDetailOut }) {
           <PanelLabel>Konu dağılımı</PanelLabel>
           <div className="flex flex-wrap gap-1.5">
             {previewCategories.map((entry) => (
-              <CategoryChip key={entry.slug} entry={entry} />
+              <CategoryChip
+                key={entry.slug}
+                entry={entry}
+                active={selectedCategory === entry.slug}
+                onToggle={() => onToggleCategory(entry.slug)}
+              />
             ))}
           </div>
           <Expandable open={categoriesOpen} reduceMotion={reduceMotion}>
             <div className="flex flex-wrap gap-1.5 pt-1.5">
               {restCategories.map((entry) => (
-                <CategoryChip key={entry.slug} entry={entry} />
+                <CategoryChip
+                key={entry.slug}
+                entry={entry}
+                active={selectedCategory === entry.slug}
+                onToggle={() => onToggleCategory(entry.slug)}
+              />
               ))}
             </div>
           </Expandable>
@@ -424,25 +472,66 @@ function CarrierRow({
   carrier: HubDetailOut["carriers_seen"][number];
 }) {
   return (
-    <div className="flex items-center gap-2 text-xs">
+    <Link
+      href={`/newspaper?airline=${carrier.code}`}
+      className="-mx-1 flex items-center gap-2 rounded-md px-1 text-xs transition-colors hover:bg-accent/40 hover:text-primary"
+    >
       <AirlineLogo code={carrier.code} name={carrier.name} className="size-3.5" />
       <span className="flex-1 truncate">{carrier.name}</span>
       <span className="font-mono tabular-nums text-muted-foreground">
         {carrier.article_count}
       </span>
-    </div>
+    </Link>
   );
 }
 
-function CategoryChip({ entry }: { entry: HubDetailOut["categories"][number] }) {
+/** A topic filter, not a label: clicking narrows this hub's story list, and
+ * clicking the active one clears it. The selected chip burns in its own
+ * category hue -- the same lit-chip idiom as Gazete/Öneriler, inline because
+ * the slug -> token transform is invisible to Tailwind's scanner. */
+function CategoryChip({
+  entry,
+  active,
+  onToggle,
+}: {
+  entry: HubDetailOut["categories"][number];
+  active: boolean;
+  onToggle: () => void;
+}) {
+  const hue = categoryVar(entry.slug);
   return (
-    <span className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground">
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-pressed={active}
+      style={
+        active
+          ? ({
+              "--glow-color": hue,
+              color: hue,
+              backgroundColor: `color-mix(in srgb, ${hue} 14%, transparent)`,
+            } as React.CSSProperties)
+          : undefined
+      }
+      className={cn(
+        "rounded-full px-2 py-0.5 text-[11px] transition-colors",
+        active
+          ? "font-medium ring-1 ring-current/40 dark:glow-soft"
+          : "border border-border text-muted-foreground hover:bg-accent",
+      )}
+    >
       {CATEGORY_BY_SLUG[entry.slug]?.label ?? entry.slug} · {entry.count}
-    </span>
+    </button>
   );
 }
 
-/** Animated-height reveal for the tail of a capped list. */
+/** Animated-height reveal for the tail of a capped list.
+ *
+ * The wrapper animates to a measured pixel height rather than to `"auto"`,
+ * which cannot be composited and re-lays-out the list on every frame. The
+ * measurement is taken on the inner div, which the `overflow-hidden` wrapper
+ * clips without constraining.
+ */
 function Expandable({
   open,
   reduceMotion,
@@ -452,17 +541,20 @@ function Expandable({
   reduceMotion: boolean | null;
   children: React.ReactNode;
 }) {
+  const [contentRef, measuredHeight] = useMeasuredHeight<HTMLDivElement>();
+  const variants = collapseSection(measuredHeight);
+
   return (
     <AnimatePresence initial={false}>
       {open && (
         <motion.div
-          variants={reduceMotion ? reduceVariants(collapseSection) : collapseSection}
+          variants={reduceMotion ? reduceVariants(variants) : variants}
           initial="hidden"
           animate="show"
           exit="exit"
           className="overflow-hidden"
         >
-          {children}
+          <div ref={contentRef}>{children}</div>
         </motion.div>
       )}
     </AnimatePresence>

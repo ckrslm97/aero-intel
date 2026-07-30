@@ -5,7 +5,10 @@ import { ChevronDown, CircleAlert, ExternalLink, Info, TriangleAlert } from "luc
 import { useEffect, useState } from "react";
 
 import { AirlineLogo } from "@/components/airline-logo";
-import { CategoryChipRow } from "@/components/filters/category-chip-row";
+// Only the ordering helper: this page renders its own multi-select category
+// row (the shared component is single-select by construction, and Gazete's
+// sliding pill depends on that).
+import { orderCategories } from "@/components/filters/category-chip-row";
 import { CountUp } from "@/components/motion/count-up";
 import { MotionItem, MotionList } from "@/components/motion/motion-list";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -77,6 +80,11 @@ const SEVERITY_META = {
 // The windows the backend compares against the window before them.
 const DAY_OPTIONS = [7, 14, 30] as const;
 
+// Gelir Yönetimi is the portal's focus category, so it leads the row here the
+// same way it does everywhere else.
+const PINNED_CATEGORY = "revenue_management";
+const ORDERED_CATEGORIES = orderCategories(PINNED_CATEGORY);
+
 const REGION_NAME: Record<string, string> = Object.fromEntries(
   worldRegions.map((r) => [r.slug, r.name]),
 );
@@ -103,13 +111,20 @@ function formatEvidenceDate(iso: string | null): string | null {
   return value.toLocaleDateString("tr-TR", { day: "numeric", month: "short", year: "numeric" });
 }
 
+/** Add or remove one value from a multi-select filter. An empty array is the
+ * "no filter" state -- which is also what "hepsini seç" means in practice, so
+ * "Tümü" simply clears rather than listing every slug explicitly. */
+function toggleValue(list: string[], value: string): string[] {
+  return list.includes(value) ? list.filter((v) => v !== value) : [...list, value];
+}
+
 export function RecommendationsClient() {
   const [days, setDays] = useState<number>(DAY_OPTIONS[0]);
   // Gelir Yönetimi is the portal's focus category, so it is both pinned first
   // and pre-selected; "Tümü" still clears back to every category.
-  const [category, setCategory] = useState<string | null>("revenue_management");
-  const [region, setRegion] = useState<string | null>(null);
-  const [airline, setAirline] = useState<string | null>(null);
+  const [category, setCategory] = useState<string[]>([PINNED_CATEGORY]);
+  const [region, setRegion] = useState<string[]>([]);
+  const [airline, setAirline] = useState<string[]>([]);
 
   const [items, setItems] = useState<Recommendation[] | null>(null);
   const [loading, setLoading] = useState(true);
@@ -119,9 +134,12 @@ export function RecommendationsClient() {
     let cancelled = false;
     const controller = new AbortController();
     const params = new URLSearchParams({ days: String(days) });
-    if (category) params.set("category", category);
-    if (region) params.set("region", region);
-    if (airline) params.set("airline", airline);
+    // Repeated keys, one per selected value -- FastAPI parses `?region=a&region=b`
+    // straight into a list. `days` stays single: a comparison window is not a
+    // set. An empty array appends nothing, which is exactly "no filter".
+    category.forEach((c) => params.append("category", c));
+    region.forEach((r) => params.append("region", r));
+    airline.forEach((a) => params.append("airline", a));
 
     // eslint-disable-next-line react-hooks/set-state-in-effect -- the fetch is driven by the filter change; the loading flag must flip with it
     setLoading(true);
@@ -173,26 +191,43 @@ export function RecommendationsClient() {
           ))}
         </FilterRow>
 
+        {/* Kategori/Bölge/Havayolu are all multi-select: the backend now takes
+            repeated query params, so "Avrupa + Orta Doğu" is one question
+            rather than two page loads. "Tümü" is the clear-all. */}
         <FilterRow label="Kategori">
-          <CategoryChipRow
-            value={category}
-            onChange={setCategory}
-            pinned="revenue_management"
-            includeAll
-            focusStyling
-            variant="plain"
-          />
+          <button
+            type="button"
+            onClick={() => setCategory([])}
+            className={chip(category.length === 0)}
+          >
+            Tümü
+          </button>
+          {ORDERED_CATEGORIES.map((c) => (
+            <button
+              key={c.slug}
+              type="button"
+              onClick={() => setCategory((prev) => toggleValue(prev, c.slug))}
+              className={chip(category.includes(c.slug))}
+            >
+              {c.label}
+            </button>
+          ))}
         </FilterRow>
 
         <FilterRow label="Bölge">
-          <button onClick={() => setRegion(null)} className={chip(!region)}>
+          <button
+            type="button"
+            onClick={() => setRegion([])}
+            className={chip(region.length === 0)}
+          >
             Tümü
           </button>
           {worldRegions.map((r) => (
             <button
               key={r.slug}
-              onClick={() => setRegion(region === r.slug ? null : r.slug)}
-              className={chip(region === r.slug)}
+              type="button"
+              onClick={() => setRegion((prev) => toggleValue(prev, r.slug))}
+              className={chip(region.includes(r.slug))}
             >
               {r.name}
             </button>
@@ -200,20 +235,28 @@ export function RecommendationsClient() {
         </FilterRow>
 
         <FilterRow label="Havayolu">
-          <button onClick={() => setAirline(null)} className={chip(!airline)}>
+          <button
+            type="button"
+            onClick={() => setAirline([])}
+            className={chip(airline.length === 0)}
+          >
             Tümü
           </button>
           {airlineTabs.map((a) => (
             <button
               key={a.code}
+              type="button"
               title={a.name}
-              onClick={() => setAirline(airline === a.code ? null : a.code)}
-              className={cn(chip(airline === a.code), "flex items-center gap-1 tabular-nums")}
+              onClick={() => setAirline((prev) => toggleValue(prev, a.code))}
+              className={cn(
+                chip(airline.includes(a.code)),
+                "flex items-center gap-1 tabular-nums",
+              )}
             >
               <span
                 className={cn(
                   "flex size-4 items-center justify-center overflow-hidden rounded-[3px]",
-                  airline === a.code && "bg-white/85",
+                  airline.includes(a.code) && "bg-white/85",
                 )}
               >
                 <AirlineLogo code={a.code} name={a.name} className="size-4" />
@@ -269,13 +312,15 @@ export function RecommendationsClient() {
   );
 }
 
+/** Label above its chips, not beside them: the rows carry up to eleven chips
+ * each, and a fixed-width inline label pushed them into one cramped line. */
 function FilterRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex flex-wrap items-center gap-1.5">
-      <span className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+    <div className="flex flex-col gap-1.5">
+      <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
         {label}
       </span>
-      {children}
+      <div className="flex flex-wrap gap-1.5">{children}</div>
     </div>
   );
 }

@@ -12,11 +12,12 @@ router = APIRouter(prefix="/recommendations", tags=["recommendations"])
 @router.get("")
 async def list_recommendations(
     days: int = Query(7, ge=1, le=90, description="Comparison window, in days"),
-    category: str | None = None,
-    region: str | None = None,
-    airline: str | None = Query(
-        None, max_length=6, description="IATA airline code, e.g. EK"
-    ),
+    # Multi-select: `?region=europe&region=asia` narrows to either. A missing
+    # or empty list means "don't filter on this dimension at all". `days` stays
+    # single -- a comparison window is not a set.
+    category: list[str] | None = Query(None),
+    region: list[str] | None = Query(None),
+    airline: list[str] | None = Query(None, description="IATA airline codes, e.g. EK"),
     response: Response = None,  # type: ignore[assignment]  -- FastAPI injects it
     db: AsyncSession = Depends(get_db),
 ) -> dict:

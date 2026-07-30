@@ -1,4 +1,7 @@
+"use client";
+
 import type { Transition, Variants } from "framer-motion";
+import { useCallback, useRef, useState } from "react";
 
 /** The app's shared animation vocabulary.
  *
@@ -57,12 +60,69 @@ export const drawerPanel: Variants = {
   exit: { x: "100%", opacity: 0.6, transition: { duration: 0.2 } },
 };
 
-/** Collapsible section (hub panel "+N daha" expanders). */
-export const collapseSection: Variants = {
-  hidden: { height: 0, opacity: 0 },
-  show: { height: "auto", opacity: 1, transition: { duration: 0.24 } },
-  exit: { height: 0, opacity: 0, transition: { duration: 0.18 } },
-};
+/** Measure an element's natural height, for collapse animations.
+ *
+ * Returns `[ref, height]`. Attach the ref to the *content* inside the
+ * `overflow-hidden` wrapper whose height is animated -- the content has to be
+ * height-unconstrained for the measurement to mean anything (the wrapper
+ * clips it, it does not squash it).
+ *
+ * Why this exists: `height: "auto"` is not an animatable value the compositor
+ * can handle. Framer resolves it by laying the element out twice per frame,
+ * so a 240ms expand is ~15 forced synchronous layouts of the subtree -- the
+ * one animation in this app that could actually be felt. Animating to a pixel
+ * number instead is a plain interpolation.
+ *
+ * A ResizeObserver rather than a single measurement on mount: the wrapper ends
+ * up pinned to this exact number, so anything that reflows the content
+ * afterwards -- a viewport resize rewrapping a line, a late webfont, the
+ * content itself being swapped -- has to move the number with it, or the
+ * wrapper clips what it can no longer fit. That is the one way a measured
+ * height can be worse than "auto", and the observer closes it.
+ */
+export function useMeasuredHeight<T extends HTMLElement>(): [
+  (node: T | null) => void,
+  number,
+] {
+  const [height, setHeight] = useState(0);
+  const observerRef = useRef<ResizeObserver | null>(null);
+
+  // A callback ref rather than a ref object + effect: the measured content is
+  // typically mounted *later* than the component holding the hook (a collapse
+  // renders nothing while closed), and a `useLayoutEffect` with a stable
+  // dependency list would have run once against a null ref and never again.
+  // A callback ref fires on every attach and detach, still during commit and
+  // so still before paint.
+  const ref = useCallback((node: T | null) => {
+    observerRef.current?.disconnect();
+    observerRef.current = null;
+    if (!node) return;
+    const measure = () => setHeight(node.offsetHeight);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    observerRef.current = observer;
+  }, []);
+
+  return [ref, height];
+}
+
+/** Collapsible section (hub panel "+N daha" expanders).
+ *
+ * Takes the open height in pixels -- see `useMeasuredHeight` for why this is a
+ * number and not `"auto"`. Under reduced motion `reduceVariants` drops the
+ * `height` key entirely, so the section is simply laid out at its natural
+ * height with no animation at all; the measurement is then unused, exactly as
+ * before this became a factory.
+ */
+export function collapseSection(height: number): Variants {
+  return {
+    hidden: { height: 0, opacity: 0 },
+    show: { height, opacity: 1, transition: { duration: 0.24 } },
+    exit: { height: 0, opacity: 0, transition: { duration: 0.18 } },
+  };
+}
 
 /* --- "Approach lights" additions ---------------------------------------
  * Entrance/interaction only. Nothing below loops: every variant settles on a
