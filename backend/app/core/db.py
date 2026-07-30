@@ -11,10 +11,16 @@ Runs in two shapes:
 """
 import os
 from collections.abc import AsyncGenerator
+from typing import Any, Awaitable, Callable
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.pool import NullPool
 
@@ -116,3 +122,33 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
         except Exception:
             await session.rollback()
             raise
+
+
+async def run_with_own_session(
+    coro_fn: Callable[..., Awaitable[Any]], db: AsyncSession, /, **kwargs: Any
+) -> Any:
+    """Run one read on a fresh session so several can run under `asyncio.gather`.
+
+    An `AsyncSession` is explicitly *not* safe for concurrent use by several
+    tasks: it owns one connection and one identity-map state machine, so
+    gathering coroutines that share a session corrupts it or raises -- it is a
+    correctness bug, not a style one. Each branch therefore gets its own
+    session. The connections still come from the same pool, so this adds no
+    database load; it only stops independent reads from queueing behind a
+    single connection.
+
+    The new session is bound to the *caller's* engine rather than to the
+    module-level `AsyncSessionLocal`. In the running app the two are the same
+    object, but the test suite binds its session to a separate database, and a
+    helper that quietly read from a different database than its caller would
+    turn a green test run into a lie.
+    """
+    bind = getattr(db, "bind", None)
+    if not isinstance(bind, AsyncEngine):
+        # Session bound to a Connection rather than an Engine (or unbound):
+        # fall back to the app's own engine.
+        bind = engine
+    async with AsyncSession(
+        bind=bind, expire_on_commit=False, autoflush=False
+    ) as session:
+        return await coro_fn(db=session, **kwargs)

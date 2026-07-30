@@ -1,29 +1,89 @@
 "use client";
 
-import { CalendarDays, ExternalLink, Gauge, MapPin, Users } from "lucide-react";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import {
+  CalendarDays,
+  ChevronLeft,
+  ChevronRight,
+  ExternalLink,
+  Gauge,
+  MapPin,
+  Users,
+} from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiFetch } from "@/lib/api";
+import { useMeasuredHeight } from "@/lib/motion";
 import { EVENT_REGIONS } from "@/lib/taxonomy";
 import type { EventOut } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
+// Declared in --chart-1..5 order: this record drives both the type filter row
+// and its legend dots, so its order is the order the reader meets the hues in.
 const TYPE_LABELS: Record<EventOut["event_type"], string> = {
   airshow: "Fuar",
-  conference: "Konferans",
   sports: "Spor",
   holiday: "Bayram/Tatil",
+  conference: "Konferans",
   festival: "Festival",
 };
 
-// Distinct tint per type -- literal class strings so Tailwind's scanner sees them.
-const TYPE_CLASSES: Record<EventOut["event_type"], string> = {
-  airshow: "bg-category-fleet/10 text-category-fleet",
-  conference: "bg-category-regulatory/10 text-category-regulatory",
-  sports: "bg-category-network/10 text-category-network",
-  holiday: "bg-category-revenue-management/10 text-category-revenue-management",
-  festival: "bg-category-events/10 text-category-events",
+// Five event types, five chart tokens -- the app's validated dataviz hues,
+// used here as *content* colour: every pill, bar and dot on the grid is the
+// event's own type. Literal class strings so Tailwind's scanner sees them.
+const TYPE_PILL: Record<EventOut["event_type"], string> = {
+  airshow: "bg-chart-1/15 text-chart-1",
+  sports: "bg-chart-2/15 text-chart-2",
+  holiday: "bg-chart-3/15 text-chart-3",
+  conference: "bg-chart-4/15 text-chart-4",
+  festival: "bg-chart-5/15 text-chart-5",
+};
+
+/** Continuation days get a thin bar rather than a repeated pill: the name is
+ * already stated on the start day, the bar just carries the run forward. */
+const TYPE_BAR: Record<EventOut["event_type"], string> = {
+  airshow: "bg-chart-1/60",
+  sports: "bg-chart-2/60",
+  holiday: "bg-chart-3/60",
+  conference: "bg-chart-4/60",
+  festival: "bg-chart-5/60",
+};
+
+const TYPE_DOT: Record<EventOut["event_type"], string> = {
+  airshow: "bg-chart-1",
+  sports: "bg-chart-2",
+  holiday: "bg-chart-3",
+  conference: "bg-chart-4",
+  festival: "bg-chart-5",
+};
+
+const TYPE_GLOW: Record<EventOut["event_type"], string> = {
+  airshow: "var(--chart-1)",
+  sports: "var(--chart-2)",
+  holiday: "var(--chart-3)",
+  conference: "var(--chart-4)",
+  festival: "var(--chart-5)",
+};
+
+/** Nine regions on nine of the eleven --category-* tokens. `general` is the
+ * neutral hue (no identity) and `sustainability` would read as a second green
+ * next to `network`, so both sit this one out.
+ *
+ * Region colour is *chrome*: filter chips, the month label's glow, the region
+ * chip and the selected day's ring. It is never painted onto an individual
+ * event -- with a region filter active every visible event already belongs to
+ * it, so a per-event region mark would say nothing. */
+const REGION_GLOW: Record<string, string> = {
+  europe: "var(--category-regulatory)",
+  "middle-east": "var(--category-revenue-management)",
+  africa: "var(--category-airport)",
+  "north-america": "var(--category-fleet)",
+  "south-america": "var(--category-network)",
+  "central-america": "var(--category-events)",
+  asia: "var(--category-finance)",
+  "southeast-asia": "var(--category-labor)",
+  oceania: "var(--category-safety)",
 };
 
 // Impact rides on the status palette, not on the type tints above: it is a
@@ -37,10 +97,26 @@ const IMPACT_META: Record<EventOut["impact_level"], { label: string; className: 
 
 const ATTENDANCE_FORMAT = new Intl.NumberFormat("tr-TR");
 
-function monthKey(iso: string): string {
-  return iso.slice(0, 7); // YYYY-MM
+/** Turkish weeks start on Monday. */
+const WEEKDAYS = ["Pzt", "Sal", "Çar", "Per", "Cum", "Cmt", "Paz"];
+
+/** The seeded calendar covers the next 12 months; the nav refuses to walk off
+ * either end of that rather than showing empty grids. */
+const MONTH_HORIZON = 12;
+/** Safety rail on the day-by-day walk: a malformed row (ends before starts, or
+ * an ends decades out) must not spin the loop. Longer than any real entry. */
+const MAX_EVENT_DAYS = 62;
+/** Events a desktop cell shows before collapsing the rest into "+N daha". */
+const DESKTOP_EVENT_SLOTS = 3;
+/** Dots a phone-width cell shows before collapsing into "+N". */
+const MOBILE_DOT_SLOTS = 4;
+
+function toKey(y: number, m: number, d: number): string {
+  return `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
 }
 
+/** "2026-08" -> "Ağustos 2026". Anchored at midday UTC so no reader's timezone
+ * can shift it onto the previous month. */
 function monthLabel(iso: string): string {
   return new Date(iso + "-01T12:00:00Z").toLocaleDateString("tr-TR", {
     month: "long",
@@ -48,19 +124,45 @@ function monthLabel(iso: string): string {
   });
 }
 
+/** Months since year 0, so cursor arithmetic and the horizon bounds are one
+ * integer comparison instead of two. */
+function monthIndex(y: number, m: number): number {
+  return y * 12 + m;
+}
+
 export function EventsCalendar() {
+  const reduceMotion = useReducedMotion();
+
   const [events, setEvents] = useState<EventOut[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [regionSlug, setRegionSlug] = useState<string | null>(null);
   const [typeSlug, setTypeSlug] = useState<EventOut["event_type"] | null>(null);
+  const [selectedDay, setSelectedDay] = useState<string | null>(null);
+
+  // Read once per mount: `todayKey` has to be stable across renders, and the
+  // page is not open across a midnight boundary in any meaningful sense.
+  const [today] = useState(() => new Date());
+  const todayKey = toKey(today.getFullYear(), today.getMonth(), today.getDate());
+  const firstIndex = monthIndex(today.getFullYear(), today.getMonth());
+
+  const [cursor, setCursor] = useState(() => ({
+    y: today.getFullYear(),
+    m: today.getMonth(),
+  }));
+  const cursorIndex = monthIndex(cursor.y, cursor.m);
 
   useEffect(() => {
     let cancelled = false;
-    // ~30 curated events: fetch once (from today onward), filter client-side.
-    const today = new Date().toISOString().slice(0, 10);
-    apiFetch<EventOut[]>(`/events?date_from=${today}`)
+    // From the first of the *viewed* month, not from today: the endpoint
+    // filters on `ends >= date_from`, so an event already in progress (or one
+    // that started in the previous month and runs into this one) still comes
+    // back and still draws its continuation bars.
+    const dateFrom = `${cursor.y}-${String(cursor.m + 1).padStart(2, "0")}-01`;
+    apiFetch<EventOut[]>(`/events?date_from=${dateFrom}`)
       .then((data) => {
-        if (!cancelled) setEvents(data);
+        if (cancelled) return;
+        setEvents(data);
+        setError(null);
       })
       .catch(() => {
         if (!cancelled) setError("Etkinlikler yüklenemedi. Sunucu çalışıyor mu?");
@@ -68,7 +170,7 @@ export function EventsCalendar() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [cursor]);
 
   const filtered = useMemo(
     () =>
@@ -79,19 +181,74 @@ export function EventsCalendar() {
     [events, regionSlug, typeSlug],
   );
 
-  const byMonth = useMemo(() => {
-    const groups = new Map<string, EventOut[]>();
+  /** "YYYY-MM-DD" -> the events touching that day. Multi-day entries are walked
+   * out day by day so a five-day fair paints five cells, not one. */
+  const dayIndex = useMemo(() => {
+    const index = new Map<string, { event: EventOut; isStart: boolean }[]>();
     for (const event of filtered) {
-      const key = monthKey(event.starts);
-      groups.set(key, [...(groups.get(key) ?? []), event]);
+      const start = new Date(`${event.starts}T12:00:00Z`);
+      const end = new Date(`${event.ends}T12:00:00Z`);
+      if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) continue;
+      const walker = new Date(start);
+      for (let guard = 0; guard < MAX_EVENT_DAYS; guard += 1) {
+        const key = toKey(
+          walker.getUTCFullYear(),
+          walker.getUTCMonth(),
+          walker.getUTCDate(),
+        );
+        const entry = { event, isStart: key === event.starts };
+        const bucket = index.get(key);
+        if (bucket) bucket.push(entry);
+        else index.set(key, [entry]);
+        if (walker >= end) break;
+        walker.setUTCDate(walker.getUTCDate() + 1);
+      }
     }
-    return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b));
+    return index;
   }, [filtered]);
 
+  /** Every cell the month needs, including the adjacent-month days that fill
+   * the first and last weeks. Row count is variable: a 31-day month starting on
+   * a Sunday needs six rows, February starting on a Monday needs four. */
+  const cells = useMemo(() => {
+    const offset = (new Date(cursor.y, cursor.m, 1).getDay() + 6) % 7;
+    const daysInMonth = new Date(cursor.y, cursor.m + 1, 0).getDate();
+    const rows = Math.ceil((offset + daysInMonth) / 7);
+    return Array.from({ length: rows * 7 }, (_, i) => {
+      const date = new Date(cursor.y, cursor.m, i - offset + 1);
+      return {
+        key: toKey(date.getFullYear(), date.getMonth(), date.getDate()),
+        day: date.getDate(),
+        inMonth: date.getMonth() === cursor.m && date.getFullYear() === cursor.y,
+      };
+    });
+  }, [cursor]);
+
+  const step = (delta: number) =>
+    setCursor((prev) => {
+      const next = monthIndex(prev.y, prev.m) + delta;
+      return { y: Math.floor(next / 12), m: ((next % 12) + 12) % 12 };
+    });
+
+  const goToday = () => {
+    setCursor({ y: today.getFullYear(), m: today.getMonth() });
+    setSelectedDay(todayKey);
+  };
+
+  const regionName = regionSlug
+    ? (EVENT_REGIONS.find((r) => r.slug === regionSlug)?.name ?? regionSlug)
+    : null;
+  const activeRegionGlow = regionSlug ? REGION_GLOW[regionSlug] : null;
+
   return (
-    <div className="flex flex-col gap-6">
+    // One override point drives every piece of region-coloured chrome below:
+    // the selection ring, the month label's glow and the region chip.
+    <div
+      className="flex flex-col gap-6"
+      style={{ "--glow-color": activeRegionGlow ?? "var(--primary)" } as React.CSSProperties}
+    >
       <div className="flex flex-col gap-1">
-        <h1 className="text-2xl font-semibold tracking-tight">Etkinlik Takvimi</h1>
+        <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">Etkinlik Takvimi</h1>
         <p className="text-sm text-muted-foreground">
           Önümüzdeki 12 ayın doğrulanmış havacılık fuarları, konferansları ve talep
           etkileyen tatil/spor dönemleri. Tarihler organizatör kaynaklarından; hilale
@@ -103,61 +260,37 @@ export function EventsCalendar() {
         <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
           Bölge
         </span>
-        <button
-          onClick={() => setRegionSlug(null)}
-          className={cn(
-            "rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
-            !regionSlug
-              ? "bg-primary text-primary-foreground"
-              : "border border-border text-muted-foreground hover:bg-accent",
-          )}
-        >
-          Tümü
-        </button>
+        <FilterChip label="Tümü" active={!regionSlug} onClick={() => setRegionSlug(null)} />
         {EVENT_REGIONS.map((r) => (
-          <button
+          <FilterChip
             key={r.slug}
+            label={r.name}
+            active={regionSlug === r.slug}
+            // Single-select on purpose: exactly one region's colour owns the
+            // heading, and two would have nothing to arbitrate between.
             onClick={() => setRegionSlug(regionSlug === r.slug ? null : r.slug)}
-            className={cn(
-              "rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
-              regionSlug === r.slug
-                ? "bg-primary text-primary-foreground"
-                : "border border-border text-muted-foreground hover:bg-accent",
-            )}
-          >
-            {r.name}
-          </button>
+            glow={REGION_GLOW[r.slug]}
+            dotColor={REGION_GLOW[r.slug]}
+          />
         ))}
       </div>
 
+      {/* Doubles as the grid's legend: the dots are permanent, so the reader can
+          decode a pill's colour without selecting anything. */}
       <div className="flex flex-wrap items-center gap-1.5">
         <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
           Tür
         </span>
-        <button
-          onClick={() => setTypeSlug(null)}
-          className={cn(
-            "rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
-            !typeSlug
-              ? "bg-primary text-primary-foreground"
-              : "border border-border text-muted-foreground hover:bg-accent",
-          )}
-        >
-          Tümü
-        </button>
+        <FilterChip label="Tümü" active={!typeSlug} onClick={() => setTypeSlug(null)} />
         {(Object.keys(TYPE_LABELS) as EventOut["event_type"][]).map((t) => (
-          <button
+          <FilterChip
             key={t}
+            label={TYPE_LABELS[t]}
+            active={typeSlug === t}
             onClick={() => setTypeSlug(typeSlug === t ? null : t)}
-            className={cn(
-              "rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
-              typeSlug === t
-                ? "bg-primary text-primary-foreground"
-                : "border border-border text-muted-foreground hover:bg-accent",
-            )}
-          >
-            {TYPE_LABELS[t]}
-          </button>
+            glow={TYPE_GLOW[t]}
+            dotClass={TYPE_DOT[t]}
+          />
         ))}
       </div>
 
@@ -166,91 +299,409 @@ export function EventsCalendar() {
           {error}
         </p>
       ) : events === null ? (
-        <div className="flex flex-col gap-3">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <Skeleton key={i} className="h-24 w-full rounded-xl" />
-          ))}
-        </div>
-      ) : byMonth.length === 0 ? (
-        <p className="rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
-          Bu filtreyle önümüzdeki dönemde etkinlik bulunamadı.
-        </p>
+        <Skeleton className="h-105 w-full rounded-xl" />
       ) : (
-        <div className="flex flex-col gap-8">
-          {byMonth.map(([key, monthEvents]) => (
-            <section key={key} className="flex flex-col gap-3">
-              <h2 className="sticky top-0 z-10 -mx-2 bg-background/80 px-2 py-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground backdrop-blur">
-                {monthLabel(key)}
-              </h2>
-              <div className="flex flex-col gap-3">
-                {monthEvents.map((event) => (
-                  <a
-                    key={event.id}
-                    href={event.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="group flex flex-col gap-2 rounded-xl border border-border bg-card p-4 transition-all duration-200 hover:-translate-y-0.5 hover:border-primary/50 hover:shadow-sm"
-                  >
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span
-                        className={cn(
-                          "rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
-                          TYPE_CLASSES[event.event_type],
-                        )}
-                      >
-                        {TYPE_LABELS[event.event_type]}
-                      </span>
-                      <span className="flex items-center gap-1 text-xs font-medium text-foreground">
-                        <CalendarDays className="size-3.5 text-muted-foreground" />
-                        {event.date_range_tr}
-                      </span>
-                      <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                        <MapPin className="size-3.5" />
-                        {event.city}
-                        {event.country && event.country !== event.city
-                          ? `, ${event.country}`
-                          : ""}
-                      </span>
-                      <span
-                        className={cn(
-                          "flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
-                          IMPACT_META[event.impact_level].className,
-                        )}
-                      >
-                        <Gauge className="size-3" />
-                        {IMPACT_META[event.impact_level].label}
-                      </span>
-                      {event.attendance !== null && (
-                        <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                          <Users className="size-3.5" />
-                          {ATTENDANCE_FORMAT.format(event.attendance)} katılımcı
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex items-start justify-between gap-3">
-                      <span className="font-medium text-card-foreground group-hover:text-primary">
-                        {event.name}
-                      </span>
-                      <ExternalLink className="mt-1 size-3.5 shrink-0 opacity-0 transition-opacity group-hover:opacity-100" />
-                    </div>
-                    <p className="text-xs leading-relaxed text-muted-foreground">
-                      {event.summary_tr}
-                    </p>
-                    {/* The line the calendar exists for: dates are public, the
-                        read on demand is the part a desk can act on. */}
-                    {event.demand_effect_tr && (
-                      <p className="rounded-lg bg-muted/60 p-2.5 text-xs leading-relaxed">
-                        <span className="font-medium">Talebe etkisi: </span>
-                        <span className="text-muted-foreground">{event.demand_effect_tr}</span>
-                      </p>
-                    )}
-                  </a>
-                ))}
-              </div>
-            </section>
-          ))}
-        </div>
+        <>
+          <MonthHeader
+            label={monthLabel(`${cursor.y}-${String(cursor.m + 1).padStart(2, "0")}`)}
+            regionName={regionName}
+            regionColor={activeRegionGlow}
+            canPrev={cursorIndex > firstIndex}
+            canNext={cursorIndex < firstIndex + MONTH_HORIZON}
+            onPrev={() => step(-1)}
+            onNext={() => step(1)}
+            onToday={goToday}
+            reduceMotion={Boolean(reduceMotion)}
+          />
+
+          <div className="overflow-hidden rounded-xl border border-border bg-card shadow-elev-1">
+            <div className="grid grid-cols-7 border-b border-border bg-muted/40">
+              {WEEKDAYS.map((label) => (
+                <div
+                  key={label}
+                  className="py-2 text-center text-[11px] font-semibold uppercase tracking-wide text-muted-foreground"
+                >
+                  {label}
+                </div>
+              ))}
+            </div>
+            {/* gap-px over the border colour: every cell paints its own surface,
+                so the gaps read as hairlines instead of costing 42 borders. */}
+            <div className="grid grid-cols-7 gap-px bg-border/60">
+              {cells.map((cell) => (
+                <DayCell
+                  key={cell.key}
+                  day={cell.day}
+                  inMonth={cell.inMonth}
+                  isToday={cell.key === todayKey}
+                  isSelected={cell.key === selectedDay}
+                  entries={dayIndex.get(cell.key) ?? []}
+                  onSelect={() =>
+                    setSelectedDay((prev) => (prev === cell.key ? null : cell.key))
+                  }
+                />
+              ))}
+            </div>
+          </div>
+
+          {/* Kept from the agenda view: a filter that matches nothing says so
+              rather than leaving the reader staring at a blank grid. */}
+          {filtered.length === 0 && (
+            <p className="rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
+              Bu filtreyle önümüzdeki dönemde etkinlik bulunamadı.
+            </p>
+          )}
+
+          {/* A constant key on purpose: moving between two selected days swaps
+              the panel's contents in place, so only opening and closing the
+              panel animates its height. */}
+          <AnimatePresence initial={false}>
+            {selectedDay && (
+              <DayDetailPanel
+                key="day-detail"
+                dayKey={selectedDay}
+                entries={dayIndex.get(selectedDay) ?? []}
+                reduceMotion={Boolean(reduceMotion)}
+              />
+            )}
+          </AnimatePresence>
+        </>
       )}
     </div>
+  );
+}
+
+/** One chip for both filter rows. `glow` is the chip's identity hue (absent on
+ * "Tümü", which has none); `dotColor`/`dotClass` are the same hue as a
+ * permanent legend mark, inline for regions and as a class for types. */
+function FilterChip({
+  label,
+  active,
+  onClick,
+  glow,
+  dotClass,
+  dotColor,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+  glow?: string;
+  dotClass?: string;
+  dotColor?: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={
+        active && glow
+          ? ({ "--glow-color": glow, color: glow } as React.CSSProperties)
+          : undefined
+      }
+      className={cn(
+        "flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
+        active
+          ? glow
+            ? "edge-lit border font-semibold"
+            : "bg-primary text-primary-foreground"
+          : "border border-border text-muted-foreground hover:bg-accent",
+      )}
+    >
+      {(dotClass || dotColor) && (
+        <span
+          aria-hidden
+          className={cn("size-2 shrink-0 rounded-full", dotClass)}
+          style={dotColor ? { backgroundColor: dotColor } : undefined}
+        />
+      )}
+      {label}
+    </button>
+  );
+}
+
+function MonthHeader({
+  label,
+  regionName,
+  regionColor,
+  canPrev,
+  canNext,
+  onPrev,
+  onNext,
+  onToday,
+  reduceMotion,
+}: {
+  label: string;
+  regionName: string | null;
+  regionColor: string | null;
+  canPrev: boolean;
+  canNext: boolean;
+  onPrev: () => void;
+  onNext: () => void;
+  onToday: () => void;
+  reduceMotion: boolean;
+}) {
+  const navButton =
+    "inline-flex size-8 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-40";
+
+  return (
+    <div className="flex flex-wrap items-center gap-3">
+      <h2
+        className={cn(
+          "text-xl font-semibold tracking-tight tabular-nums sm:text-2xl",
+          regionName && "text-glow",
+        )}
+      >
+        {label}
+      </h2>
+
+      <AnimatePresence initial={false}>
+        {regionName && (
+          <motion.span
+            key={regionName}
+            initial={reduceMotion ? { opacity: 0 } : { opacity: 0, x: -6 }}
+            animate={reduceMotion ? { opacity: 1 } : { opacity: 1, x: 0 }}
+            exit={reduceMotion ? { opacity: 0 } : { opacity: 0, x: -6 }}
+            // Inherits --glow-color from the calendar root, so `edge-lit`
+            // already wears this region's hue on its border and wash.
+            className="edge-lit rounded-full border px-3 py-1 text-sm font-semibold"
+            style={regionColor ? { color: regionColor } : undefined}
+          >
+            {regionName}
+          </motion.span>
+        )}
+      </AnimatePresence>
+
+      <div className="ml-auto flex items-center gap-1">
+        <button
+          type="button"
+          aria-label="Önceki ay"
+          onClick={onPrev}
+          disabled={!canPrev}
+          className={navButton}
+        >
+          <ChevronLeft className="size-4" />
+        </button>
+        <button
+          type="button"
+          aria-label="Sonraki ay"
+          onClick={onNext}
+          disabled={!canNext}
+          className={navButton}
+        >
+          <ChevronRight className="size-4" />
+        </button>
+        <button
+          type="button"
+          onClick={onToday}
+          className="rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        >
+          Bugün
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function DayCell({
+  day,
+  inMonth,
+  isToday,
+  isSelected,
+  entries,
+  onSelect,
+}: {
+  day: number;
+  inMonth: boolean;
+  isToday: boolean;
+  isSelected: boolean;
+  entries: { event: EventOut; isStart: boolean }[];
+  onSelect: () => void;
+}) {
+  // Past three, the third slot becomes the counter -- two named events plus
+  // "+N daha" beats three names and a silently dropped fourth.
+  const hasOverflow = entries.length > DESKTOP_EVENT_SLOTS;
+  const shown = hasOverflow ? entries.slice(0, DESKTOP_EVENT_SLOTS - 1) : entries;
+  const hiddenCount = entries.length - shown.length;
+
+  const dots = entries.slice(0, MOBILE_DOT_SLOTS);
+  const dotOverflow = entries.length - dots.length;
+
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      className={cn(
+        "group relative flex min-h-24 flex-col items-stretch gap-1 p-1.5 text-left transition-colors hover:bg-accent/40 sm:min-h-28",
+        inMonth ? "bg-card" : "bg-card/50",
+        isSelected && "z-10 ring-2 ring-inset ring-(--glow-color) glow-soft",
+      )}
+    >
+      {/* Adjacent-month days stay clickable but recede; dimming the wrapper
+          rather than the button keeps the selection ring at full strength. */}
+      <div className={cn("flex flex-1 flex-col gap-1", !inMonth && "opacity-50")}>
+        {isToday ? (
+          <span className="flex size-6 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
+            {day}
+          </span>
+        ) : (
+          <span className="text-xs font-medium tabular-nums text-muted-foreground">
+            {day}
+          </span>
+        )}
+
+        <div className="hidden flex-col gap-1 sm:flex">
+          {shown.map(({ event, isStart }) =>
+            isStart ? (
+              <span
+                key={event.id}
+                title={event.name}
+                className={cn(
+                  // currentColor = the pill's own text colour, so the 2px lit
+                  // left edge is always the event type's hue.
+                  "h-5 truncate rounded-md px-1.5 text-[10px] font-medium leading-5 shadow-[inset_2px_0_0_0_currentColor]",
+                  TYPE_PILL[event.event_type],
+                )}
+              >
+                {event.name}
+              </span>
+            ) : (
+              <span
+                key={event.id}
+                title={event.name}
+                className={cn("h-1 rounded-full", TYPE_BAR[event.event_type])}
+              />
+            ),
+          )}
+          {hiddenCount > 0 && (
+            <span className="text-[10px] font-medium text-muted-foreground">
+              +{hiddenCount} daha
+            </span>
+          )}
+        </div>
+
+        {/* Phone width has no room for names: dots carry "something happens
+            here, of these types", the detail panel carries the rest. */}
+        <div className="flex flex-wrap gap-0.5 pt-0.5 sm:hidden">
+          {dots.map(({ event }) => (
+            <span
+              key={event.id}
+              className={cn("size-1.5 rounded-full", TYPE_DOT[event.event_type])}
+            />
+          ))}
+          {dotOverflow > 0 && (
+            <span className="text-[9px] text-muted-foreground">+{dotOverflow}</span>
+          )}
+        </div>
+      </div>
+    </button>
+  );
+}
+
+function DayDetailPanel({
+  dayKey,
+  entries,
+  reduceMotion,
+}: {
+  dayKey: string;
+  entries: { event: EventOut; isStart: boolean }[];
+  reduceMotion: boolean;
+}) {
+  const heading = new Date(`${dayKey}T12:00:00Z`).toLocaleDateString("tr-TR", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    weekday: "long",
+  });
+
+  // The panel opens to a measured pixel height instead of to `"auto"`, which
+  // forces a layout pass per frame. The measurement rides a ResizeObserver, so
+  // swapping days (the panel keeps a constant key and changes contents in
+  // place) and viewport reflows both move the target with the content.
+  const [contentRef, measuredHeight] = useMeasuredHeight<HTMLDivElement>();
+
+  return (
+    <motion.div
+      initial={reduceMotion ? false : { opacity: 0, height: 0 }}
+      // Under reduced motion `height` is left out of the animation target
+      // entirely, so the panel is simply laid out at its natural height and
+      // nothing about it animates -- the same full bypass as before, which a
+      // pixel target would otherwise have broken (`initial={false}` starts at
+      // the animate values, and on the first render that height is still 0).
+      animate={reduceMotion ? { opacity: 1 } : { opacity: 1, height: measuredHeight }}
+      exit={reduceMotion ? { opacity: 0 } : { opacity: 0, height: 0 }}
+      transition={reduceMotion ? { duration: 0 } : { duration: 0.25, ease: "easeOut" }}
+      className="overflow-hidden"
+    >
+      <div ref={contentRef} className="flex flex-col gap-3">
+        <h3 className="text-lg font-semibold">{heading}</h3>
+
+        {entries.length === 0 ? (
+          <p className="text-sm text-muted-foreground">Bu günde etkinlik yok.</p>
+        ) : (
+          entries.map(({ event }) => (
+            <a
+              key={event.id}
+              href={event.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ "--glow-color": TYPE_GLOW[event.event_type] } as React.CSSProperties}
+              className="edge-lit group flex flex-col gap-2 rounded-xl border bg-card p-4 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-sm motion-reduce:transform-none motion-reduce:transition-none"
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <span
+                  className={cn(
+                    "rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
+                    TYPE_PILL[event.event_type],
+                  )}
+                >
+                  {TYPE_LABELS[event.event_type]}
+                </span>
+                <span className="flex items-center gap-1 text-xs font-medium text-foreground">
+                  <CalendarDays className="size-3.5 text-muted-foreground" />
+                  {event.date_range_tr}
+                </span>
+                <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                  <MapPin className="size-3.5" />
+                  {event.city}
+                  {event.country && event.country !== event.city ? `, ${event.country}` : ""}
+                </span>
+                <span
+                  className={cn(
+                    "flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
+                    IMPACT_META[event.impact_level].className,
+                  )}
+                >
+                  <Gauge className="size-3" />
+                  {IMPACT_META[event.impact_level].label}
+                </span>
+                {event.attendance !== null && (
+                  <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                    <Users className="size-3.5" />
+                    {ATTENDANCE_FORMAT.format(event.attendance)} katılımcı
+                  </span>
+                )}
+              </div>
+              <div className="flex items-start justify-between gap-3">
+                <span className="font-medium text-card-foreground group-hover:text-primary">
+                  {event.name}
+                </span>
+                <ExternalLink className="mt-1 size-3.5 shrink-0 opacity-0 transition-opacity group-hover:opacity-100" />
+              </div>
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                {event.summary_tr}
+              </p>
+              {/* The line the calendar exists for: dates are public, the read on
+                  demand is the part a desk can act on. */}
+              {event.demand_effect_tr && (
+                <p className="rounded-lg bg-muted/60 p-2.5 text-xs leading-relaxed">
+                  <span className="font-medium">Talebe etkisi: </span>
+                  <span className="text-muted-foreground">{event.demand_effect_tr}</span>
+                </p>
+              )}
+            </a>
+          ))
+        )}
+      </div>
+    </motion.div>
   );
 }
