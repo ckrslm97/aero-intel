@@ -13,23 +13,23 @@ from app.core.logging import get_logger
 from app.llm.factory import get_llm_provider
 from app.models.article import Article, ArticleEnrichment
 from app.models.edition import Edition, EditionArticle
+from app.taxonomy import FOCUS_BONUS
 
 logger = get_logger(__name__)
 
 TOP_STORY_COUNT = 10
 
-# Editorial weighting for the front page. Raw importance alone let generic
-# aviation-enthusiast copy (military tankers, aircraft trivia) outrank the
-# beats this portal exists for, because those pieces score well on keyword
-# density. The bonus is additive on a 0-1 importance scale: a mid-scoring
-# revenue-management story now beats a high-scoring bomber feature, while a
-# genuinely major story in any category still makes the page.
-FOCUS_BONUS: dict[str, float] = {
-    "revenue_management": 0.30,
-    "network": 0.18,
-    "finance": 0.10,
-    "events": 0.08,
-}
+# FOCUS_BONUS is the editorial weighting for the front page. Raw importance
+# alone let generic aviation-enthusiast copy (military tankers, aircraft
+# trivia) outrank the beats this portal exists for, because those pieces score
+# well on keyword density. The bonus is additive on a 0-1 importance scale: a
+# mid-scoring revenue-management story now beats a high-scoring bomber feature,
+# while a genuinely major story in any category still makes the page.
+#
+# Re-exported so `from app.services.edition_service import FOCUS_BONUS` keeps
+# working; it now lives in app/taxonomy.py because the Gazete's min_importance
+# filter applies the same weighting in SQL and the two must not drift.
+__all__ = ["FOCUS_BONUS", "TOP_STORY_COUNT", "assemble_edition"]
 
 
 def _front_page_score(article: Article) -> float:

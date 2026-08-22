@@ -219,6 +219,27 @@ CATEGORIES: list[CategoryDef] = [
 # carrier and deliberately not in this list.
 RIVAL_CODES: tuple[str, ...] = ("AF", "BA", "EK", "EY", "KL", "LH", "PC", "QR", "VF")
 
+# Editorial weighting: how much this portal cares about a category, on the same
+# 0-1 scale as ArticleEnrichment.importance_score. Raw importance is
+# `confidence * 0.7 + min(corroborating_count, 5) * 0.06`, so it measures how
+# *well-attested* a story is, not how much an RM desk needs it -- a Boeing order
+# carried by ten wires outscores a single-sourced competitor fare move every
+# time. This bonus buys back the beats the portal exists for.
+#
+# Two consumers, deliberately one definition (app/services/edition_service.py
+# ranks the daily edition's front page by importance + bonus; the Gazete's
+# `min_importance` filter in app/repositories/article_repository.py applies the
+# floor to the same weighted sum). They have to agree, and a second copy of
+# these numbers would drift on the first tuning pass. Lives here because
+# taxonomy.py is a leaf module -- it imports nothing from the app, so both the
+# service and the repository layer can pull it in without a cycle.
+FOCUS_BONUS: dict[str, float] = {
+    "revenue_management": 0.30,
+    "network": 0.18,
+    "finance": 0.10,
+    "events": 0.08,
+}
+
 # "general" is the fallback category: whatever scores zero against every
 # category above lands here. It has no keyword list or subcategories of its own.
 GENERAL_CATEGORY = "general"

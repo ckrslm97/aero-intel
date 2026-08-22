@@ -14,7 +14,12 @@ import { AirlineLogo } from "@/components/airline-logo";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiFetch } from "@/lib/api";
 import { airlineTabs } from "@/lib/nav";
-import { CATEGORIES, EVENT_REGIONS } from "@/lib/taxonomy";
+import {
+  EVENT_REGIONS,
+  NEWSPAPER_CATEGORIES,
+  NEWSPAPER_CATEGORY_SLUGS,
+  NEWSPAPER_EXCLUDED_CATEGORY_SLUGS,
+} from "@/lib/taxonomy";
 import type { ArticleListOut, ArticleOut } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -38,6 +43,64 @@ const AIRLINE_FILTER_LABEL: Record<string, string> = {
 // rather than the entire archive, per the freshness feedback on this page.
 const DAYS_WINDOW = 30;
 const PAGE_LIMIT = 30;
+
+/** The Gazete's default tab. First entry of the owner's priority order. */
+const DEFAULT_CATEGORY = NEWSPAPER_CATEGORY_SLUGS[0];
+
+/** "Fewer, more critical stories": a floor on the FOCUS-WEIGHTED importance
+ * score -- `importance_score + FOCUS_BONUS[category]`, applied server-side (see
+ * backend/app/repositories/article_repository.py `_focus_weighted_importance`).
+ * The bonus table is the one the daily edition's front page already ranks by
+ * (backend/app/taxonomy.py): Gelir Yönetimi +0.30, Ağ & Rota +0.18, Finans
+ * +0.10, Etkinlik +0.08, everything else +0.
+ *
+ * The weighting is the whole point, because raw importance is
+ * `confidence * 0.7 + min(corroborating, 5) * 0.06` -- it measures how widely
+ * SYNDICATED a story is, not how much an RM desk needs it. Measured over 30
+ * days of translated articles (n=4205 from the live API), a flat floor on the
+ * raw column inverted the desk's priority:
+ *
+ *   category            before   flat 0.47   weighted 0.47
+ *   Gelir Yönetimi         471    71  (15%)   471  (100%)
+ *   Etkinlik                83    29  (35%)    82   (99%)
+ *   Finans                 368   104  (28%)   368  (100%)
+ *   Filo                  1072   562  (52%)   562   (52%)
+ *   Genel                  602   321  (53%)   321   (53%)
+ *   Havalimanı             407   104  (26%)   104   (26%)
+ *   total                 3003  1191 (40%)   1908   (64%)
+ *
+ * A Boeing order runs on ten wires; a rival's fare move runs on one. The flat
+ * cut kept the former and deleted the latter -- 85% of Gelir Yönetimi, the
+ * desk's first priority. Weighting leaves the zero-bonus categories cut exactly
+ * as before (Filo and Genel roughly halved, which is what the simplification
+ * was for) and stops culling the two beats the paper exists for.
+ *
+ * The value stayed 0.47; only the predicate changed. Do not read that as a
+ * free parameter -- the threshold is effectively a STEP function, because
+ * importance_score takes just 24 distinct values across the corpus and 71% of
+ * it sits inside 0.455-0.490, a band narrower than the smallest bonus. Every
+ * threshold in 0.470-0.476 gives the identical result above; the next rung up
+ * is 0.478-0.487 (total 1266, 42%), which cuts harder but collapses Havalimanı
+ * to 28 stories in 30 days (~1/day) and Genel to 78 -- too thin to be a tab.
+ * Below 0.470 the filter stops doing anything (0.466 keeps 87%); at 0.490
+ * Havalimanı drops to 3. There is nothing in between to tune, so pick a rung,
+ * not a number. Both rungs sit in gaps between stored values, so neither is
+ * exposed to float-comparison edge cases. */
+const MIN_IMPORTANCE = 0.47;
+
+/** Appended to every Gazete query: the tab row's allow-list hides these four
+ * categories, and this keeps their articles out of the list (and out of the
+ * badge counts) rather than letting them resurface under Genel. Query-time
+ * only -- nothing stops being ingested or classified. */
+function appendGazeteFilters(params: URLSearchParams): URLSearchParams {
+  // Repeated keys, one per value -- the same shape FastAPI parses into a list
+  // that recommendations-client.tsx uses for its multi-select filters.
+  NEWSPAPER_EXCLUDED_CATEGORY_SLUGS.forEach((slug) =>
+    params.append("exclude_categories", slug),
+  );
+  params.set("min_importance", String(MIN_IMPORTANCE));
+  return params;
+}
 
 // "28 Temmuz 2026" -- one formatter for the whole list, same reasoning as
 // ArticleCard's PUBLISHED_FORMAT.
@@ -105,8 +168,13 @@ export function NewspaperBrowser() {
   const initial = useMemo(() => {
     const wanted = searchParams.get("category");
     return {
-      // An unknown slug would filter to nothing and look broken; fall back.
-      category: CATEGORIES.some((c) => c.slug === wanted) ? wanted! : CATEGORIES[0].slug,
+      // Validated against the Gazete's allow-list, not the whole taxonomy: a
+      // deep link to a category the paper no longer shows (?category=safety,
+      // or Know How's ?category=network) has no tab to select and would sit on
+      // an empty, unfixable list. Falls back to the default tab instead.
+      category: NEWSPAPER_CATEGORY_SLUGS.some((slug) => slug === wanted)
+        ? wanted!
+        : DEFAULT_CATEGORY,
       subcategory: searchParams.get("subcategory"),
       region: searchParams.get("region"),
       airline: searchParams.get("airline"),
@@ -131,7 +199,8 @@ export function NewspaperBrowser() {
 
   const [counts, setCounts] = useState<Record<string, number>>({});
 
-  const category = CATEGORIES.find((c) => c.slug === categorySlug) ?? CATEGORIES[0];
+  const category =
+    NEWSPAPER_CATEGORIES.find((c) => c.slug === categorySlug) ?? NEWSPAPER_CATEGORIES[0];
 
   function selectCategory(slug: string) {
     setCategorySlug(slug);
@@ -146,7 +215,12 @@ export function NewspaperBrowser() {
     const controller = new AbortController();
     // translated_only mirrors the list query below, so a tab badge never
     // promises 400 stories the filtered list will never show.
-    apiFetch<Record<string, number>>(`/articles/counts?days=${DAYS_WINDOW}&translated_only=true`, {
+    // The badges carry the same exclusion and importance floor as the list, so
+    // a tab never promises stories the filtered list will not render.
+    const countParams = appendGazeteFilters(
+      new URLSearchParams({ days: String(DAYS_WINDOW), translated_only: "true" }),
+    );
+    apiFetch<Record<string, number>>(`/articles/counts?${countParams.toString()}`, {
       cache: "default",
       signal: controller.signal,
     })
@@ -173,6 +247,7 @@ export function NewspaperBrowser() {
       // server-side so `total` / "Daha fazla yükle" stay in step with the list.
       translated_only: "true",
     });
+    appendGazeteFilters(params);
     if (subcategorySlug) params.set("subcategory", subcategorySlug);
     if (regionSlug) params.set("region", regionSlug);
     if (airlineCode) params.set("airline", airlineCode);
@@ -243,11 +318,15 @@ export function NewspaperBrowser() {
       {/* Sticky category bar -- horizontally scrollable on mobile, blurred so
           content reads through it while scrolling. */}
       <div className="sticky top-0 z-20 -mx-2 border-b border-border bg-background/80 px-2 pb-3 pt-2 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-        {/* Gelir Yönetimi is pinned first and keeps its amber identity even
-            when inactive -- see CategoryChipRow, shared with Öneriler. */}
+        {/* Six tabs, in the order the desk ranked them (see
+            NEWSPAPER_CATEGORY_SLUGS) -- not the full taxonomy. Gelir Yönetimi
+            leads and keeps its amber identity even when inactive; the row
+            component itself is shared with Öneriler, which still shows all
+            eleven. */}
         <CategoryChipRow
           value={categorySlug}
-          onChange={(slug) => selectCategory(slug ?? CATEGORIES[0].slug)}
+          onChange={(slug) => selectCategory(slug ?? DEFAULT_CATEGORY)}
+          slugs={NEWSPAPER_CATEGORY_SLUGS}
           pinned="revenue_management"
           focusStyling
           counts={counts}
