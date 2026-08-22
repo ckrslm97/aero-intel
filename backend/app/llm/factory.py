@@ -184,3 +184,28 @@ def get_llm_provider() -> LLMProvider:
     if live is None:
         return HeuristicProvider()
     return live if settings.llm_full_pipeline else BudgetedProvider(live, fast)
+
+
+def get_raw_generator():
+    """The configured live model as a bare `(prompt) -> str` coroutine, or None.
+
+    The LLMProvider protocol is a fixed set of enrichment *tasks*; promotion
+    extraction is a new one that returns JSON rather than a word or a
+    translation, and widening the protocol for a single caller would force
+    HeuristicProvider to grow a method it can only answer with "no".
+
+    So this reaches for the raw completion capability instead, unwrapping the
+    two wrappers this module builds (FallbackProvider.primary,
+    BudgetedProvider.live). Returns None whenever no live model is configured
+    -- which is the normal case locally, and the caller's signal to use its own
+    heuristic path rather than to fail.
+    """
+    provider = get_llm_provider()
+    for _ in range(3):  # BudgetedProvider -> FallbackProvider -> concrete
+        generate = getattr(provider, "_generate", None)
+        if callable(generate):
+            return generate
+        provider = getattr(provider, "live", None) or getattr(provider, "primary", None)
+        if provider is None:
+            return None
+    return None

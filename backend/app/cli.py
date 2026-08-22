@@ -154,6 +154,66 @@ async def _seed_promos() -> None:
         print(f"Seeded {inserted} curated rival promo articles")
 
 
+async def _extract_promotions(limit: int | None) -> None:
+    from app.pipeline.promotions import extract_promotions
+
+    async with AsyncSessionLocal() as db:
+        stats = await extract_promotions(db, limit=limit)
+        print(
+            f"Scanned {stats['scanned']} campaign articles: "
+            f"{stats['inserted']} new promotions, {stats['updated']} refreshed, "
+            f"{stats['merged']} merged into an existing campaign, "
+            f"{stats['skipped']} skipped ({stats['llm']} via LLM)"
+        )
+
+
+async def _scrape_promotions() -> None:
+    from app.ingest.promo_scrape import scrape_promotions
+
+    async with AsyncSessionLocal() as db:
+        result = await scrape_promotions(db)
+        print(
+            f"Fetched {result['fetched']} campaigns from airline pages: "
+            f"{result['inserted']} new, {result['updated']} refreshed, "
+            f"{result['merged']} merged into an article-derived row"
+        )
+        for name, error in result.get("errors", {}).items():
+            print(f"  ! {name} unavailable: {error}")
+
+
+async def _refresh_promotions() -> None:
+    """Both detection paths in one pass -- what the scheduled job runs."""
+    from app.ingest.promo_scrape import scrape_promotions
+    from app.pipeline.promotions import extract_promotions
+
+    async with AsyncSessionLocal() as db:
+        scraped = await scrape_promotions(db)
+        extracted = await extract_promotions(db)
+        print(
+            f"Scrape: {scraped['inserted']} new / {scraped['updated']} refreshed "
+            f"/ {scraped['merged']} merged. "
+            f"Articles: {extracted['inserted']} new / {extracted['updated']} refreshed "
+            f"/ {extracted['merged']} merged, from {extracted['scanned']} scanned"
+        )
+
+
+async def _dedupe_promotions() -> None:
+    """Collapse campaigns already stored twice under two different URLs.
+
+    The write paths now merge on the way in, so this is the backfill for rows
+    that predate that -- and the repair after any run that inserted a duplicate
+    before the matcher knew about it.
+    """
+    from app.pipeline.promo_dedup import dedupe_existing_promotions
+
+    async with AsyncSessionLocal() as db:
+        result = await dedupe_existing_promotions(db)
+        print(
+            f"Scanned {result['scanned']} promotions: merged {result['merged']} "
+            f"duplicate rows away, {result['remaining']} campaigns remain"
+        )
+
+
 async def _seed_kpi_history() -> None:
     from app.ingest.historical_seed import seed_kpi_history
 
@@ -242,6 +302,10 @@ def main() -> None:
             "seed-tk-reviews",
             "refresh-tk-reviews",
             "seed-promos",
+            "extract-promotions",
+            "scrape-promotions",
+            "refresh-promotions",
+            "dedupe-promotions",
             "prune-kpi-duplicates",
             "refresh-pdf",
             "send-newsletter",
@@ -256,8 +320,14 @@ def main() -> None:
     parser.add_argument(
         "--limit",
         type=int,
-        default=12,
-        help="translate-backlog: how many articles to translate this run (default: 12)",
+        # No default, so "not given" is distinguishable from a number: for
+        # extract-promotions an absent --limit means "every campaign article",
+        # while translate-backlog needs a real batch size and supplies its own.
+        default=None,
+        help=(
+            "translate-backlog: articles to translate this run (default: 12). "
+            "extract-promotions: campaign articles to scan (default: all)"
+        ),
     )
     args = parser.parse_args()
 
@@ -276,7 +346,7 @@ def main() -> None:
     elif args.command == "clean-headlines":
         asyncio.run(_clean_headlines())
     elif args.command == "translate-backlog":
-        asyncio.run(_translate_backlog(args.limit))
+        asyncio.run(_translate_backlog(args.limit if args.limit is not None else 12))
     elif args.command == "build-edition":
         asyncio.run(_build_edition())
     elif args.command == "refresh-kpis":
@@ -291,6 +361,14 @@ def main() -> None:
         asyncio.run(_refresh_tk_reviews())
     elif args.command == "seed-promos":
         asyncio.run(_seed_promos())
+    elif args.command == "extract-promotions":
+        asyncio.run(_extract_promotions(args.limit))
+    elif args.command == "scrape-promotions":
+        asyncio.run(_scrape_promotions())
+    elif args.command == "refresh-promotions":
+        asyncio.run(_refresh_promotions())
+    elif args.command == "dedupe-promotions":
+        asyncio.run(_dedupe_promotions())
     elif args.command == "prune-kpi-duplicates":
         asyncio.run(_prune_kpi_duplicates())
     elif args.command == "refresh-pdf":

@@ -1,6 +1,7 @@
 "use client";
 
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import type { LucideIcon } from "lucide-react";
 import {
   CalendarDays,
   ChevronLeft,
@@ -8,16 +9,27 @@ import {
   ExternalLink,
   Gauge,
   MapPin,
+  Megaphone,
+  Plane,
   Users,
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
+import { AirlineLogo } from "@/components/airline-logo";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiFetch } from "@/lib/api";
 import { useMeasuredHeight } from "@/lib/motion";
+import { airlineTabs } from "@/lib/nav";
 import { EVENT_REGIONS } from "@/lib/taxonomy";
-import type { EventOut } from "@/lib/types";
+import type { EventOut, PromotionOut } from "@/lib/types";
 import { cn } from "@/lib/utils";
+
+/** Carrier brand hex, by IATA code. Campaigns are drawn in their airline's own
+ * colour -- deliberately a different colour *system* from the five --chart-*
+ * event hues, so the two layers can never be confused for one scale. */
+const BRAND_HEX: Record<string, string> = Object.fromEntries(
+  airlineTabs.map((a) => [a.code, a.color]),
+);
 
 // Declared in --chart-1..5 order: this record drives both the type filter row
 // and its legend dots, so its order is the order the reader meets the hues in.
@@ -110,6 +122,15 @@ const MAX_EVENT_DAYS = 62;
 const DESKTOP_EVENT_SLOTS = 3;
 /** Dots a phone-width cell shows before collapsing into "+N". */
 const MOBILE_DOT_SLOTS = 4;
+/** Campaign ribbons a cell shows before collapsing into "+N". Three thin
+ * strips is the most that stays legible above a date; a fourth turns the row
+ * into a texture. */
+const RIBBON_SLOTS = 3;
+/** How far past today an open-ended campaign keeps painting ribbons. Same rule
+ * as the /kampanyalar timeline's fade-out: with no published end date the
+ * window has to stop somewhere, and a week is the honest guess about how long
+ * "still running" means without saying so on screen. */
+const OPEN_ENDED_RUNOUT_DAYS = 7;
 
 function toKey(y: number, m: number, d: number): string {
   return `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
@@ -134,7 +155,11 @@ export function EventsCalendar() {
   const reduceMotion = useReducedMotion();
 
   const [events, setEvents] = useState<EventOut[] | null>(null);
+  const [promotions, setPromotions] = useState<PromotionOut[]>([]);
   const [error, setError] = useState<string | null>(null);
+  // On by default: a rival's sale window is the layer a revenue desk came to
+  // this calendar for, and a layer nobody switches on is a layer nobody sees.
+  const [showPromos, setShowPromos] = useState(true);
   const [regionSlug, setRegionSlug] = useState<string | null>(null);
   const [typeSlug, setTypeSlug] = useState<EventOut["event_type"] | null>(null);
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
@@ -158,6 +183,7 @@ export function EventsCalendar() {
     // that started in the previous month and runs into this one) still comes
     // back and still draws its continuation bars.
     const dateFrom = `${cursor.y}-${String(cursor.m + 1).padStart(2, "0")}-01`;
+    const dateTo = toKey(cursor.y, cursor.m, new Date(cursor.y, cursor.m + 1, 0).getDate());
     apiFetch<EventOut[]>(`/events?date_from=${dateFrom}`)
       .then((data) => {
         if (cancelled) return;
@@ -166,6 +192,18 @@ export function EventsCalendar() {
       })
       .catch(() => {
         if (!cancelled) setError("Etkinlikler yüklenemedi. Sunucu çalışıyor mu?");
+      });
+    // A separate request, and a separate failure: campaigns are an overlay on
+    // this calendar, not its subject. If /promotions is down the calendar is
+    // still a calendar, so the ribbons simply do not appear.
+    apiFetch<PromotionOut[]>(
+      `/promotions?date_from=${dateFrom}&date_to=${dateTo}`,
+    )
+      .then((data) => {
+        if (!cancelled) setPromotions(data);
+      })
+      .catch(() => {
+        if (!cancelled) setPromotions([]);
       });
     return () => {
       cancelled = true;
@@ -223,6 +261,44 @@ export function EventsCalendar() {
       };
     });
   }, [cursor]);
+
+  /** "YYYY-MM-DD" -> the campaigns whose SALE window touches that day.
+   *
+   * Sale rather than travel, matching the /kampanyalar timeline: the sale
+   * window is the one a revenue desk has to react to inside this week.
+   *
+   * Built by comparing ISO strings against the ~42 visible cells rather than
+   * by walking each campaign day by day. A campaign window is routinely seven
+   * months long, so the walk that suits a five-day fair would be thousands of
+   * iterations here for the same forty-two answers.
+   *
+   * A campaign with no published start date contributes no ribbon at all --
+   * there is no window to lay along a row of days, and inventing one would be
+   * indistinguishable from a measured one. Those campaigns live on the
+   * /kampanyalar timeline as point markers instead. */
+  const promoDayIndex = useMemo(() => {
+    const index = new Map<string, PromotionOut[]>();
+    if (!showPromos || promotions.length === 0) return index;
+
+    const runout = new Date(today);
+    runout.setDate(runout.getDate() + OPEN_ENDED_RUNOUT_DAYS);
+    const runoutKey = toKey(runout.getFullYear(), runout.getMonth(), runout.getDate());
+
+    const windows: { promo: PromotionOut; start: string; end: string }[] = [];
+    for (const promo of promotions) {
+      const start = promo.sale_starts;
+      if (!start) continue;
+      const end = promo.sale_ends ?? (runoutKey > start ? runoutKey : start);
+      if (end < start) continue;
+      windows.push({ promo, start, end });
+    }
+
+    for (const cell of cells) {
+      const hits = windows.filter((w) => w.start <= cell.key && cell.key <= w.end);
+      if (hits.length > 0) index.set(cell.key, hits.map((h) => h.promo));
+    }
+    return index;
+  }, [promotions, cells, showPromos, today]);
 
   const step = (delta: number) =>
     setCursor((prev) => {
@@ -292,6 +368,19 @@ export function EventsCalendar() {
             dotClass={TYPE_DOT[t]}
           />
         ))}
+        {/* A toggle, not a sixth type: campaigns are a separate layer over the
+            grid, so this switches a layer on and off rather than joining the
+            single-select that filters events. --signal amber is the chip's own
+            identity -- chrome for "there is another layer here" -- and never
+            appears on a ribbon, which always wears its carrier's colour. */}
+        <FilterChip
+          label="Kampanyalar"
+          active={showPromos}
+          onClick={() => setShowPromos((v) => !v)}
+          glow="var(--signal)"
+          dotColor="var(--signal)"
+          icon={Megaphone}
+        />
       </div>
 
       {error ? (
@@ -336,6 +425,7 @@ export function EventsCalendar() {
                   isToday={cell.key === todayKey}
                   isSelected={cell.key === selectedDay}
                   entries={dayIndex.get(cell.key) ?? []}
+                  promos={promoDayIndex.get(cell.key) ?? []}
                   onSelect={() =>
                     setSelectedDay((prev) => (prev === cell.key ? null : cell.key))
                   }
@@ -361,6 +451,7 @@ export function EventsCalendar() {
                 key="day-detail"
                 dayKey={selectedDay}
                 entries={dayIndex.get(selectedDay) ?? []}
+                promos={promoDayIndex.get(selectedDay) ?? []}
                 reduceMotion={Boolean(reduceMotion)}
               />
             )}
@@ -381,6 +472,7 @@ function FilterChip({
   glow,
   dotClass,
   dotColor,
+  icon: Icon,
 }: {
   label: string;
   active: boolean;
@@ -388,6 +480,10 @@ function FilterChip({
   glow?: string;
   dotClass?: string;
   dotColor?: string;
+  /** Stands in for the legend dot. The campaign toggle uses one because it is
+   * a layer switch rather than a colour key -- an icon says "this is a
+   * different kind of control" where a dot would say "this is a sixth hue". */
+  icon?: LucideIcon;
 }) {
   return (
     <button
@@ -407,12 +503,16 @@ function FilterChip({
           : "border border-border text-muted-foreground hover:bg-accent",
       )}
     >
-      {(dotClass || dotColor) && (
-        <span
-          aria-hidden
-          className={cn("size-2 shrink-0 rounded-full", dotClass)}
-          style={dotColor ? { backgroundColor: dotColor } : undefined}
-        />
+      {Icon ? (
+        <Icon aria-hidden className="size-3.5 shrink-0" />
+      ) : (
+        (dotClass || dotColor) && (
+          <span
+            aria-hidden
+            className={cn("size-2 shrink-0 rounded-full", dotClass)}
+            style={dotColor ? { backgroundColor: dotColor } : undefined}
+          />
+        )
       )}
       {label}
     </button>
@@ -508,6 +608,7 @@ function DayCell({
   isToday,
   isSelected,
   entries,
+  promos,
   onSelect,
 }: {
   day: number;
@@ -515,6 +616,7 @@ function DayCell({
   isToday: boolean;
   isSelected: boolean;
   entries: { event: EventOut; isStart: boolean }[];
+  promos: PromotionOut[];
   onSelect: () => void;
 }) {
   // Past three, the third slot becomes the counter -- two named events plus
@@ -524,7 +626,11 @@ function DayCell({
   const hiddenCount = entries.length - shown.length;
 
   const dots = entries.slice(0, MOBILE_DOT_SLOTS);
-  const dotOverflow = entries.length - dots.length;
+  const promoDots = promos.slice(0, MOBILE_DOT_SLOTS);
+  const dotOverflow = entries.length - dots.length + (promos.length - promoDots.length);
+
+  const ribbons = promos.slice(0, RIBBON_SLOTS);
+  const ribbonOverflow = promos.length - ribbons.length;
 
   return (
     <button
@@ -539,6 +645,27 @@ function DayCell({
       {/* Adjacent-month days stay clickable but recede; dimming the wrapper
           rather than the button keeps the selection ring at full strength. */}
       <div className={cn("flex flex-1 flex-col gap-1", !inMonth && "opacity-50")}>
+        {/* Campaign ribbons, above the date and geometrically unlike anything
+            else in the cell: thin strips spanning the day's width, where every
+            event mark is a named pill or a dot below the date. The two layers
+            therefore never compete for the five-colour scheme -- shape tells
+            them apart before colour is even read. */}
+        {ribbons.length > 0 && (
+          <div className="flex gap-0.5 pb-0.5">
+            {ribbons.map((promo) => (
+              <span
+                key={promo.id}
+                title={`${promo.airline_code} — ${promo.title_tr}`}
+                className="h-1 flex-1 rounded-full"
+                style={{ backgroundColor: BRAND_HEX[promo.airline_code] ?? "var(--signal)" }}
+              />
+            ))}
+            {ribbonOverflow > 0 && (
+              <span className="text-[9px] text-muted-foreground">+{ribbonOverflow}</span>
+            )}
+          </div>
+        )}
+
         {isToday ? (
           <span className="flex size-6 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
             {day}
@@ -588,6 +715,16 @@ function DayCell({
               className={cn("size-1.5 rounded-full", TYPE_DOT[event.event_type])}
             />
           ))}
+          {/* Squares, not circles. Shape distinguishes the layer here for the
+              same reason the ribbons do it upstairs: at 6px a hue is barely a
+              hue, and the event dots have already spent all five of them. */}
+          {promoDots.map((promo) => (
+            <span
+              key={promo.id}
+              className="size-1.5 rounded-[2px]"
+              style={{ backgroundColor: BRAND_HEX[promo.airline_code] ?? "var(--signal)" }}
+            />
+          ))}
           {dotOverflow > 0 && (
             <span className="text-[9px] text-muted-foreground">+{dotOverflow}</span>
           )}
@@ -600,10 +737,12 @@ function DayCell({
 function DayDetailPanel({
   dayKey,
   entries,
+  promos,
   reduceMotion,
 }: {
   dayKey: string;
   entries: { event: EventOut; isStart: boolean }[];
+  promos: PromotionOut[];
   reduceMotion: boolean;
 }) {
   const heading = new Date(`${dayKey}T12:00:00Z`).toLocaleDateString("tr-TR", {
@@ -635,8 +774,10 @@ function DayDetailPanel({
       <div ref={contentRef} className="flex flex-col gap-3">
         <h3 className="text-lg font-semibold">{heading}</h3>
 
-        {entries.length === 0 ? (
-          <p className="text-sm text-muted-foreground">Bu günde etkinlik yok.</p>
+        {entries.length === 0 && promos.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            Bu günde etkinlik veya kampanya yok.
+          </p>
         ) : (
           entries.map(({ event }) => (
             <a
@@ -700,6 +841,70 @@ function DayDetailPanel({
               )}
             </a>
           ))
+        )}
+
+        {/* Campaigns, under their own heading and wearing their carrier's
+            colour rather than a --chart-* hue. Same card recipe as the events
+            above -- edge-lit, one glow token, a source link -- so they read as
+            the same kind of object, and the "Kampanya" pill plus the megaphone
+            make sure they are never mistaken for one. */}
+        {promos.length > 0 && (
+          <>
+            <h4 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Kampanyalar
+            </h4>
+            {promos.map((promo) => (
+              <a
+                key={promo.id}
+                href={promo.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={
+                  {
+                    "--glow-color": BRAND_HEX[promo.airline_code] ?? "var(--signal)",
+                  } as React.CSSProperties
+                }
+                className="edge-lit group flex flex-col gap-2 rounded-xl border bg-card p-4 transition-all duration-200 hover:-translate-y-0.5 hover:shadow-sm motion-reduce:transform-none motion-reduce:transition-none"
+              >
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="flex items-center gap-1 rounded-full bg-signal/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-signal">
+                    <Megaphone className="size-3" />
+                    Kampanya
+                  </span>
+                  <span className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+                    <AirlineLogo
+                      code={promo.airline_code}
+                      name={promo.airline_name}
+                      className="size-4"
+                    />
+                    {promo.airline_name}
+                  </span>
+                  {promo.discount_pct !== null && (
+                    <span className="text-xs font-bold tabular-nums">
+                      %{promo.discount_pct}
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-start justify-between gap-3">
+                  <span className="font-medium text-card-foreground group-hover:text-primary">
+                    {promo.title_tr}
+                  </span>
+                  <ExternalLink className="mt-1 size-3.5 shrink-0 opacity-0 transition-opacity group-hover:opacity-100" />
+                </div>
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                  <span className="flex items-center gap-1">
+                    <CalendarDays className="size-3.5" />
+                    Satış: {promo.sale_range_tr}
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <Plane className="size-3.5" />
+                    Seyahat: {promo.travel_range_tr}
+                  </span>
+                </div>
+                <p className="text-[11px] text-muted-foreground">{promo.source_name}</p>
+              </a>
+            ))}
+          </>
         )}
       </div>
     </motion.div>

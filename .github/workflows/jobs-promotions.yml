@@ -1,0 +1,59 @@
+name: Campaign detection
+
+# Rival campaign timeline (/kampanyalar). Two detection paths in one command:
+# the Pegasus campaign page scrape and the article-derived extractor over
+# whatever the news pipeline has already filed under revenue_management.
+#
+# Every 30 minutes -- the shortest cadence in this repo after the KPI job, and
+# deliberately far tighter than the 2h news ingest. A news story is the same
+# story an hour later; a rival's sale window is not, and a two-day flash sale
+# caught half a day late is half a campaign's worth of intelligence already
+# spent. Not tighter than 30 because the sources cap the payoff: flypgs serves
+# a static page that changes a few times a week, and the article path can only
+# see what the 2h ingest has filed. Offset to :10/:40 so it never lands on the
+# same minute as the news job at :00. No LLM key is required -- the extractor
+# falls back to its Turkish-prose heuristic -- but Groq is passed when present
+# because the model reads a campaign window far better than the regexes do.
+# GitHub's scheduler is best-effort on a free repo: treat 30 minutes as a
+# target, not a guarantee.
+on:
+  schedule:
+    - cron: "10,40 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Never let two sweeps overlap: both paths upsert on `promotions.url`, and
+  # two concurrent inserts of the same new campaign would race the unique index.
+  group: jobs-promotions
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Scrape airline campaign pages + extract from campaign articles
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          LLM_PROVIDER: openai_compat
+          LLM_BASE_URL: https://api.groq.com/openai/v1
+          LLM_MODEL: llama-3.3-70b-versatile
+          LLM_MODEL_FAST: llama-3.1-8b-instant
+          LLM_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        run: python -m app.cli refresh-promotions
