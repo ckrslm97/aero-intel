@@ -1,5 +1,5 @@
 """Shared prompt templates for the live LLM providers (Ollama, OpenAI-compatible)."""
-from app.taxonomy import CATEGORY_SLUGS, SUBCATEGORY_KEYWORDS
+from app.taxonomy import CATEGORY_SLUGS, RISK_SEVERITIES, RISK_TYPE_SLUGS, SUBCATEGORY_KEYWORDS
 
 # Single source of truth for the taxonomy lives in app/taxonomy.py -- both the
 # heuristic engine and these live-provider prompts read from it so they can
@@ -94,6 +94,53 @@ def entities_prompt(title: str, content: str) -> str:
         'objects with fields "entity_type" (airline|airport|country), "name", and '
         '"code" (IATA code or null). Only include entities clearly mentioned. '
         "Respond with ONLY a valid JSON array, no explanation, no markdown fences.\n\n"
+        f"Title: {title}\nContent: {content[:1500]}\n\nJSON:"
+    )
+
+
+VALID_RISK_TYPES = list(RISK_TYPE_SLUGS)
+VALID_RISK_SEVERITIES = list(RISK_SEVERITIES)
+
+
+def risk_prompt(title: str, content: str) -> str:
+    """Risk Radarı classification: which real-world hazard, if any, this
+    article reports.
+
+    Two things are load-bearing in the wording. First, null is stated as the
+    expected answer -- an aviation wire is overwhelmingly not disaster
+    reporting, and a model asked "which of these nine" without a way out will
+    pick one for a fare-war story. Second, the metaphor carve-out is explicit,
+    because "fare war", "perfect storm" and "under fire" are exactly the
+    phrasings this feed is full of; the keyword fallback in
+    app/llm/heuristic.py masks the same idioms for the same reason.
+
+    Whatever comes back is still validated against the closed taxonomy by the
+    caller (app.taxonomy.is_valid_risk_type) -- this prompt is a request, not a
+    guarantee.
+    """
+    options = ", ".join(VALID_RISK_TYPES)
+    severities = ", ".join(VALID_RISK_SEVERITIES)
+    return (
+        "You classify news articles for a natural-disaster and conflict radar.\n"
+        f"If this article reports a REAL-WORLD hazard event, pick exactly one type from: {options}.\n"
+        'If it does not, set "risk_type" to null. Null is the correct answer for most '
+        "aviation business news.\n\n"
+        "Rules:\n"
+        '- Figurative language is NOT an event. "fare war", "price war", "trade war", '
+        '"perfect storm", "under fire", "political earthquake", "a flood of bookings" '
+        'and "heart attack" all mean risk_type null.\n'
+        "- An aircraft fire, engine fire or cabin fire is an aviation safety incident, "
+        'NOT "wildfire". Only wildland/forest/bush fires count.\n'
+        "- A pilot or cabin-crew strike is a labour dispute, NOT \"unrest\". Only civil "
+        "riots, violent or anti-government protests count.\n"
+        "- A cyber attack is not \"attack\"; this radar covers physical events.\n"
+        f'- "severity" is one of: {severities}. Use "high" for loss of life or '
+        'destruction, "medium" for injuries, evacuation or damage, "low" otherwise.\n'
+        '- "country" and "city" are where the EVENT happened (English names), or null '
+        "if the article does not say.\n\n"
+        "Respond with ONLY a valid JSON object, no explanation, no markdown fences:\n"
+        '{"risk_type": <one of the types above or null>, "severity": <severity or null>, '
+        '"country": <string or null>, "city": <string or null>}\n\n'
         f"Title: {title}\nContent: {content[:1500]}\n\nJSON:"
     )
 

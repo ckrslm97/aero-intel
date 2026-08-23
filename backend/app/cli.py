@@ -113,6 +113,17 @@ async def _translate_backlog(limit: int) -> None:
         print(f"Translated {translated} previously-untranslated articles")
 
 
+async def _backfill_risks(limit: int | None) -> None:
+    from app.pipeline.enrich import backfill_risk_classification
+
+    async with AsyncSessionLocal() as db:
+        result = await backfill_risk_classification(db, limit=limit)
+        print(
+            f"Scanned {result['scanned']} articles: {result['classified']} classified "
+            f"as risk events, {result['cleared']} stale classifications cleared"
+        )
+
+
 async def _seed_events() -> None:
     from app.ingest.events_seed import seed_events
 
@@ -304,6 +315,7 @@ def main() -> None:
             "re-enrich",
             "reclassify",
             "backfill-regions",
+            "backfill-risks",
             "build-insight",
             "repair-translations",
             "clean-headlines",
@@ -334,14 +346,15 @@ def main() -> None:
         "--limit",
         type=int,
         # No default, so "not given" is distinguishable from a number: an
-        # absent --limit means "everything" for extract-promotions and
-        # backfill-regions, while translate-backlog needs a real batch size
-        # and supplies its own.
+        # absent --limit means "everything" for extract-promotions,
+        # backfill-regions and backfill-risks, while translate-backlog needs a
+        # real batch size and supplies its own.
         default=None,
         help=(
             "translate-backlog: articles to translate this run (default: 12). "
             "extract-promotions: campaign articles to scan (default: all). "
-            "backfill-regions: articles to walk (default: all)"
+            "backfill-regions: articles to walk (default: all). "
+            "backfill-risks: articles to reclassify (default: all)"
         ),
     )
     args = parser.parse_args()
@@ -358,6 +371,10 @@ def main() -> None:
         asyncio.run(_reclassify())
     elif args.command == "backfill-regions":
         asyncio.run(_backfill_regions(args.limit))
+    elif args.command == "backfill-risks":
+        # An absent --limit means the whole archive: the risk backfill is free,
+        # heuristic-only, and a partial pass would leave the radar half-blind.
+        asyncio.run(_backfill_risks(args.limit))
     elif args.command == "repair-translations":
         asyncio.run(_repair_translations())
     elif args.command == "clean-headlines":

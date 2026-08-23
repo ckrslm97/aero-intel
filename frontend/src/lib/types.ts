@@ -313,3 +313,48 @@ export interface PromotionNewCountOut {
   count: number;
   airline_codes: string[];
 }
+
+/* --- Risk Radarı (backend/app/api/v1/risks.py) --------------------------- */
+
+export interface RiskItem {
+  id: string;
+  headline: string;
+  url: string;
+  source_name: string;
+  published_at: string | null;
+  risk_type: string;
+  risk_family: string;
+  risk_type_label_tr: string;
+  severity: string;
+  country: string | null;
+  city: string | null;
+  region: string | null;
+  /** Published within the last 24h. Computed server-side; rendered as a quiet
+   * text tag, never as a flash -- see risk-radar-client.tsx. */
+  is_fresh: boolean;
+}
+
+export interface RiskSeverityCounts {
+  high: number;
+  medium: number;
+  low: number;
+}
+
+export interface RiskCountry {
+  country: string;
+  region: string | null;
+  count: number;
+  /** high=3, medium=2, low=1, summed server-side. The map, the "Sıcak
+   * Noktalar" ranking and the list all sort by this one number. */
+  score: number;
+  severity_counts: RiskSeverityCounts;
+  items: RiskItem[];
+}
+
+export interface RiskRadarOut {
+  days: number;
+  total: number;
+  countries: RiskCountry[];
+  type_counts: Record<string, number>;
+  family_counts: Record<string, number>;
+}

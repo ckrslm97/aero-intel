@@ -19,17 +19,19 @@ from app.llm.base import EntityMention
 from app.llm.sanitize import clean_translation
 from app.llm.prompts import (
     VALID_CATEGORIES,
+    VALID_RISK_SEVERITIES,
     VALID_SENTIMENTS,
     categorize_prompt,
     entities_prompt,
     headline_prompt,
+    risk_prompt,
     sentiment_prompt,
     subcategorize_prompt,
     summary_prompt,
     translate_pair_prompt,
     translate_prompt,
 )
-from app.taxonomy import SUBCATEGORY_KEYWORDS
+from app.taxonomy import SUBCATEGORY_KEYWORDS, is_valid_risk_type
 
 logger = get_logger(__name__)
 
@@ -187,3 +189,49 @@ class OpenAICompatProvider:
             EntityMention(item["entity_type"], item["name"], item.get("code"))
             for item in data
         ]
+
+    async def classify_risk(self, title: str, content: str) -> dict[str, str | None]:
+        """Risk Radarı classification, validated against the closed taxonomy.
+
+        Every field is checked rather than trusted: a model that answers
+        "hurricane" or "tsunami" (neither is a slug -- storm and, respectively,
+        nothing, are) must write null, not a value the frontend has no icon,
+        label or filter chip for. An unparsable or off-taxonomy answer degrades
+        to all-None, and the caller in app/pipeline/enrich.py then falls back to
+        the keyword heuristic rather than losing the article's classification.
+        """
+        raw = await self._generate(risk_prompt(title, content))
+        try:
+            data = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            logger.warning("risk_classification_unparsable", raw=raw[:200])
+            return {"risk_type": None, "severity": None, "country": None, "city": None}
+        if not isinstance(data, dict):
+            return {"risk_type": None, "severity": None, "country": None, "city": None}
+
+        risk_type = data.get("risk_type")
+        if not is_valid_risk_type(risk_type):
+            # Includes the null case, which is the expected answer most of the
+            # time -- not an error worth logging.
+            if risk_type:
+                logger.info("risk_type_off_taxonomy_discarded", value=str(risk_type)[:40])
+            return {"risk_type": None, "severity": None, "country": None, "city": None}
+
+        severity = data.get("severity")
+        if severity not in VALID_RISK_SEVERITIES:
+            severity = "low"
+
+        def _place(value: object) -> str | None:
+            if not isinstance(value, str):
+                return None
+            cleaned = value.strip()
+            # 80 chars is the column width; anything longer is the model
+            # narrating rather than naming a place.
+            return cleaned[:80] if cleaned and cleaned.lower() != "null" else None
+
+        return {
+            "risk_type": risk_type,
+            "severity": severity,
+            "country": _place(data.get("country")),
+            "city": _place(data.get("city")),
+        }

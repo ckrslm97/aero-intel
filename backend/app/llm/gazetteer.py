@@ -377,3 +377,167 @@ ALIAS_FIRST_TOKENS: frozenset[str] = frozenset(
     alias.split(" ", 1)[0]
     for alias in (*AIRPORTS, *COUNTRY_ALIASES, *AIRLINE_ALIASES)
 )
+
+
+# City (lowercase) -> (canonical city name, country lowercase matching COUNTRIES).
+#
+# Used only by the Risk Radarı classifier to put a city name on an event that a
+# country alone would place too vaguely ("a flood in the United States" is not
+# an operationally useful row). It is deliberately small and hand-checked
+# rather than generated. The bundled airport dataset above knows municipalities,
+# but it only knows cities that have an airport, and a risk event lands wherever
+# it lands -- so this stays the classifier's city vocabulary, and city is null
+# for anything outside it. See app/llm/heuristic.py detect_risk_place().
+#
+# Ambiguous names are omitted on purpose, the same discipline the airline and
+# airport tables above use: Nice, Split, Mobile, Reading, Bath, Frankfurt (the
+# airport alias already covers it), Cordoba and Santiago (two countries each)
+# would each cost more false placements than the coverage is worth. Valencia
+# and San Jose were removed after the production measurement placed a lightning
+# strike at Valencia, VENEZUELA and a Puracé-volcano closure in Colombia both
+# in Spain -- neither country is in COUNTRY_TO_REGION, so country resolution
+# failed and the city alone chose the wrong one. Matching is
+# whole-word and runs over diacritic-folded text, so "Istanbul" also matches
+# "İstanbul".
+RISK_CITY_COUNTRY: dict[str, tuple[str, str]] = {
+    # Turkey
+    "istanbul": ("Istanbul", "turkey"),
+    "ankara": ("Ankara", "turkey"),
+    "izmir": ("Izmir", "turkey"),
+    "antalya": ("Antalya", "turkey"),
+    "adana": ("Adana", "turkey"),
+    "kahramanmaras": ("Kahramanmaras", "turkey"),
+    "hatay": ("Hatay", "turkey"),
+    "gaziantep": ("Gaziantep", "turkey"),
+    "bodrum": ("Bodrum", "turkey"),
+    "mugla": ("Mugla", "turkey"),
+    "canakkale": ("Canakkale", "turkey"),
+    # Europe
+    "london": ("London", "united kingdom"),
+    "manchester": ("Manchester", "united kingdom"),
+    "edinburgh": ("Edinburgh", "united kingdom"),
+    "paris": ("Paris", "france"),
+    "marseille": ("Marseille", "france"),
+    "lyon": ("Lyon", "france"),
+    "berlin": ("Berlin", "germany"),
+    "munich": ("Munich", "germany"),
+    "hamburg": ("Hamburg", "germany"),
+    "madrid": ("Madrid", "spain"),
+    "barcelona": ("Barcelona", "spain"),
+    "seville": ("Seville", "spain"),
+    "rome": ("Rome", "italy"),
+    "milan": ("Milan", "italy"),
+    "naples": ("Naples", "italy"),
+    "catania": ("Catania", "italy"),
+    "amsterdam": ("Amsterdam", "netherlands"),
+    "brussels": ("Brussels", "belgium"),
+    "vienna": ("Vienna", "austria"),
+    "zurich": ("Zurich", "switzerland"),
+    "geneva": ("Geneva", "switzerland"),
+    "lisbon": ("Lisbon", "portugal"),
+    "porto": ("Porto", "portugal"),
+    "athens": ("Athens", "greece"),
+    "thessaloniki": ("Thessaloniki", "greece"),
+    "rhodes": ("Rhodes", "greece"),
+    "crete": ("Crete", "greece"),
+    "warsaw": ("Warsaw", "poland"),
+    "krakow": ("Krakow", "poland"),
+    "stockholm": ("Stockholm", "sweden"),
+    "oslo": ("Oslo", "norway"),
+    "copenhagen": ("Copenhagen", "denmark"),
+    "helsinki": ("Helsinki", "finland"),
+    "dublin": ("Dublin", "ireland"),
+    "reykjavik": ("Reykjavik", "iceland"),
+    "moscow": ("Moscow", "russia"),
+    "st petersburg": ("St Petersburg", "russia"),
+    # Middle East
+    "dubai": ("Dubai", "united arab emirates"),
+    "abu dhabi": ("Abu Dhabi", "united arab emirates"),
+    "doha": ("Doha", "qatar"),
+    "riyadh": ("Riyadh", "saudi arabia"),
+    "jeddah": ("Jeddah", "saudi arabia"),
+    "tel aviv": ("Tel Aviv", "israel"),
+    "jerusalem": ("Jerusalem", "israel"),
+    # Africa
+    "cairo": ("Cairo", "egypt"),
+    "alexandria": ("Alexandria", "egypt"),
+    "sharm el sheikh": ("Sharm El Sheikh", "egypt"),
+    "hurghada": ("Hurghada", "egypt"),
+    "johannesburg": ("Johannesburg", "south africa"),
+    "cape town": ("Cape Town", "south africa"),
+    "durban": ("Durban", "south africa"),
+    "lagos": ("Lagos", "nigeria"),
+    "abuja": ("Abuja", "nigeria"),
+    "nairobi": ("Nairobi", "kenya"),
+    "casablanca": ("Casablanca", "morocco"),
+    "marrakech": ("Marrakech", "morocco"),
+    # Americas
+    "new york": ("New York", "united states"),
+    "los angeles": ("Los Angeles", "united states"),
+    "chicago": ("Chicago", "united states"),
+    "miami": ("Miami", "united states"),
+    "houston": ("Houston", "united states"),
+    "dallas": ("Dallas", "united states"),
+    "san francisco": ("San Francisco", "united states"),
+    "seattle": ("Seattle", "united states"),
+    "boston": ("Boston", "united states"),
+    "denver": ("Denver", "united states"),
+    "atlanta": ("Atlanta", "united states"),
+    "new orleans": ("New Orleans", "united states"),
+    "toronto": ("Toronto", "canada"),
+    "vancouver": ("Vancouver", "canada"),
+    "montreal": ("Montreal", "canada"),
+    "calgary": ("Calgary", "canada"),
+    "mexico city": ("Mexico City", "mexico"),
+    "cancun": ("Cancun", "mexico"),
+    "acapulco": ("Acapulco", "mexico"),
+    "panama city": ("Panama City", "panama"),
+    "sao paulo": ("Sao Paulo", "brazil"),
+    "rio de janeiro": ("Rio de Janeiro", "brazil"),
+    "brasilia": ("Brasilia", "brazil"),
+    "porto alegre": ("Porto Alegre", "brazil"),
+    "buenos aires": ("Buenos Aires", "argentina"),
+    "bogota": ("Bogota", "colombia"),
+    "medellin": ("Medellin", "colombia"),
+    "lima": ("Lima", "peru"),
+    "quito": ("Quito", "ecuador"),
+    "guayaquil": ("Guayaquil", "ecuador"),
+    # Asia-Pacific
+    "beijing": ("Beijing", "china"),
+    "shanghai": ("Shanghai", "china"),
+    "guangzhou": ("Guangzhou", "china"),
+    "shenzhen": ("Shenzhen", "china"),
+    "hong kong": ("Hong Kong", "china"),
+    "tokyo": ("Tokyo", "japan"),
+    "osaka": ("Osaka", "japan"),
+    "sendai": ("Sendai", "japan"),
+    "fukuoka": ("Fukuoka", "japan"),
+    "seoul": ("Seoul", "south korea"),
+    "busan": ("Busan", "south korea"),
+    "delhi": ("Delhi", "india"),
+    "new delhi": ("New Delhi", "india"),
+    "mumbai": ("Mumbai", "india"),
+    "chennai": ("Chennai", "india"),
+    "kolkata": ("Kolkata", "india"),
+    "bengaluru": ("Bengaluru", "india"),
+    "jakarta": ("Jakarta", "indonesia"),
+    "bali": ("Bali", "indonesia"),
+    "denpasar": ("Denpasar", "indonesia"),
+    "surabaya": ("Surabaya", "indonesia"),
+    "bangkok": ("Bangkok", "thailand"),
+    "phuket": ("Phuket", "thailand"),
+    "chiang mai": ("Chiang Mai", "thailand"),
+    "hanoi": ("Hanoi", "vietnam"),
+    "ho chi minh city": ("Ho Chi Minh City", "vietnam"),
+    "da nang": ("Da Nang", "vietnam"),
+    "manila": ("Manila", "philippines"),
+    "cebu": ("Cebu", "philippines"),
+    "sydney": ("Sydney", "australia"),
+    "melbourne": ("Melbourne", "australia"),
+    "brisbane": ("Brisbane", "australia"),
+    "perth": ("Perth", "australia"),
+    "adelaide": ("Adelaide", "australia"),
+    "auckland": ("Auckland", "new zealand"),
+    "christchurch": ("Christchurch", "new zealand"),
+    "wellington": ("Wellington", "new zealand"),
+}
