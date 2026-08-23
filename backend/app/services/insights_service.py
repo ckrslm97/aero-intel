@@ -13,7 +13,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer, selectinload
 
 from app.core.config import get_settings
+from app.data import airport, country_name
 from app.core.logging import get_logger
+from app.hubs import HUBS
 from app.models.article import Article, ArticleEnrichment
 from app.models.entity import ArticleEntity, Entity
 from app.models.insight import InsightDigest
@@ -94,6 +96,43 @@ async def airline_momentum(db: AsyncSession, window_days: int = 7, limit: int = 
     return movers[:limit]
 
 
+# How many airports a single route signal may claim. A launch announcement
+# names its destination and usually its origin; anything past the third is
+# almost always a comparison ("unlike its LHR and CDG services"), and on the
+# map every extra code becomes a marker a reader will read as a destination.
+MAX_SIGNAL_AIRPORTS = 3
+
+
+def _destination_airports(airports: list[dict], airlines: list[str]) -> list[dict]:
+    """The airports a signal is actually *about*.
+
+    Two corrections to the raw extraction, both aimed at the map:
+
+    * A carrier's own hub is the origin, not a new destination. An article
+      naming TK and IST is not announcing a new route to Istanbul. The
+      carrier->hub mapping is derived from `app/hubs.py`, which already
+      records which carriers are based at each hub, rather than restated
+      here where the two could drift.
+    * Order is text order, so the first codes are the ones the headline
+      named; comparisons trail. Keeping the first few is a better guess at
+      "the destination" than keeping all of them.
+
+    Origins are only dropped when something survives them -- a signal whose
+    every airport is a hub still shows those, because an empty list would
+    silently erase the story from the map.
+    """
+    if not airports:
+        return []
+    codes = {code.upper() for code in airlines if code}
+    origins = {
+        hub.code
+        for hub in HUBS
+        if any(carrier.upper() in codes for carrier in hub.carriers)
+    }
+    destinations = [a for a in airports if a["code"] not in origins]
+    return (destinations or airports)[:MAX_SIGNAL_AIRPORTS]
+
+
 async def new_route_signals(
     db: AsyncSession, days: int = 30, per_region: int = 6, max_articles: int = 120
 ) -> list[dict]:
@@ -125,22 +164,55 @@ async def new_route_signals(
 
     article_ids = [article.id for article, _ in rows]
     airlines_by_article: dict = {}
+    airports_by_article: dict = {}
     if article_ids:
-        airline_rows = (
+        # Airlines and airports in one round trip rather than two: the page
+        # needs both for every signal ("which carrier, into which airport"),
+        # and they live in the same join.
+        entity_rows = (
             await db.execute(
-                select(ArticleEntity.article_id, Entity.code, Entity.name)
+                select(
+                    ArticleEntity.article_id,
+                    Entity.entity_type,
+                    Entity.code,
+                    Entity.name,
+                )
                 .join(Entity, Entity.id == ArticleEntity.entity_id)
                 .where(
                     ArticleEntity.article_id.in_(article_ids),
-                    Entity.entity_type == "airline",
+                    Entity.entity_type.in_(("airline", "airport")),
                 )
             )
         ).all()
-        for article_id, code, name in airline_rows:
-            airlines_by_article.setdefault(article_id, []).append(code or name)
+        for article_id, entity_type, code, name in entity_rows:
+            if entity_type == "airline":
+                airlines_by_article.setdefault(article_id, []).append(code or name)
+                continue
+            # Coordinates and city come from the bundled reference data
+            # (app/data), not from the entity row -- the entity table stores
+            # only what the extractor saw in the text. An airport the dataset
+            # does not know is dropped rather than emitted without a position:
+            # the map would have nowhere to put it.
+            entry = airport(code)
+            if entry is None:
+                continue
+            seen = airports_by_article.setdefault(article_id, [])
+            if any(a["code"] == entry.iata for a in seen):
+                continue
+            seen.append(
+                {
+                    "code": entry.iata,
+                    "name": entry.name,
+                    "city": entry.city or entry.name,
+                    "country": country_name(entry.country) or entry.country,
+                    "lat": entry.lat,
+                    "lon": entry.lon,
+                }
+            )
 
     grouped: dict[str | None, list[dict]] = {}
     for article, enrichment in rows:
+        airlines = airlines_by_article.get(article.id, [])
         grouped.setdefault(enrichment.region, []).append(
             {
                 "id": str(article.id),
@@ -150,7 +222,10 @@ async def new_route_signals(
                 "published_at": (
                     article.published_at.isoformat() if article.published_at else None
                 ),
-                "airlines": airlines_by_article.get(article.id, []),
+                "airlines": airlines,
+                "airports": _destination_airports(
+                    airports_by_article.get(article.id, []), airlines
+                ),
             }
         )
     return [

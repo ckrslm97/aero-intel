@@ -82,6 +82,18 @@ async def _reclassify() -> None:
         )
 
 
+async def _backfill_regions(limit: int | None) -> None:
+    from app.pipeline.enrich import backfill_regions
+
+    async with AsyncSessionLocal() as db:
+        result = await backfill_regions(db, limit=limit)
+        print(
+            f"Scanned {result['scanned']} enriched articles: "
+            f"{result['resolved']} previously-unresolved regions filled in, "
+            f"{result['links_added']} airport links added"
+        )
+
+
 async def _repair_translations() -> None:
     from app.pipeline.enrich import repair_corrupt_translations
 
@@ -291,6 +303,7 @@ def main() -> None:
             "full-cycle",
             "re-enrich",
             "reclassify",
+            "backfill-regions",
             "build-insight",
             "repair-translations",
             "clean-headlines",
@@ -320,13 +333,15 @@ def main() -> None:
     parser.add_argument(
         "--limit",
         type=int,
-        # No default, so "not given" is distinguishable from a number: for
-        # extract-promotions an absent --limit means "every campaign article",
-        # while translate-backlog needs a real batch size and supplies its own.
+        # No default, so "not given" is distinguishable from a number: an
+        # absent --limit means "everything" for extract-promotions and
+        # backfill-regions, while translate-backlog needs a real batch size
+        # and supplies its own.
         default=None,
         help=(
             "translate-backlog: articles to translate this run (default: 12). "
-            "extract-promotions: campaign articles to scan (default: all)"
+            "extract-promotions: campaign articles to scan (default: all). "
+            "backfill-regions: articles to walk (default: all)"
         ),
     )
     args = parser.parse_args()
@@ -341,6 +356,8 @@ def main() -> None:
         asyncio.run(_build_insight())
     elif args.command == "reclassify":
         asyncio.run(_reclassify())
+    elif args.command == "backfill-regions":
+        asyncio.run(_backfill_regions(args.limit))
     elif args.command == "repair-translations":
         asyncio.run(_repair_translations())
     elif args.command == "clean-headlines":

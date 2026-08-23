@@ -421,6 +421,104 @@ async def reclassify_articles(db: AsyncSession, batch_size: int = 50) -> dict[st
     }
 
 
+async def backfill_regions(
+    db: AsyncSession, limit: int | None = None, batch_size: int = 50
+) -> dict[str, int]:
+    """Resolve the regions the old gazetteer could not, and link the airports
+    it never knew about.
+
+    The archive was enriched against a gazetteer that knew 19 airport codes, so
+    every route story naming a city or a secondary airport -- which is what
+    route stories name -- stored `region = NULL` for good. The tables are now
+    ~3.2k airports and 243 countries; this walks the stored articles and lets
+    them try again.
+
+    Deliberately additive, which is what separates it from `reclassify`:
+
+      * a region is only *filled in*, never overwritten. A row that already has
+        a region was assigned it by an extractor that saw the same text, and
+        churning the archive's existing answers is a different decision from
+        answering the ones it left blank.
+      * airport links are only added. `reclassify` deletes an article's entity
+        links and rebuilds them, which is right when the whole derivation is
+        being redone and wrong here -- it would drop entity types this pass
+        does not write.
+    """
+    from app.llm.heuristic import HeuristicProvider
+
+    provider = HeuristicProvider()
+    entity_repo = EntityRepository(db)
+
+    query = (
+        select(Article)
+        .options(selectinload(Article.enrichment))
+        .where(Article.is_duplicate.is_(False), Article.status == "enriched")
+        .order_by(Article.published_at.desc().nulls_last())
+    )
+    if limit is not None:
+        query = query.limit(limit)
+    articles = list((await db.execute(query)).scalars().all())
+
+    # Every existing link for these articles in one query -- the alternative is
+    # a SELECT per article per airport.
+    existing_links: set[tuple] = set()
+    if articles:
+        article_ids = [article.id for article in articles]
+        for chunk_start in range(0, len(article_ids), 500):
+            chunk = article_ids[chunk_start : chunk_start + 500]
+            rows = await db.execute(
+                select(ArticleEntity.article_id, ArticleEntity.entity_id).where(
+                    ArticleEntity.article_id.in_(chunk)
+                )
+            )
+            existing_links.update(rows.all())
+
+    scanned = resolved = links_added = 0
+    for index, article in enumerate(articles, start=1):
+        enrichment = article.enrichment
+        if enrichment is None:
+            continue
+        scanned += 1
+
+        entities = await provider.extract_entities(article.title, article.raw_content)
+
+        for mention in entities:
+            if mention.entity_type != "airport":
+                continue
+            entity = await entity_repo.get_or_create(
+                mention.entity_type, mention.name, mention.code
+            )
+            if (article.id, entity.id) in existing_links:
+                continue
+            db.add(ArticleEntity(article_id=article.id, entity_id=entity.id))
+            existing_links.add((article.id, entity.id))
+            links_added += 1
+
+        if enrichment.region is None:
+            region = detect_region(entities)
+            if region:
+                enrichment.region = region
+                resolved += 1
+                # events split "general"/"regional" on whether a region is
+                # known, so a newly-resolved region has to move that too.
+                if enrichment.category == "events" and enrichment.subcategory == "general":
+                    enrichment.subcategory = "regional"
+
+        # Periodic commits, same reason as reclassify_articles: one end-of-run
+        # commit over a remote pooled DB loses whole batches to idle timeouts.
+        if index % batch_size == 0:
+            await db.commit()
+
+    await db.commit()
+    logger.info(
+        "backfill_regions_complete",
+        scanned=scanned,
+        resolved=resolved,
+        links_added=links_added,
+    )
+    return {"scanned": scanned, "resolved": resolved, "links_added": links_added}
+
+
 async def repair_corrupt_translations(db: AsyncSession) -> dict[str, int]:
     """Fix stored translations where the model wrote past the translation.
 
