@@ -3,7 +3,7 @@
 import { motion, useReducedMotion } from "framer-motion";
 
 import { chipPop, chipStagger, reduceVariants } from "@/lib/motion";
-import { CATEGORIES, categoryVar } from "@/lib/taxonomy";
+import { CATEGORIES, CATEGORY_BY_SLUG, categoryVar, type CategoryDef } from "@/lib/taxonomy";
 import { cn } from "@/lib/utils";
 
 const PINNED_DEFAULT = "revenue_management";
@@ -18,12 +18,27 @@ export function orderCategories(pinned: string | null) {
   return head ? [head, ...rest] : rest;
 }
 
+/** The row's chips: an explicit `slugs` list wins outright and is rendered in
+ * exactly the order given (the Gazete's allow-list is a deliberate priority
+ * ranking, so alphabetising it -- or re-hoisting `pinned` to the front -- would
+ * throw that ranking away). Without `slugs` the row keeps its historical
+ * behaviour: every category, pinned slug first, rest alphabetical. */
+function rowCategories(slugs: readonly string[] | undefined, pinned: string | null): CategoryDef[] {
+  if (!slugs) return orderCategories(pinned);
+  return slugs.map((slug) => CATEGORY_BY_SLUG[slug]).filter(Boolean);
+}
+
 export interface CategoryChipRowProps {
   /** Selected slug, or null when "Tümü" is active (requires `includeAll`). */
   value: string | null;
   onChange: (slug: string | null) => void;
-  /** Slug rendered first in the row. Defaults to Gelir Yönetimi. */
+  /** Slug rendered first in the row. Defaults to Gelir Yönetimi. Ignored for
+   * ordering when `slugs` is supplied (that list is already ordered); it then
+   * only selects which chip `focusStyling` colours. */
   pinned?: string | null;
+  /** Restrict the row to these slugs, in this order -- the Gazete's visible
+   * categories. Omit to render the whole taxonomy (Öneriler's behaviour). */
+  slugs?: readonly string[];
   /** Render a leading "Tümü" chip that clears the filter. */
   includeAll?: boolean;
   /** Keep the pinned category in its own colour even when inactive --
@@ -43,6 +58,7 @@ export function CategoryChipRow({
   value,
   onChange,
   pinned = PINNED_DEFAULT,
+  slugs,
   includeAll = false,
   focusStyling = false,
   counts,
@@ -51,7 +67,7 @@ export function CategoryChipRow({
   className,
 }: CategoryChipRowProps) {
   const reduceMotion = useReducedMotion();
-  const ordered = orderCategories(pinned);
+  const ordered = rowCategories(slugs, pinned);
 
   const stagger = reduceMotion ? reduceVariants(chipStagger) : chipStagger;
   const pop = reduceMotion ? reduceVariants(chipPop) : chipPop;

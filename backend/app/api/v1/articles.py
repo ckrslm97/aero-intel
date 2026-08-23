@@ -43,6 +43,30 @@ async def list_articles(
     translated_only: bool = Query(
         False, description="Only articles with a real Turkish translation -- Gazete's default"
     ),
+    exclude_categories: list[str] | None = Query(
+        None,
+        description=(
+            "Category slugs to leave out, repeated once per value. The Gazete "
+            "drops safety/regulatory/sustainability/labor this way; every other "
+            "caller (archive, search, hubs, the per-date edition) omits it and "
+            "keeps full coverage. Nothing is deleted -- this is query-time only"
+        ),
+    ),
+    min_importance: float | None = Query(
+        None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Floor on the FOCUS-WEIGHTED importance score -- the Gazete's "
+            "'fewer, more critical stories' filter. The compared value is "
+            "enrichment.importance_score plus the category's editorial bonus "
+            "(app.taxonomy.FOCUS_BONUS, the same weighting the daily edition's "
+            "front page ranks by), NOT the raw column: raw importance rewards "
+            "corroboration, so a flat floor on it culls single-sourced revenue "
+            "management and events stories hardest -- the exact opposite of "
+            "this desk's priority"
+        ),
+    ),
     response: Response = None,  # type: ignore[assignment]  -- FastAPI injects it
     db: AsyncSession = Depends(get_db),
 ) -> ArticleListOut:
@@ -53,6 +77,7 @@ async def list_articles(
         limit=limit, offset=offset, category=category, subcategory=subcategory,
         region=region, since=since, airline=airline, on_date=date,
         country=country, airport=airport, translated_only=translated_only,
+        exclude_categories=exclude_categories, min_importance=min_importance,
     )
     # Filtered total (same clause as the list) so "load more" knows when to stop.
     # A short page IS the end of the result set, so the count query -- the more
@@ -64,7 +89,8 @@ async def list_articles(
         total = await repo.count(
             category=category, subcategory=subcategory, region=region, since=since,
             airline=airline, on_date=date, country=country, airport=airport,
-            translated_only=translated_only,
+            translated_only=translated_only, exclude_categories=exclude_categories,
+            min_importance=min_importance,
         )
     return ArticleListOut(total=total, items=[ArticleOut.model_validate(a) for a in items])
 
@@ -75,14 +101,33 @@ async def article_counts(
     translated_only: bool = Query(
         False, description="Only articles with a real Turkish translation -- Gazete's default"
     ),
+    exclude_categories: list[str] | None = Query(
+        None, description="Category slugs to leave out -- mirrors the list endpoint"
+    ),
+    min_importance: float | None = Query(
+        None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Focus-weighted importance floor -- mirrors the list endpoint, "
+            "same FOCUS_BONUS weighting, so a badge counts what the list shows"
+        ),
+    ),
     response: Response = None,  # type: ignore[assignment]
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, int]:
-    """Article count per category, for the newspaper's tab badges."""
+    """Article count per category, for the newspaper's tab badges.
+
+    Takes the same filters as the list endpoint on purpose: a badge that counts
+    rows the filtered list would never render is a badge that lies.
+    """
     public_cache(response, AGGREGATES)
     since = datetime.now(timezone.utc) - timedelta(days=days) if days else None
     return await ArticleRepository(db).count_by_category(
-        since=since, translated_only=translated_only
+        since=since,
+        translated_only=translated_only,
+        exclude_categories=exclude_categories,
+        min_importance=min_importance,
     )
 
 

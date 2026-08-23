@@ -205,6 +205,60 @@ FREE_RSS_SOURCES: list[SourceSeed] = [
         "https://news.google.com/rss/search?q=%22Istanbul%20Airport%22%20OR%20%22Sabiha%20G%C3%B6k%C3%A7en%22%20OR%20%22DHM%C4%B0%22&hl=tr&gl=TR&ceid=TR:tr",
         "rss", "airport", 0.5,
     ),
+    # ---------------------------------------------------------------------
+    # Round-8: Turkish-language desks. Until now the only TR-native input was
+    # one Google News radar, so domestic stories arrived second-hand (or in
+    # English, days late) and the translation stage had nothing to do. Every
+    # URL below was fetched live at build time and kept only on HTTP 200 +
+    # real feed XML + at least one dated item; the failures are written up in
+    # the DROPPED_CANDIDATES block below.
+    # ---------------------------------------------------------------------
+    # Dedicated aviation trade press.
+    # Havayolu 101 is the pick of the set: it runs actual revenue-management
+    # analysis (yield, load factor, fare structure) rather than reprinted
+    # press releases, which is why it outranks every other TR source here.
+    SourceSeed("Havayolu 101", "https://www.havayolu101.com/feed/", "rss", "other", 0.75),
+    SourceSeed("AirlineHaber", "https://www.airlinehaber.com/feed/", "rss", "other", 0.65),
+    SourceSeed("AirTürkHaber", "https://www.airturkhaber.com/feed/", "rss", "other", 0.6),
+    # NOTE: this is the airporthaber2.com mirror on purpose. The main
+    # airporthaber.com domain appears to geo-block non-Turkish egress IPs --
+    # connection refused on every attempt from our egress, while the mirror
+    # serves the same publication fine. If ingestion from this source ever
+    # stops, re-test the primary domain before assuming the desk went dark.
+    # Highest-volume TR aviation desk at ~10-15 items/day.
+    SourceSeed("AirportHaber", "https://www.airporthaber2.com/rss/", "rss", "other", 0.6),
+    # Press-release republisher, so trust sits low -- it rewrites carrier PR
+    # rather than reporting it out. Kept anyway because it is the earliest and
+    # most reliable TR signal for airline CAMPAIGN announcements (kampanya /
+    # indirim), which is exactly what the promo tracking needs and what the
+    # bot-walled carrier offer pages cannot give us.
+    SourceSeed("Air News Times", "https://www.airnewstimes.com/feed/", "rss", "other", 0.45),
+    # NOTE: this feed declares encoding="windows-1254", not UTF-8, and serves
+    # it as `text/xml` with no charset parameter. It is safe: RssSourceAdapter
+    # hands feedparser `response.content` (bytes), and feedparser reads the
+    # charset off the XML declaration -- verified end to end, Turkish
+    # characters land correctly ("THY TEKNİK'TEN YENİ HANGAR"). See the
+    # matching comment in app/ingest/rss.py; that bytes-not-str detail is the
+    # only thing standing between this source and mojibake.
+    SourceSeed("Airkule", "https://www.airkule.com/sondakika.xml", "rss", "other", 0.55),
+    # Mixed civil/defence, roughly weekly -- lowest priority of the TR set.
+    SourceSeed("Kokpit.Aero", "https://kokpit.aero/feed/", "rss", "other", 0.55),
+    # Adjacent desks: not aviation trade press, but the best TR sources for the
+    # Etkinlik beat (congresses, festivals, sports) and for the demand-side
+    # context a revenue-management desk reads underneath a fare move.
+    # AA is a national wire -- authoritative, hence the high trust -- but this
+    # is the general *economy* feed, so most items are not aviation at all. It
+    # is not capped by AGGREGATOR_ITEM_CAP (that only triggers on
+    # news.google.com URLs) and at 30 items/run it does not need to be; the
+    # relevance gate in the enrichment pipeline is the right filter here,
+    # since the problem is topicality, not volume.
+    SourceSeed(
+        "Anadolu Ajansı · Ekonomi", "https://www.aa.com.tr/tr/rss/default?cat=ekonomi",
+        "rss", "org", 0.85,
+    ),
+    SourceSeed("Turizm Günlüğü", "https://www.turizmgunlugu.com/feed/", "rss", "other", 0.6),
+    # Small volume, analytical -- demand and market-shift pieces.
+    SourceSeed("Turizm DataBank", "https://www.turizmdatabank.com/feed/", "rss", "other", 0.6),
 ]
 
 # Documented drops -- candidates fetched at round-7 build time that failed the
@@ -268,6 +322,23 @@ FREE_RSS_SOURCES: list[SourceSeed] = [
 #   r/flying, r/travel    .../.rss                                          429 on every retry; Reddit
 #                                                                           rate-limits our egress IP, so
 #                                                                           only two subs were kept.
+# Turkish candidates (round 8). Note the first two: both return HTTP 200 and
+# perfectly valid RSS, so a reachability check passes and only the item DATES
+# reveal that nobody is home. Check freshness, not just status codes.
+#   havayolufirsatlari.com  feeds.feedburner.com/havayolufirsatlari  200, 100 valid items, newest
+#                                                                   2025-02-20 -- abandoned. The
+#                                                                   content is ideal (TR promo/fare
+#                                                                   deals); the desk is dead. A trap.
+#   tayyareci.com         https://www.tayyareci.com/feed/           200, valid, but 2 items and
+#                                                                   newest 2024-08-27 -- an archive
+#   aviationturkey.com    /feed/, /rss, /feed.xml                   200 + text/html on every path
+#                                                                   (React SPA shell, 0 entries)
+#   DHMİ                  no feed published (HTML newsroom only)
+#   SHGM                  https://web.shgm.gov.tr/tr/rss            200 but the BODY is a 404 page
+#                                                                   (text/html) -- status code lies
+#   THY / Pegasus / AJet  no RSS at all. Their campaign pages are plain HTML, so the campaign
+#                         tracking feature will have to scrape them directly -- Air News Times
+#                         above is the interim proxy for TR campaign announcements.
 # Off-topic / too broad to be worth the ingest budget: Economist Business,
 # BBC Business, MercoPress, Flying Magazine, Rotor & Wing, Aerospace Testing
 # International, Aerospace Manufacturing & Design -- all returned valid feeds
