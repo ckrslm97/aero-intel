@@ -1,56 +1,37 @@
 "use client";
 
-import ReactECharts from "echarts-for-react";
-import { AnimatePresence, useReducedMotion } from "framer-motion";
-import { ExternalLink, Lightbulb } from "lucide-react";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import { ChevronDown, CircleDashed, ExternalLink, Lightbulb, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { AirlineLogo } from "@/components/airline-logo";
-import { MotionItem, MotionList } from "@/components/motion/motion-list";
+import { MotionItem, MotionList, MotionRail } from "@/components/motion/motion-list";
+import { RouteSignalMap } from "@/components/route-signal-map";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiFetch } from "@/lib/api";
-import { baseOption, useChartTheme } from "@/lib/chart-theme";
+import { useChartTheme } from "@/lib/chart-theme";
+import { collapseSection, reduceVariants, useMeasuredHeight } from "@/lib/motion";
 import { airlineTabs, worldRegions } from "@/lib/nav";
+import type { InsightsOut, RouteSignalArticle } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-interface RouteSignalArticle {
-  id: string;
-  headline: string;
-  url: string;
-  source_name: string;
-  published_at: string | null;
-  airlines: string[];
-}
-
-interface InsightsOut {
-  airline_momentum: {
-    code: string;
-    name: string;
-    current: number;
-    previous: number;
-    delta: number;
-  }[];
-  new_route_signals: {
-    region: string | null;
-    count: number;
-    articles: RouteSignalArticle[];
-  }[];
-  sentiment_by_category: {
-    category: string;
-    positive: number;
-    neutral: number;
-    negative: number;
-  }[];
-  digest: { date: string; body: string; provider: string } | null;
-}
-
-/** One route signal, flattened out of its region group so the list can be
- * filtered as a single set. */
+/** One route signal, flattened out of its region group so the whole set can be
+ * filtered and re-grouped as a single list. */
 interface FlatSignal extends RouteSignalArticle {
   region: string | null;
-  /** Index of the source region group, so a card's edge light lands on the
-   * same `theme.series` hue as its slice in the region donut above. */
-  colorIndex: number;
+}
+
+/** A ledger section: every signal naming one carrier. A story naming two
+ * carriers is filed under both -- that is what the story is about, and picking
+ * one would silently drop the other from its own section. Section counts
+ * therefore sum to more than the signal total. */
+interface CarrierGroup {
+  /** null is the "no carrier named" group, not a carrier. */
+  code: string | null;
+  name: string;
+  /** The section's approach light and its cards' edge light. */
+  color: string;
+  signals: FlatSignal[];
 }
 
 const REGION_NAME: Record<string, string> = Object.fromEntries(
@@ -60,6 +41,14 @@ const REGION_NAME: Record<string, string> = Object.fromEntries(
 const AIRLINE_NAME: Record<string, string> = Object.fromEntries(
   airlineTabs.map((a) => [a.code, a.name]),
 );
+
+const AIRLINE_COLOR: Record<string, string> = Object.fromEntries(
+  airlineTabs.map((a) => [a.code, a.color]),
+);
+
+/** The deliberately no-identity gray, for the group that has no identity to
+ * show and for the residue. */
+const NO_IDENTITY = "var(--category-general)";
 
 function formatSignalDate(iso: string | null): string | null {
   if (!iso) return null;
@@ -91,7 +80,13 @@ export function InsightsClient() {
   // construction (see backend/app/services/insights_service.py), so a
   // category filter would have exactly one non-empty value.
   const [signalRegion, setSignalRegion] = useState<string | null>(null);
+  // Shared with the map's carrier chip row: one selection, two affordances.
+  // Picking a carrier there draws its arcs *and* narrows the ledger, which is
+  // the same thing the ledger's own Havayolu row does.
   const [signalAirline, setSignalAirline] = useState<string | null>(null);
+  // Set by clicking a marker on the map.
+  const [signalCity, setSignalCity] = useState<string | null>(null);
+  const [residueOpen, setResidueOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -109,13 +104,8 @@ export function InsightsClient() {
 
   const flatSignals = useMemo<FlatSignal[]>(
     () =>
-      (data?.new_route_signals ?? []).flatMap((group, groupIndex) =>
-        group.articles.map((article) => ({
-          ...article,
-          region: group.region,
-          // Same array, same order that drives regionOption's pie slices.
-          colorIndex: groupIndex,
-        })),
+      (data?.new_route_signals ?? []).flatMap((group) =>
+        group.articles.map((article) => ({ ...article, region: group.region })),
       ),
     [data],
   );
@@ -125,10 +115,95 @@ export function InsightsClient() {
       flatSignals.filter((signal) => {
         if (signalRegion && signal.region !== signalRegion) return false;
         if (signalAirline && !signal.airlines.includes(signalAirline)) return false;
+        if (signalCity && !signal.airports.some((a) => a.city === signalCity)) return false;
         return true;
       }),
-    [flatSignals, signalRegion, signalAirline],
+    [flatSignals, signalRegion, signalAirline, signalCity],
   );
+
+  /* --- the ledger's two halves -------------------------------------------
+   * A signal that named no airport the reference table knows is not a carrier
+   * story we can place -- it has no city, so it is on no map and in no
+   * geography. Those go to the residue below, whole, rather than being spread
+   * thinly through the carrier sections where they would read as placed.
+   */
+  const placedSignals = useMemo(
+    () => visibleSignals.filter((s) => s.airports.length > 0),
+    [visibleSignals],
+  );
+  const residueSignals = useMemo(
+    () => visibleSignals.filter((s) => s.airports.length === 0),
+    [visibleSignals],
+  );
+
+  const carrierGroups = useMemo<CarrierGroup[]>(() => {
+    const byCarrier = new Map<string | null, FlatSignal[]>();
+    for (const signal of placedSignals) {
+      if (signal.airlines.length === 0) {
+        byCarrier.set(null, [...(byCarrier.get(null) ?? []), signal]);
+        continue;
+      }
+      for (const code of signal.airlines) {
+        byCarrier.set(code, [...(byCarrier.get(code) ?? []), signal]);
+      }
+    }
+
+    // Carriers outside the ten watched tabs have no brand hex on file. They
+    // still get an identity light rather than the no-identity gray -- gray is
+    // reserved for "we know nothing here", and we do know the carrier -- so
+    // they cycle the validated series hues instead of borrowing a brand color
+    // that isn't theirs.
+    let fallbackIndex = 0;
+    const groups: CarrierGroup[] = [];
+    for (const [code, signals] of byCarrier) {
+      if (code === null) continue;
+      groups.push({
+        code,
+        name: AIRLINE_NAME[code] ?? code,
+        color: AIRLINE_COLOR[code] ?? theme.series[fallbackIndex++ % theme.series.length],
+        signals,
+      });
+    }
+    groups.sort((a, b) => b.signals.length - a.signals.length || a.name.localeCompare(b.name, "tr"));
+
+    // Under a carrier filter the ledger shows that carrier's section only. The
+    // co-mentioned carriers' sections would all still be non-empty -- a story
+    // filed under two carriers is filed under both -- but "Havayolu: TK" and a
+    // page still headed by four other carriers reads as a filter that failed,
+    // not as a filter that told the truth about co-mentions.
+    if (signalAirline) return groups.filter((g) => g.code === signalAirline);
+
+    // "No carrier named" is an absence, not a carrier -- it wears the gray and
+    // is pinned last regardless of how many signals it holds.
+    const unnamed = byCarrier.get(null);
+    if (unnamed?.length) {
+      groups.push({
+        code: null,
+        name: "Taşıyıcı belirtilmemiş",
+        color: NO_IDENTITY,
+        signals: unnamed,
+      });
+    }
+    return groups;
+  }, [placedSignals, signalAirline, theme.series]);
+
+  /* --- the stat strip ---------------------------------------------------- */
+  const stats = useMemo(() => {
+    const carriers = new Set<string>();
+    const cities = new Set<string>();
+    let unresolved = 0;
+    for (const signal of flatSignals) {
+      for (const code of signal.airlines) carriers.add(code);
+      for (const airport of signal.airports) cities.add(airport.city);
+      if (signal.airports.length === 0) unresolved += 1;
+    }
+    return {
+      total: flatSignals.length,
+      carriers: carriers.size,
+      cities: cities.size,
+      unresolved,
+    };
+  }, [flatSignals]);
 
   // Only offer chips that can actually match something -- an empty filter row
   // that returns "0 sonuç" for eight of nine regions is noise.
@@ -138,7 +213,9 @@ export function InsightsClient() {
       if (!signal.region) continue;
       counts.set(signal.region, (counts.get(signal.region) ?? 0) + 1);
     }
-    return worldRegions.filter((r) => counts.has(r.slug)).map((r) => ({ ...r, count: counts.get(r.slug)! }));
+    return worldRegions
+      .filter((r) => counts.has(r.slug))
+      .map((r) => ({ ...r, count: counts.get(r.slug)! }));
   }, [flatSignals]);
 
   const airlinesWithSignals = useMemo(() => {
@@ -148,137 +225,6 @@ export function InsightsClient() {
     }
     return airlineTabs.filter((a) => seen.has(a.code));
   }, [flatSignals]);
-
-  // All chart colors now come from lib/chart-theme.ts -- one mirror of
-  // globals.css instead of a ternary per file. The hues are the same
-  // dataviz-validated ones; they are just no longer duplicated here.
-  const { ink, surface } = theme;
-
-  const base = useMemo(
-    () => ({
-      ...baseOption(theme, reduceMotion),
-      grid: { left: 8, right: 24, top: 28, bottom: 8, containLabel: true },
-    }),
-    [theme, reduceMotion],
-  );
-
-  // Where the route news is coming from. Straight off new_route_signals'
-  // region + count -- no extra aggregation.
-  // `slug` rides along so a click on a slice resolves back to the filter value
-  // directly, instead of reverse-parsing the translated display name.
-  //
-  // These three sit above the early returns because they are hooks now: the
-  // donut is the one chart in the app whose option was rebuilt from scratch on
-  // every render (every filter chip click, every hover-driven state change),
-  // which with `notMerge` meant a full ECharts teardown each time.
-  const regionSlices = useMemo(
-    () =>
-      (data?.new_route_signals ?? [])
-        .map((s) => ({
-          name: s.region ? (REGION_NAME[s.region] ?? s.region) : "Bölge belirtilmemiş",
-          value: s.count,
-          slug: s.region,
-        }))
-        .filter((s) => s.value > 0),
-    [data],
-  );
-
-  const totalSignals = useMemo(
-    () => regionSlices.reduce((sum, s) => sum + s.value, 0),
-    [regionSlices],
-  );
-
-  const regionOption = useMemo(
-    () => ({
-      ...base,
-      // Finally uses the app's own --chart-1..5 tokens: this pie was falling
-      // through to ECharts' stock palette, the only chart in the app that was
-      // not on the validated hues at all.
-      color: theme.series,
-      grid: undefined,
-      tooltip: {
-        ...base.tooltip,
-        trigger: "item",
-        formatter: (p: { name: string; value: number; percent: number }) =>
-          `${p.name}<br/>${p.value} sinyal · %${p.percent}`,
-      },
-      legend: {
-        type: "scroll",
-        orient: "vertical",
-        right: 0,
-        top: "middle",
-        textStyle: { color: ink, fontSize: 11 },
-      },
-      // The total, sitting in the ring's hole. `graphic` text rather than a
-      // second (label-only) pie series, so nothing extra enters the chart's
-      // tooltip/legend/hover surface.
-      //
-      // The two texts hang off a positioning group rather than carrying
-      // `left`/`top` each. ECharts places a graphic element by its bounding
-      // box's top-left corner, so a bare text at `left: "36%"` starts at the
-      // pie's center and runs off to the right of it -- and the correction is
-      // half the rendered text width, a pixel amount that a percentage nudge
-      // can only match at one container width. A *group* with
-      // `bounding: "raw"` is measured by its own origin instead of its
-      // children, so `left`/`top` land that origin exactly on the pie's
-      // center ["36%", "52%"], and the children (textAlign/textVerticalAlign
-      // centered, offset only in px) stay centered at every width and for any
-      // digit count.
-      //
-      // Only ever rendered alongside the ring itself: this option object is
-      // consumed inside the `regionSlices.length > 0` branch below.
-      graphic: {
-        elements: [
-          {
-            type: "group",
-            left: "36%",
-            top: "52%",
-            bounding: "raw",
-            children: [
-              {
-                type: "text",
-                x: 0,
-                y: -8,
-                style: {
-                  text: String(totalSignals),
-                  fontSize: 28,
-                  fontWeight: 700,
-                  fill: theme.inkStrong,
-                  textAlign: "center",
-                  textVerticalAlign: "middle",
-                },
-              },
-              {
-                type: "text",
-                x: 0,
-                y: 16,
-                style: {
-                  text: "sinyal",
-                  fontSize: 11,
-                  fill: ink,
-                  textAlign: "center",
-                  textVerticalAlign: "middle",
-                },
-              },
-            ],
-          },
-        ],
-      },
-      series: [
-        {
-          type: "pie",
-          radius: ["48%", "72%"],
-          center: ["36%", "52%"],
-          avoidLabelOverlap: true,
-          itemStyle: { borderColor: surface, borderWidth: 2 },
-          label: { show: false },
-          labelLine: { show: false },
-          data: regionSlices,
-        },
-      ],
-    }),
-    [base, regionSlices, totalSignals, theme, ink, surface],
-  );
 
   if (error) {
     return (
@@ -291,8 +237,8 @@ export function InsightsClient() {
     return (
       <div className="flex flex-col gap-6">
         <Skeleton className="h-28 w-full rounded-xl" />
-        {/* One chart card now, not four -- see the single-column MotionList. */}
-        <Skeleton className="h-72 w-full rounded-xl" />
+        <Skeleton className="h-24 w-full rounded-xl" />
+        <Skeleton className="h-96 w-full rounded-xl" />
         <Skeleton className="h-72 w-full rounded-xl" />
       </div>
     );
@@ -302,9 +248,8 @@ export function InsightsClient() {
   // base coat (elevation + sheen + shadow transition) explicitly.
   const chartCard =
     "rounded-xl border border-border bg-card bg-card-sheen p-5 shadow-elev-1 transition-shadow duration-300";
-  const litCard = cn(chartCard, "hover:glow");
 
-  /** Each chart card carries its lead series color as its edge light. */
+  /** Each card carries its lead color as its edge light. */
   const glow = (token: string) => ({ "--glow-color": token }) as React.CSSProperties;
 
   return (
@@ -334,43 +279,36 @@ export function InsightsClient() {
         </div>
       )}
 
-      <MotionList className="grid grid-cols-1 gap-6">
-        <MotionItem className={litCard} style={glow("var(--chart-5)")}>
-          <h2 className="mb-2 text-sm font-semibold">
-            Yeni hat sinyallerinin dağılımı{" "}
-            <span className="font-normal text-muted-foreground">(bölgeye göre, son 30 gün)</span>
-          </h2>
-          {regionSlices.length > 0 ? (
-            <ReactECharts
-              option={regionOption}
-              style={{ height: 280 }}
-              opts={{ renderer: "svg" }}
-              notMerge
-              // The donut is the filter's map: clicking a slice narrows the
-              // signal list below to that region. The "Bölge belirtilmemiş"
-              // slice carries no slug, so it clears -- there is no distinct
-              // filterable state for that bucket, and "Tümü" is the honest
-              // answer rather than an empty list.
-              onEvents={{
-                click: (params: { dataIndex: number }) => {
-                  const slug = regionSlices[params.dataIndex]?.slug;
-                  setSignalRegion(slug ?? null);
-                },
-              }}
-            />
-          ) : (
-            <p className="py-24 text-center text-sm text-muted-foreground">
-              Son 30 günde yeni hat duyurusu yakalanmadı.
-            </p>
-          )}
-        </MotionItem>
+      {/* The month in four numbers. The last one is a confession, not a KPI --
+          see StatTile. */}
+      <MotionList className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <StatTile label="Toplam sinyal" value={stats.total} />
+        <StatTile label="Taşıyıcı" value={stats.carriers} />
+        <StatTile label="Şehir" value={stats.cities} />
+        <StatTile label="Çözümlenemedi" value={stats.unresolved} muted />
       </MotionList>
+
+      <div className={cn(chartCard, "flex flex-col gap-4")}>
+        <h2 className="text-sm font-semibold">
+          Yeni hat sinyalleri nereye iniyor?{" "}
+          <span className="font-normal text-muted-foreground">(son 30 gün)</span>
+        </h2>
+        <RouteSignalMap
+          signals={flatSignals}
+          carrier={signalAirline}
+          onCarrierChange={setSignalAirline}
+          city={signalCity}
+          onCityChange={setSignalCity}
+        />
+      </div>
 
       <div className={cn(chartCard, "flex flex-col gap-4")}>
         <div className="flex flex-wrap items-baseline justify-between gap-2">
           <h2 className="text-sm font-semibold">
             Yeni hat sinyalleri{" "}
-            <span className="font-normal text-muted-foreground">(son 30 gün, kaynakçalı)</span>
+            <span className="font-normal text-muted-foreground">
+              (taşıyıcıya göre, son 30 gün, kaynakçalı)
+            </span>
           </h2>
           <span className="text-xs tabular-nums text-muted-foreground">
             {visibleSignals.length} / {flatSignals.length} sinyal
@@ -415,7 +353,10 @@ export function InsightsClient() {
                     type="button"
                     title={a.name}
                     onClick={() => setSignalAirline(signalAirline === a.code ? null : a.code)}
-                    className={cn(chip(signalAirline === a.code), "flex items-center gap-1 tabular-nums")}
+                    className={cn(
+                      chip(signalAirline === a.code),
+                      "flex items-center gap-1 tabular-nums",
+                    )}
                   >
                     <span
                       className={cn(
@@ -430,6 +371,22 @@ export function InsightsClient() {
                 ))}
               </SignalFilterRow>
             )}
+
+            {/* The map's click has no chip row of its own, so it gets a
+                dismissible one here -- a filter the user cannot see they set
+                is a bug report waiting to happen. */}
+            {signalCity && (
+              <SignalFilterRow label="Şehir">
+                <button
+                  type="button"
+                  onClick={() => setSignalCity(null)}
+                  className={cn(chip(true), "flex items-center gap-1")}
+                >
+                  {signalCity}
+                  <X className="size-3" />
+                </button>
+              </SignalFilterRow>
+            )}
           </div>
         )}
 
@@ -437,98 +394,237 @@ export function InsightsClient() {
           <p className="py-16 text-center text-sm text-muted-foreground">
             {flatSignals.length === 0
               ? "Son 30 günde yeni hat duyurusu yakalanmadı."
-              : "Bu filtrelerle sinyal yok. Bölge ya da taşıyıcı seçimini kaldırın."}
+              : "Bu filtrelerle sinyal yok. Bölge, taşıyıcı ya da şehir seçimini kaldırın."}
           </p>
         ) : (
-          <MotionList className="grid grid-cols-1 gap-6 md:grid-cols-2">
-            <AnimatePresence mode="popLayout" initial={false}>
-              {visibleSignals.map((signal) => (
-                // Same treatment as Gazete's grid tiles: lit at rest via
-                // `edge-lit`, brightening into `glow-edge` on hover, wearing
-                // its region's donut hue as --glow-color.
-                <MotionItem
-                  key={signal.id}
-                  // No `lift`: the hover lift is now the CSS
-                  // `hover:-translate-y-1` below, the same one Gazete's tiles
-                  // use. Keeping both would compose Framer's inline
-                  // `transform: translateY(-2px)` with the class's separate
-                  // `translate` property into a doubled 6px jump.
-                  exit="exit"
-                  style={
-                    {
-                      "--glow-color": theme.series[signal.colorIndex % theme.series.length],
-                    } as React.CSSProperties
-                  }
-                  className={cn(
-                    "edge-lit flex flex-col gap-2.5 rounded-xl border bg-card p-5 transition-all duration-200",
-                    "hover:glow-edge hover:-translate-y-1 motion-reduce:transform-none motion-reduce:transition-none",
-                  )}
-                >
-                  {/* Region badge + right-aligned date, mirroring the article
-                      tile's category-badge + time row. */}
+          <div className="flex flex-col gap-8">
+            {carrierGroups.map((group) => (
+              <section key={group.code ?? "__none__"} className="flex flex-col gap-3">
+                <div className="flex flex-col gap-2">
                   <div className="flex items-center gap-2">
-                    <span className="rounded-full bg-secondary px-2 py-0.5 text-[10px] font-medium text-secondary-foreground">
-                      {signal.region
-                        ? (REGION_NAME[signal.region] ?? signal.region)
-                        : "Bölge belirtilmemiş"}
-                    </span>
-                    {formatSignalDate(signal.published_at) && (
-                      <span className="ml-auto text-[10px] tabular-nums text-muted-foreground">
-                        {formatSignalDate(signal.published_at)}
-                      </span>
+                    {group.code ? (
+                      <AirlineLogo
+                        code={group.code}
+                        name={group.name}
+                        className="size-5 shrink-0 rounded-[3px]"
+                      />
+                    ) : (
+                      <CircleDashed className="size-5 shrink-0 text-muted-foreground" />
                     )}
-                  </div>
-
-                  <h3 className="text-sm font-medium leading-snug">
-                    <span className="line-clamp-2">{signal.headline}</span>
-                  </h3>
-
-                  {signal.airlines.length > 0 && (
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      {signal.airlines.map((code) => (
-                        <span
-                          key={code}
-                          title={AIRLINE_NAME[code] ?? code}
-                          className="flex items-center gap-1 rounded-full border border-border px-1.5 py-0.5 text-[10px] font-semibold tabular-nums"
-                        >
-                          <AirlineLogo code={code} name={AIRLINE_NAME[code]} className="size-3.5" />
-                          {code}
-                        </span>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* mt-auto bottom-aligns the footer across a row of cards
-                      with unequal headline lengths. */}
-                  <div className="mt-auto flex items-center gap-2 pt-1.5 text-[11px] text-muted-foreground">
-                    <span className="font-medium">{signal.source_name}</span>
-                    <a
-                      href={signal.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="ml-auto flex items-center gap-1 font-medium text-primary hover:underline"
+                    <h3
+                      className={cn(
+                        "text-sm font-semibold",
+                        group.code === null && "text-muted-foreground",
+                      )}
                     >
-                      Kaynak
-                      <ExternalLink className="size-3" />
-                    </a>
+                      {group.name}
+                    </h3>
+                    <span className="text-xs tabular-nums text-muted-foreground">
+                      {group.signals.length} sinyal
+                    </span>
                   </div>
-                </MotionItem>
-              ))}
-            </AnimatePresence>
-          </MotionList>
+                  {/* Each carrier section underlined by its own approach light. */}
+                  <MotionRail style={glow(group.color)} />
+                </div>
+
+                <MotionList className="grid grid-cols-1 gap-6 md:grid-cols-2">
+                  <AnimatePresence mode="popLayout" initial={false}>
+                    {group.signals.map((signal) => (
+                      <SignalCard
+                        key={`${group.code ?? "none"}-${signal.id}`}
+                        signal={signal}
+                        color={group.color}
+                      />
+                    ))}
+                  </AnimatePresence>
+                </MotionList>
+              </section>
+            ))}
+
+            {/* --- the residue -------------------------------------------
+                Collapsed, never hidden. A signal we could not place is the
+                one thing this page must not quietly drop: a residue nobody
+                can see is a residue nobody fixes. */}
+            {residueSignals.length > 0 && (
+              <section className="flex flex-col gap-3 border-t border-dashed border-border pt-6">
+                <button
+                  type="button"
+                  onClick={() => setResidueOpen((open) => !open)}
+                  className="flex w-fit items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground"
+                >
+                  <CircleDashed className="size-4 shrink-0" />
+                  Çözümlenemeyen sinyaller ({residueSignals.length})
+                  <ChevronDown
+                    className={cn(
+                      "size-3.5 transition-transform motion-reduce:transition-none",
+                      residueOpen && "rotate-180",
+                    )}
+                  />
+                </button>
+                <p className="text-xs text-muted-foreground">
+                  Bu haberlerde tanınan bir havalimanı geçmiyor; koordinatları olmadığı için
+                  haritada yer almıyorlar. Sayı düştükçe harita doğrulaşır.
+                </p>
+                <Expandable open={residueOpen} reduceMotion={reduceMotion}>
+                  <MotionList className="grid grid-cols-1 gap-6 pt-3 md:grid-cols-2">
+                    {residueSignals.map((signal) => (
+                      <SignalCard key={signal.id} signal={signal} color={NO_IDENTITY} />
+                    ))}
+                  </MotionList>
+                </Expandable>
+              </section>
+            )}
+          </div>
         )}
       </div>
     </div>
   );
 }
 
-function SignalFilterRow({
+/** One number from the month. `muted` renders the value in the secondary ink:
+ * "Çözümlenemedi" counts what the pipeline failed to resolve, and a confession
+ * typeset like an achievement is a lie told in CSS. */
+function StatTile({
   label,
-  children,
+  value,
+  muted = false,
 }: {
   label: string;
+  value: number;
+  muted?: boolean;
+}) {
+  return (
+    <MotionItem
+      variant="scalePop"
+      className="rounded-xl border border-border bg-card bg-card-sheen p-4 shadow-elev-1"
+    >
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p
+        className={cn(
+          "mt-1 text-2xl font-semibold tabular-nums",
+          muted && "text-muted-foreground",
+        )}
+      >
+        {value}
+      </p>
+    </MotionItem>
+  );
+}
+
+/** A signal, lit in the color of whatever section holds it. */
+function SignalCard({ signal, color }: { signal: FlatSignal; color: string }) {
+  return (
+    <MotionItem
+      // No `lift`: the hover lift is the CSS `hover:-translate-y-1` below, the
+      // same one Gazete's tiles use. Keeping both would compose Framer's
+      // inline transform with the class's separate `translate` property into a
+      // doubled jump.
+      exit="exit"
+      style={{ "--glow-color": color } as React.CSSProperties}
+      className={cn(
+        "edge-lit flex flex-col gap-2.5 rounded-xl border bg-card p-5 transition-all duration-200",
+        "hover:glow-edge hover:-translate-y-1 motion-reduce:transform-none motion-reduce:transition-none",
+      )}
+    >
+      {/* Region identity moved to this badge when the carrier took the edge
+          light -- the card still says which part of the world it is about. */}
+      <div className="flex items-center gap-2">
+        <span className="rounded-full bg-secondary px-2 py-0.5 text-[10px] font-medium text-secondary-foreground">
+          {signal.region ? (REGION_NAME[signal.region] ?? signal.region) : "Bölge belirtilmemiş"}
+        </span>
+        {formatSignalDate(signal.published_at) && (
+          <span className="ml-auto text-[10px] tabular-nums text-muted-foreground">
+            {formatSignalDate(signal.published_at)}
+          </span>
+        )}
+      </div>
+
+      <h3 className="text-sm font-medium leading-snug">
+        <span className="line-clamp-2">{signal.headline}</span>
+      </h3>
+
+      {signal.airlines.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          {signal.airlines.map((code) => (
+            <span
+              key={code}
+              title={AIRLINE_NAME[code] ?? code}
+              className="flex items-center gap-1 rounded-full border border-border px-1.5 py-0.5 text-[10px] font-semibold tabular-nums"
+            >
+              <AirlineLogo code={code} name={AIRLINE_NAME[code]} className="size-3.5" />
+              {code}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* The bottom rung of the spine: which airports, by name, this signal
+          actually resolved to. */}
+      {signal.airports.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          {signal.airports.map((airport) => (
+            <span
+              key={airport.code}
+              title={airport.name}
+              className="rounded-full border border-border px-1.5 py-0.5 font-mono text-[10px]"
+            >
+              {airport.code} · {airport.city}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* mt-auto bottom-aligns the footer across a row of cards with unequal
+          headline lengths. */}
+      <div className="mt-auto flex items-center gap-2 pt-1.5 text-[11px] text-muted-foreground">
+        <span className="font-medium">{signal.source_name}</span>
+        <a
+          href={signal.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="ml-auto flex items-center gap-1 font-medium text-primary hover:underline"
+        >
+          Kaynak
+          <ExternalLink className="size-3" />
+        </a>
+      </div>
+    </MotionItem>
+  );
+}
+
+/** Animated-height reveal, the same one the hub panels use: the wrapper
+ * animates to a measured pixel height rather than to `"auto"`, which cannot be
+ * composited. */
+function Expandable({
+  open,
+  reduceMotion,
+  children,
+}: {
+  open: boolean;
+  reduceMotion: boolean | null;
   children: React.ReactNode;
 }) {
+  const [contentRef, measuredHeight] = useMeasuredHeight<HTMLDivElement>();
+  const variants = collapseSection(measuredHeight);
+
+  return (
+    <AnimatePresence initial={false}>
+      {open && (
+        <motion.div
+          variants={reduceMotion ? reduceVariants(variants) : variants}
+          initial="hidden"
+          animate="show"
+          exit="exit"
+          className="overflow-hidden"
+        >
+          <div ref={contentRef}>{children}</div>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+}
+
+function SignalFilterRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-wrap items-center gap-1.5">
       <span className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">

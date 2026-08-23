@@ -82,6 +82,18 @@ async def _reclassify() -> None:
         )
 
 
+async def _backfill_regions(limit: int | None) -> None:
+    from app.pipeline.enrich import backfill_regions
+
+    async with AsyncSessionLocal() as db:
+        result = await backfill_regions(db, limit=limit)
+        print(
+            f"Scanned {result['scanned']} enriched articles: "
+            f"{result['resolved']} previously-unresolved regions filled in, "
+            f"{result['links_added']} airport links added"
+        )
+
+
 async def _repair_translations() -> None:
     from app.pipeline.enrich import repair_corrupt_translations
 
@@ -231,6 +243,7 @@ def main() -> None:
             "full-cycle",
             "re-enrich",
             "reclassify",
+            "backfill-regions",
             "build-insight",
             "repair-translations",
             "clean-headlines",
@@ -256,8 +269,10 @@ def main() -> None:
     parser.add_argument(
         "--limit",
         type=int,
-        default=12,
-        help="translate-backlog: how many articles to translate this run (default: 12)",
+        help=(
+            "translate-backlog: how many articles to translate this run (default: 12). "
+            "backfill-regions: how many articles to walk (default: all)"
+        ),
     )
     args = parser.parse_args()
 
@@ -271,12 +286,16 @@ def main() -> None:
         asyncio.run(_build_insight())
     elif args.command == "reclassify":
         asyncio.run(_reclassify())
+    elif args.command == "backfill-regions":
+        asyncio.run(_backfill_regions(args.limit))
     elif args.command == "repair-translations":
         asyncio.run(_repair_translations())
     elif args.command == "clean-headlines":
         asyncio.run(_clean_headlines())
     elif args.command == "translate-backlog":
-        asyncio.run(_translate_backlog(args.limit))
+        # No shared default: an absent --limit means "every article" for
+        # backfill-regions, and the translate budget for translate-backlog.
+        asyncio.run(_translate_backlog(args.limit if args.limit is not None else 12))
     elif args.command == "build-edition":
         asyncio.run(_build_edition())
     elif args.command == "refresh-kpis":

@@ -210,3 +210,60 @@ export interface EventOut {
   attendance: number | null;
   demand_effect_tr: string;
 }
+
+/* --- İçgörüler / new-route signals ------------------------------------- */
+
+/** One resolved destination behind a route signal.
+ *
+ * Mirrors `airports_by_article` in
+ * backend/app/services/insights_service.py exactly. The backend only emits an
+ * airport it can find in the bundled reference table (app/data/airports.json),
+ * so `lat`/`lon` are always real numbers -- an airport it cannot place is
+ * dropped there rather than sent here without a position. That is what lets
+ * the map trust these coordinates without a null check per point.
+ */
+export interface SignalAirport {
+  code: string;
+  /** The airport's own name ("Malpensa"), distinct from `city` ("Milano"). */
+  name: string;
+  city: string;
+  /** Display name, already resolved from ISO2 by the backend. */
+  country: string;
+  lat: number;
+  lon: number;
+}
+
+export interface RouteSignalArticle {
+  id: string;
+  headline: string;
+  url: string;
+  source_name: string;
+  published_at: string | null;
+  /** IATA carrier codes. */
+  airlines: string[];
+  airports: SignalAirport[];
+}
+
+export interface RouteSignalGroup {
+  region: string | null;
+  count: number;
+  articles: RouteSignalArticle[];
+}
+
+export interface InsightsOut {
+  airline_momentum: {
+    code: string;
+    name: string;
+    current: number;
+    previous: number;
+    delta: number;
+  }[];
+  new_route_signals: RouteSignalGroup[];
+  sentiment_by_category: {
+    category: string;
+    positive: number;
+    neutral: number;
+    negative: number;
+  }[];
+  digest: { date: string; body: string; provider: string } | null;
+}

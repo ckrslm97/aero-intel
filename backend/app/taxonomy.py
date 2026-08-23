@@ -5,6 +5,8 @@ colors for display -- keep both files in sync when the taxonomy changes.
 """
 from dataclasses import dataclass, field
 
+from app.data import country_regions_by_name
+
 
 @dataclass
 class SubcategoryDef:
@@ -230,11 +232,20 @@ SUBCATEGORY_KEYWORDS: dict[str, dict[str, list[str]]] = {
 }
 
 # Country (as extracted by the entity gazetteer, see app/llm/gazetteer.py) ->
-# world region slug. Mirrors frontend/src/lib/taxonomy.ts `worldRegions`. This
-# is a practical approximation, not an authoritative geopolitical grouping --
+# world region slug. Mirrors frontend/src/lib/nav.ts `worldRegions`. This is a
+# practical approximation, not an authoritative geopolitical grouping --
 # e.g. Turkey is grouped with Middle East here to match how airline
-# revenue-management teams typically benchmark it against Gulf carriers.
-COUNTRY_TO_REGION: dict[str, str] = {
+# revenue-management teams typically benchmark it against Gulf carriers. That
+# same call is now made in exactly one place: app/hubs.py used to file IST and
+# SAW under "europe" while this table filed Turkey under "middle-east", so the
+# Hub Explorer and the newspaper's region filter disagreed about the home hub.
+# hubs.py follows this table.
+#
+# These are the assignments the product made by hand, kept verbatim: full
+# coverage is layered *underneath* them from the generated country table below,
+# so widening coverage can never silently reclassify a country the product
+# already had an opinion about.
+CURATED_COUNTRY_REGION: dict[str, str] = {
     "united kingdom": "europe", "france": "europe", "germany": "europe",
     "spain": "europe", "italy": "europe", "netherlands": "europe",
     "russia": "europe", "greece": "europe", "portugal": "europe",
@@ -254,4 +265,16 @@ COUNTRY_TO_REGION: dict[str, str] = {
     "indonesia": "southeast-asia", "thailand": "southeast-asia", "vietnam": "southeast-asia",
     "philippines": "southeast-asia", "singapore": "southeast-asia",
     "australia": "oceania", "new zealand": "oceania",
+}
+
+# The other ~200 countries, generated from the OurAirports country list by
+# scripts/build_airports.py and cross-checked against
+# frontend/src/lib/geo/region-countries.ts (the map's own country -> region
+# table) so a signal cannot land in one region on the map and another in the
+# ledger. The old 47-entry table was the reason "Riyadh-Malaga" and "Bergen"
+# resolved to no region at all: the airport fallback in
+# app/llm/heuristic.detect_region had nothing to look the country up in.
+COUNTRY_TO_REGION: dict[str, str] = {
+    **country_regions_by_name(),
+    **CURATED_COUNTRY_REGION,
 }

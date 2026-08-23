@@ -8,7 +8,16 @@ from collections import Counter
 from functools import lru_cache
 
 from app.llm.base import EntityMention
-from app.llm.gazetteer import AIRLINES, AIRPORT_COUNTRY, AIRPORTS, COUNTRIES
+from app.llm.gazetteer import (
+    AIRLINE_ALIASES,
+    AIRPORT_COUNTRY,
+    AIRPORTS,
+    ALIAS_FIRST_TOKENS,
+    AMBIGUOUS_BARE_CODES,
+    COUNTRY_ALIASES,
+    MAX_ALIAS_TOKENS,
+    fold_tokens,
+)
 from app.pipeline.hashing import normalize_text
 from app.taxonomy import CATEGORY_KEYWORDS, COUNTRY_TO_REGION, GENERAL_CATEGORY, SUBCATEGORY_KEYWORDS
 
@@ -135,31 +144,75 @@ class HeuristicProvider:
         return "neutral"
 
     async def extract_entities(self, title: str, content: str) -> list[EntityMention]:
-        text = normalize_text(f"{title} {content}")
-        mentions: list[EntityMention] = []
+        return extract_entity_mentions(title, content)
 
-        # Whole-word matching, same as categorisation: plain substring search
-        # tagged every article containing "management" with All Nippon ("ana")
-        # -- 96 false links in production.
-        for alias, (name, code) in AIRLINES.items():
-            if _keyword_pattern((alias,)).search(text):
-                mentions.append(EntityMention("airline", name, code))
-        for alias, (name, code) in AIRPORTS.items():
-            if _keyword_pattern((alias,)).search(text):
-                mentions.append(EntityMention("airport", name, code))
-        for country in COUNTRIES:
-            if _keyword_pattern((country,)).search(text):
-                mentions.append(EntityMention("country", country.title(), None))
 
-        # de-duplicate while preserving order
-        seen: set[tuple[str, str]] = set()
-        unique: list[EntityMention] = []
-        for m in mentions:
-            key = (m.entity_type, m.name)
-            if key not in seen:
-                seen.add(key)
-                unique.append(m)
-        return unique
+def _airport_match_is_credible(
+    gram: str, cased: list[str], start: int, end: int
+) -> bool:
+    """Whether an airport alias hit is worth believing.
+
+    Multi-word aliases ("john f kennedy") are self-evidencing, and so is any
+    code that is not also an ordinary word. The one case that needs a second
+    look is a bare three-letter code that doubles as prose -- see
+    `AMBIGUOUS_BARE_CODES`. There the deciding evidence is capitalisation,
+    which the folded token view has already thrown away: a wire writes the
+    code as "JAN" and the month as "Jan", so requiring the original token to
+    be upper-case keeps "flights to JAN" and drops "Okinawa Jan 2027".
+    """
+    if end != start:  # multi-token alias: not a bare code
+        return True
+    if gram.upper() not in AMBIGUOUS_BARE_CODES:
+        return True
+    return cased[start].isupper()
+
+
+def extract_entity_mentions(title: str, content: str) -> list[EntityMention]:
+    """Airlines, airports and countries named in the text, in the order they
+    appear.
+
+    Whole-word matching, never substring: plain `in` tagged every article
+    containing "management" with All Nippon ("ana") -- 96 false links in
+    production. It is done by sliding a token n-gram window over the folded
+    text and looking each gram up in the gazetteer's alias tables, which is the
+    same whole-word semantics as the old regex-per-alias loop (normalised text
+    is space-separated [a-z0-9] tokens, so token edges *are* word boundaries)
+    at a fraction of the cost -- the airport table grew from 30 aliases to
+    ~11.6k when the OurAirports dataset landed, and 11.6k regex scans per
+    article is not a thing you can run over an archive.
+
+    Text order also makes `detect_region` deterministic: it takes the first
+    country it sees, and "first" used to mean whatever order a Python set
+    happened to iterate in.
+    """
+    tokens, cased = fold_tokens(f"{title} {content}")
+    mentions: list[EntityMention] = []
+    seen: set[tuple[str, str]] = set()
+
+    def note(entity_type: str, name: str, code: str | None) -> None:
+        key = (entity_type, name)
+        if key not in seen:
+            seen.add(key)
+            mentions.append(EntityMention(entity_type, name, code))
+
+    total = len(tokens)
+    for start, first in enumerate(tokens):
+        if first not in ALIAS_FIRST_TOKENS:
+            continue
+        gram = first
+        for end in range(start, min(start + MAX_ALIAS_TOKENS, total)):
+            if end > start:
+                gram = f"{gram} {tokens[end]}"
+            airline = AIRLINE_ALIASES.get(gram)
+            if airline:
+                note("airline", airline[0], airline[1])
+            airport = AIRPORTS.get(gram)
+            if airport and _airport_match_is_credible(gram, cased, start, end):
+                note("airport", airport[0], airport[1])
+            country = COUNTRY_ALIASES.get(gram)
+            if country:
+                note("country", country.title(), None)
+    return mentions
 
 
 def detect_region(entities: list[EntityMention]) -> str | None:
