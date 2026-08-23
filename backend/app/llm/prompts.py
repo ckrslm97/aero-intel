@@ -143,3 +143,37 @@ def risk_prompt(title: str, content: str) -> str:
         '"country": <string or null>, "city": <string or null>}\n\n'
         f"Title: {title}\nContent: {content[:1500]}\n\nJSON:"
     )
+
+
+def promotion_extraction_prompt(title: str, content: str) -> str:
+    """Pull a campaign's structured window out of prose.
+
+    Everything here pushes the model towards `null` rather than a guess. A
+    promotion row is drawn on a timeline as a dated bar, so a hallucinated
+    `sale_ends` is not a soft error -- it renders identically to a date the
+    airline actually published. "Bu yaz" must come back as null, not as a
+    31 August the model reasoned its way to.
+    """
+    return (
+        "Extract the structured details of an airline ticket campaign/promotion "
+        "from the Turkish or English aviation news text below.\n"
+        "Respond with ONLY a valid JSON object, no explanation, no markdown fences, "
+        "with exactly these keys:\n"
+        '  "discount_pct": integer percentage discount, or null\n'
+        '  "sale_starts": "YYYY-MM-DD" first day tickets can be bought, or null\n'
+        '  "sale_ends": "YYYY-MM-DD" last day tickets can be bought, or null\n'
+        '  "travel_starts": "YYYY-MM-DD" first day of valid travel, or null\n'
+        '  "travel_ends": "YYYY-MM-DD" last day of valid travel, or null\n'
+        '  "markets": comma-separated destinations/regions covered, or null\n\n'
+        "Rules:\n"
+        "- Use null for anything the text does not state explicitly. Do NOT infer, "
+        "estimate, or complete a partial date. Vague phrases ('bu yaz', 'this "
+        "summer', 'önümüzdeki aylarda', 'for a limited time') are null.\n"
+        "- Only fill a date if the text gives a real calendar date. If the year is "
+        "missing but the day and month are stated, use the year the text is about.\n"
+        "- discount_pct is the headline rate as a plain integer: '%40'a varan "
+        "indirim' -> 40. A fare floor ('9 Euro'dan başlayan') is NOT a percentage "
+        "-> null.\n"
+        "- Never invent a market list; null when the text does not name any.\n\n"
+        f"Title: {title}\nContent: {content[:2500]}\n\nJSON:"
+    )

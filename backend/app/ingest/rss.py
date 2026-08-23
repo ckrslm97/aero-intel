@@ -88,6 +88,13 @@ class RssSourceAdapter:
             logger.warning("rss_fetch_failed", source=self.source_name, error=str(exc))
             return []
 
+        # response.content (bytes), never response.text -- load-bearing, do not
+        # "simplify". feedparser sniffs the charset from the XML declaration
+        # when handed bytes; hand it a str and the decoding has already
+        # happened, badly. Airkule serves `text/xml` with NO charset parameter
+        # and an `encoding="windows-1254"` declaration, so httpx falls back to
+        # utf-8 and .text returns "THY TEKN?K'TEN YEN? HANGAR" -- while
+        # .content parses as "THY TEKNİK'TEN YENİ HANGAR". Verified both ways.
         parsed = feedparser.parse(response.content)
         if parsed.bozo and not parsed.entries:
             logger.warning(
@@ -110,6 +117,26 @@ class RssSourceAdapter:
                     published_at=_entry_published_at(entry),
                 )
             )
+
+        # A fetch that yields nothing usable is a broken source, not a quiet
+        # success. Several publishers answer HTTP 200 with an HTML page where
+        # the feed used to be -- SHGM and aviationturkey.com both do it today
+        # (200 + text/html), and the dropped-candidate list is full of feeds
+        # that returned "200 but 0 items". None of them can produce a garbage
+        # article: an HTML shell leaves feedparser with no entries, and the
+        # loop above already skips any entry missing a link or title. What was
+        # missing is the alarm -- a rotted feed logged "rss_fetch_ok count=0"
+        # forever and looked healthy on the dashboard. Warn instead, so a
+        # source that silently dies is visible in the ingestion error log.
+        if not articles:
+            logger.warning(
+                "rss_no_usable_entries",
+                source=self.source_name,
+                url=self.feed_url,
+                parsed_entries=len(parsed.entries),
+                content_type=response.headers.get("content-type"),
+            )
+            return []
 
         if self.item_cap is not None and len(articles) > self.item_cap:
             # Feeds are newest-first, so the cap keeps the freshest items.

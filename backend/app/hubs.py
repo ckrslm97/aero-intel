@@ -33,13 +33,19 @@ class Hub:
 
 HUBS: tuple[Hub, ...] = (
     Hub(
-        "IST", "İstanbul Havalimanı", "İstanbul", "Turkey", "europe", 41.275, 28.752,
+        # "middle-east", not "europe". app/taxonomy.py has always filed Turkey
+        # with the Gulf -- that is the benchmark set a Turkish carrier's revenue
+        # desk works against -- and the frontend's world map colours it that way
+        # too. This table was the lone dissenter, so the Hub Explorer grouped
+        # İstanbul under Avrupa while the same story's region badge said Orta
+        # Doğu. One call, made in app/taxonomy.py; this follows it.
+        "IST", "İstanbul Havalimanı", "İstanbul", "Turkey", "middle-east", 41.275, 28.752,
         ("TK",),
         "Türk Hava Yolları'nın ana üssü ve aktarma modelinin merkezi. Avrupa, Orta Doğu "
         "ve Asya arasındaki bağlantı trafiğinin büyük bölümü buradan geçiyor.",
     ),
     Hub(
-        "SAW", "Sabiha Gökçen", "İstanbul", "Turkey", "europe", 40.899, 29.309,
+        "SAW", "Sabiha Gökçen", "İstanbul", "Turkey", "middle-east", 40.899, 29.309,
         ("PC",),
         "Pegasus'un üssü. İstanbul'un ikinci havalimanı olarak düşük maliyetli trafiğin "
         "fiyat tabanını belirliyor — iç hat ve kısa mesafe Avrupa'da doğrudan rakip.",

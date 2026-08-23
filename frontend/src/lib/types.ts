@@ -211,6 +211,109 @@ export interface EventOut {
   demand_effect_tr: string;
 }
 
+/* --- İçgörüler / new-route signals ------------------------------------- */
+
+/** One resolved destination behind a route signal.
+ *
+ * Mirrors `airports_by_article` in
+ * backend/app/services/insights_service.py exactly. The backend only emits an
+ * airport it can find in the bundled reference table (app/data/airports.json),
+ * so `lat`/`lon` are always real numbers -- an airport it cannot place is
+ * dropped there rather than sent here without a position. That is what lets
+ * the map trust these coordinates without a null check per point.
+ */
+export interface SignalAirport {
+  code: string;
+  /** The airport's own name ("Malpensa"), distinct from `city` ("Milano"). */
+  name: string;
+  city: string;
+  /** Display name, already resolved from ISO2 by the backend. */
+  country: string;
+  lat: number;
+  lon: number;
+}
+
+export interface RouteSignalArticle {
+  id: string;
+  headline: string;
+  url: string;
+  source_name: string;
+  published_at: string | null;
+  /** IATA carrier codes. */
+  airlines: string[];
+  airports: SignalAirport[];
+}
+
+export interface RouteSignalGroup {
+  region: string | null;
+  count: number;
+  articles: RouteSignalArticle[];
+}
+
+export interface InsightsOut {
+  airline_momentum: {
+    code: string;
+    name: string;
+    current: number;
+    previous: number;
+    delta: number;
+  }[];
+  new_route_signals: RouteSignalGroup[];
+  sentiment_by_category: {
+    category: string;
+    positive: number;
+    neutral: number;
+    negative: number;
+  }[];
+  digest: { date: string; body: string; provider: string } | null;
+}
+
+/** One rival campaign on the /kampanyalar timeline.
+ *
+ * Mirrors `PromotionOut` in backend/app/api/v1/promotions.py. Every date is
+ * nullable there and so is every date here: campaigns reach us both from an
+ * airline's own dated campaign page and from press coverage that says "this
+ * summer" or nothing at all. The UI renders each missing field honestly --
+ * an open-ended bar fades out, a campaign with no start date at all becomes a
+ * point marker at `detected_at` -- so `null` is a rendering instruction, not
+ * an error case to normalise away.
+ */
+export interface PromotionOut {
+  id: string;
+  /** IATA code; joins to `airlineTabs` in lib/nav.ts for brand hex and logo. */
+  airline_code: string;
+  airline_name: string;
+  title_tr: string;
+  summary_tr: string;
+  /** 40 for "%40'a varan". Null when the source states no rate at all. */
+  discount_pct: number | null;
+  /** Comma-separated world-region slugs and/or plain city names, mixed. */
+  markets: string | null;
+  /** When tickets can be BOUGHT -- the window the timeline draws. "YYYY-MM-DD". */
+  sale_starts: string | null;
+  sale_ends: string | null;
+  /** When the discounted ticket can be FLOWN. */
+  travel_starts: string | null;
+  travel_ends: string | null;
+  url: string;
+  source_name: string;
+  region: string | null;
+  /** When WE first saw it, ISO datetime. Drives the "Yeni" badge and the 48h
+   * banner, and is the x position of a start-less campaign's point marker. */
+  detected_at: string;
+  /** Pre-formatted Turkish range, already saying which end is unknown. */
+  sale_range_tr: string;
+  travel_range_tr: string;
+}
+
+/** `GET /promotions/new-count` -- a count over the whole table rather than
+ * over whatever fell inside the timeline's eight-week window. */
+export interface PromotionNewCountOut {
+  window_hours: number;
+  count: number;
+  airline_codes: string[];
+}
+
 /* --- Risk Radarı (backend/app/api/v1/risks.py) --------------------------- */
 
 export interface RiskItem {

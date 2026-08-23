@@ -1,7 +1,13 @@
 """add article risk classification fields
 
+Re-parented onto the promotions migration when feat/risk-radari merged main:
+both were originally cut from b4357df7d0de, which left the tree with two
+alembic heads and made `alembic upgrade head` fail outright. The two touch
+different tables (article_enrichment vs promotions), so ordering them linearly
+is equivalent to the branch point and needs no merge revision.
+
 Revision ID: f2c7a1d9e4b3
-Revises: b4357df7d0de
+Revises: f2c81a4b90de
 Create Date: 2026-08-23 10:15:00.000000
 
 """
@@ -13,7 +19,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = 'f2c7a1d9e4b3'
-down_revision: Union[str, None] = 'b4357df7d0de'
+down_revision: Union[str, None] = 'f2c81a4b90de'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

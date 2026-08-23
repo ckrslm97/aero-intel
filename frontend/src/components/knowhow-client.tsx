@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 
 import { KNOW_HOW, type Term } from "@/lib/knowhow";
-import { CATEGORY_BY_SLUG } from "@/lib/taxonomy";
+import { CATEGORY_BY_SLUG, NEWSPAPER_CATEGORY_SLUGS } from "@/lib/taxonomy";
 import { cn } from "@/lib/utils";
 
 /** Case- and diacritic-insensitive, because nobody types "ücret sınıfı" with
@@ -24,7 +24,15 @@ function matches(term: Term, needle: string): boolean {
   return haystack.includes(fold(needle));
 }
 
-function newsHref(term: Term): string {
+/** The Gazete deep link, or null when the term's category is not one the paper
+ * shows (Regülasyon, and the Ağ & Rota terms). Those slugs are still perfectly
+ * good classifications -- they simply have no tab to land on since the
+ * newspaper was cut down to six categories, and `?category=regulatory` would
+ * silently fall back to Gelir Yönetimi, promising "Regülasyon haberleri" and
+ * delivering someone else's. A definition with no reading list is a case
+ * knowhow.ts already anticipates; the chip just becomes plain text. */
+function newsHref(term: Term): string | null {
+  if (!NEWSPAPER_CATEGORY_SLUGS.some((slug) => slug === term.category)) return null;
   const params = new URLSearchParams({ category: term.category });
   if (term.subcategory) params.set("subcategory", term.subcategory);
   return `/newspaper?${params.toString()}`;
@@ -84,6 +92,11 @@ export function KnowHowClient() {
           <div className="grid gap-3 md:grid-cols-2">
             {group.terms.map((term) => {
               const category = CATEGORY_BY_SLUG[term.category];
+              const href = newsHref(term);
+              const chipClass = cn(
+                "mt-auto flex w-fit items-center gap-1 rounded-full border border-border px-2.5 py-1",
+                "text-[11px] text-muted-foreground",
+              );
               return (
                 <article
                   key={term.en}
@@ -103,16 +116,22 @@ export function KnowHowClient() {
                     <span className="text-muted-foreground">{term.matters}</span>
                   </p>
 
-                  <Link
-                    href={newsHref(term)}
-                    className={cn(
-                      "mt-auto flex w-fit items-center gap-1 rounded-full border border-border px-2.5 py-1",
-                      "text-[11px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground",
-                    )}
-                  >
-                    {category?.label ?? term.category} haberleri
-                    <ArrowUpRight className="size-3" />
-                  </Link>
+                  {href ? (
+                    <Link
+                      href={href}
+                      className={cn(
+                        chipClass,
+                        "transition-colors hover:bg-accent hover:text-foreground",
+                      )}
+                    >
+                      {category?.label ?? term.category} haberleri
+                      <ArrowUpRight className="size-3" />
+                    </Link>
+                  ) : (
+                    <span className={cn(chipClass, "border-dashed")}>
+                      {category?.label ?? term.category}
+                    </span>
+                  )}
                 </article>
               );
             })}

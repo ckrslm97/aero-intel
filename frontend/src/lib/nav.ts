@@ -5,6 +5,7 @@ import {
   GraduationCap,
   LayoutDashboard,
   Lightbulb,
+  Megaphone,
   Newspaper,
   Radar,
   Search,
@@ -26,6 +27,9 @@ export interface NavItem {
 export const primaryNav: NavItem[] = [
   { href: "/", label: "Kontrol Paneli", icon: LayoutDashboard },
   { href: "/newspaper", label: "Gazete", icon: Newspaper },
+  // Directly after Gazete because a campaign is the same kind of thing as a
+  // news story -- something a rival just did -- only with a window attached.
+  { href: "/kampanyalar", label: "Kampanyalar", icon: Megaphone },
   { href: "/insights", label: "İçgörüler", icon: Lightbulb },
   { href: "/oneriler", label: "Öneriler", icon: Sparkles },
   { href: "/hublar", label: "Hub'lar", icon: Globe2 },

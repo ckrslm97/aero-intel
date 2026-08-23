@@ -24,6 +24,44 @@ async def _refresh_kpis_job() -> None:
         await refresh_all_kpis(db)
 
 
+async def _refresh_promotions_job() -> None:
+    """Both campaign detection paths, on the tightest clock in the scheduler.
+
+    30 minutes, and the interval is the feature. The requirement is "the moment
+    an airline launches a campaign it must appear", and a campaign is perishable
+    in a way news is not: a two-day flash sale found six hours late is half a
+    campaign's worth of intelligence already spent. The news job runs every 2h
+    because an article is the same article at 13:00 as it was at 11:00; a
+    rival's sale window is not.
+
+    Not shorter than 30, because the ceiling on usefulness is the source rather
+    than the poller. Pegasus publishes to a static campaign page that changes a
+    handful of times a week, and the article-derived path can only see campaigns
+    the 2h news ingest has already filed -- so a 5-minute tick would re-read an
+    unchanged page and re-scan the same articles 24 times for nothing. 30 also
+    matches the cron in .github/workflows/jobs-promotions.yml exactly, so the
+    in-process scheduler and the hosted job describe the same cadence instead of
+    two competing ones.
+    """
+    from app.core.db import AsyncSessionLocal
+    from app.ingest.promo_scrape import scrape_promotions
+    from app.pipeline.promotions import extract_promotions
+
+    async with AsyncSessionLocal() as db:
+        scraped = await scrape_promotions(db)
+        extracted = await extract_promotions(db)
+        logger.info(
+            "promotions_refreshed",
+            scraped_new=scraped["inserted"],
+            scraped_updated=scraped["updated"],
+            scraped_merged=scraped["merged"],
+            articles_scanned=extracted["scanned"],
+            articles_new=extracted["inserted"],
+            articles_updated=extracted["updated"],
+            articles_merged=extracted["merged"],
+        )
+
+
 def _register_jobs(scheduler: AsyncIOScheduler) -> None:
     settings = get_settings()
 
@@ -49,6 +87,16 @@ def _register_jobs(scheduler: AsyncIOScheduler) -> None:
         id="refresh_kpis",
         replace_existing=True,
         misfire_grace_time=600,
+    )
+    scheduler.add_job(
+        _refresh_promotions_job,
+        trigger=IntervalTrigger(minutes=30),
+        id="refresh_promotions",
+        replace_existing=True,
+        # Half the interval: a sweep missed while the process was restarting is
+        # worth running late, but once the next tick is closer than the missed
+        # one, running both back-to-back would just re-read the same page.
+        misfire_grace_time=900,
     )
 
 

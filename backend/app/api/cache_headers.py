@@ -12,6 +12,13 @@ from fastapi import Response
 
 # Seconds. The ingest cron runs hourly and the edition job daily, so these are
 # all far shorter than the interval at which the underlying data can change.
+# The campaign timeline. The product requirement is literally "the moment an
+# airline launches a campaign it must appear", and detection runs every 45
+# minutes -- so the edge must never be the reason a fresh campaign is invisible.
+# 30s still absorbs the burst of repeat requests a single page load makes
+# (timeline + calendar overlay + drawer) while keeping worst-case staleness
+# below a minute.
+FRESH = 30
 ARTICLES = 60
 AGGREGATES = 300  # counts, insights, kpis -- expensive to compute, cheap to age
 CURATED = 600  # TK reviews: changes only on a manual curation pass

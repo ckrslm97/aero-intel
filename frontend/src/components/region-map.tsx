@@ -1,34 +1,13 @@
 "use client";
 
 import { useReducedMotion } from "framer-motion";
-import * as echarts from "echarts";
 import ReactECharts from "echarts-for-react";
 import { useTheme } from "next-themes";
 import { useEffect, useMemo, useState } from "react";
 
+import { ensureWorldMap } from "@/lib/echarts-world";
 import { COUNTRY_REGION } from "@/lib/geo/region-countries";
 import { worldRegions } from "@/lib/nav";
-
-// The world outline is fetched from /geo/world.json rather than imported.
-// Importing it emitted a ~1MB JavaScript chunk that had to be parsed as code;
-// as a plain asset it is 455KB, cached by the browser like any other file, and
-// never touches the JS graph. Coordinates are rounded to 3 decimals (~110m),
-// which is far below one pixel at this map's zoom.
-let mapPromise: Promise<void> | null = null;
-
-function ensureWorldMap(): Promise<void> {
-  if (!mapPromise) {
-    mapPromise = fetch("/geo/world.json")
-      .then((res) => res.json())
-      .then((geoJson) => {
-        echarts.registerMap("world", geoJson);
-      })
-      .catch(() => {
-        mapPromise = null; // let a later open retry
-      });
-  }
-  return mapPromise;
-}
 
 const REGION_NAME: Record<string, string> = Object.fromEntries(
   worldRegions.map((r) => [r.slug, r.name]),

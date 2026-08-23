@@ -155,6 +155,41 @@ export function getCategory(slug: string): CategoryDef {
   return CATEGORY_BY_SLUG[slug] ?? CATEGORY_BY_SLUG.general;
 }
 
+/** The Gazete's visible categories, in the product owner's priority order:
+ * Gelir Yönetimi first, Etkinlik second, then Filo, Finans, Havalimanı, and
+ * Genel last as the fallback bucket.
+ *
+ * A display allow-list, NOT a taxonomy change. Every slug above still exists
+ * and is still classified server-side -- `network` in particular keeps
+ * powering "Yeni hat sinyalleri"; it simply isn't a newspaper tab. The four
+ * omitted slugs (safety, regulatory, sustainability, labor) are additionally
+ * filtered out of the Gazete's article list via the API's
+ * `exclude_categories` param, so they don't leak in under Genel either.
+ * Reverting the simplification is deleting this list's use, nothing more. */
+export const NEWSPAPER_CATEGORY_SLUGS = [
+  "revenue_management",
+  "events",
+  "fleet",
+  "finance",
+  "airport",
+  "general",
+] as const;
+
+export const NEWSPAPER_CATEGORIES: CategoryDef[] = NEWSPAPER_CATEGORY_SLUGS.map(
+  (slug) => CATEGORY_BY_SLUG[slug],
+);
+
+/** Classified server-side but deliberately absent from the Gazete -- sent to
+ * the API as `exclude_categories` so these stories never appear in the paper's
+ * list or its tab badges. `network` is NOT here: it stays out of the tab row
+ * but its articles are still legitimate reading. */
+export const NEWSPAPER_EXCLUDED_CATEGORY_SLUGS = [
+  "safety",
+  "regulatory",
+  "sustainability",
+  "labor",
+] as const;
+
 /** A taxonomy slug as a CSS custom-property reference, e.g.
  * `revenue_management` -> `var(--category-revenue-management)`.
  *

@@ -1,45 +1,14 @@
 "use client";
 
-import * as echarts from "echarts";
 import ReactECharts from "echarts-for-react";
 import { useReducedMotion } from "framer-motion";
 import { useTheme } from "next-themes";
 import { useEffect, useMemo, useState } from "react";
 
+import { ensureWorldMap, symbolSize } from "@/lib/echarts-world";
 import type { HubOut, HubRouteOut } from "@/lib/types";
 
-// Shared with region-map.tsx: the world outline is a fetched asset, not an
-// import, so the 455KB of coordinates never enters the JS graph.
-let mapPromise: Promise<void> | null = null;
-
-function ensureWorldMap(): Promise<void> {
-  if (!mapPromise) {
-    mapPromise = fetch("/geo/world.json")
-      .then((res) => res.json())
-      .then((geoJson) => {
-        echarts.registerMap("world", geoJson);
-      })
-      .catch(() => {
-        mapPromise = null;
-      });
-  }
-  return mapPromise;
-}
-
 const HOME = "IST";
-
-// Marker area, not radius, tracks coverage: a hub with four times the articles
-// should look four times as big, and radius would make it sixteen. Magnitude is
-// carried by size alone -- one hue throughout, so nothing here needs a
-// categorical palette or a legend of colors.
-const MIN_SYMBOL = 7;
-const MAX_SYMBOL = 26;
-
-function symbolSize(count: number, max: number): number {
-  if (max <= 0 || count <= 0) return MIN_SYMBOL;
-  const area = (count / max) * (MAX_SYMBOL ** 2 - MIN_SYMBOL ** 2) + MIN_SYMBOL ** 2;
-  return Math.sqrt(area);
-}
 
 interface HubMapProps {
   hubs: HubOut[];
