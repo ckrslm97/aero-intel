@@ -11,6 +11,7 @@ from app.api.v1 import (
     insights,
     kpis,
     pivot,
+    promotions,
     recommendations,
     search,
     subscribers,
@@ -28,6 +29,7 @@ api_router.include_router(insights.router)
 api_router.include_router(search.router)
 api_router.include_router(kpis.router)
 api_router.include_router(pivot.router)
+api_router.include_router(promotions.router)
 api_router.include_router(recommendations.router)
 api_router.include_router(subscribers.router)
 api_router.include_router(admin.router)

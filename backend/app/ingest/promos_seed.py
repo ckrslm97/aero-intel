@@ -15,9 +15,24 @@ we do not cite). Ongoing coverage comes from the Google News promo radar in
 sources_seed.py -- this file is a point-in-time snapshot, not a scraper.
 
 Idempotent by URL, same pattern as events_seed.
+
+Round 9 addendum -- this seed now writes TWO things per entry:
+  * the Gazete article it always wrote (revenue_management > promotion), and
+  * a structured `promotions` row, so /kampanyalar and the calendar's campaign
+    ribbons have data on day one instead of an empty timeline.
+
+The structured half carries only what each entry's own source actually states.
+`discount_pct` and `markets` are read off the campaign copy; the sale window is
+filled in for the single entry whose window was re-verified live against the
+campaign page (see PC_KKTC_WINDOW below) and left NULL for every other, because
+the 2026-07-19 snapshot did not record one. Null is not a gap to be filled here
+-- the timeline draws a dateless campaign as a point marker at detection rather
+than as a bar, which is the honest rendering. Dated rows arrive continuously
+from the Pegasus scraper (app/ingest/promo_scrape.py) and from the
+article-derived extractor (app/pipeline/promotions.py).
 """
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,7 +40,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.logging import get_logger
 from app.models.article import Article, ArticleEnrichment
 from app.models.entity import ArticleEntity, Entity
+from app.models.promotion import Promotion
 from app.models.source import Source
+from app.pipeline.promo_dedup import PromoCandidate, find_duplicate, merge_candidate
 from app.pipeline.hashing import content_hash
 from app.pipeline.search_indexing import index_article_text
 from app.repositories.article_repository import ArticleRepository
@@ -48,6 +65,24 @@ class RivalPromo:
     subcategory: str = "promotion"
     region: str | None = "middle-east"
 
+    # --- structured half (the `promotions` row) ---
+    # The headline rate the copy states, or None when it states a fare floor
+    # ("9 Euro'dan başlayan") rather than a percentage.
+    discount_pct: int | None = None
+    # Comma-separated region slugs and/or city names, as written in the copy.
+    markets: str | None = None
+    # Sale window. None on almost every entry on purpose -- the snapshot did
+    # not record one, and inventing it would draw a bar the airline never
+    # published. See the module docstring.
+    sale_starts: date | None = None
+    sale_ends: date | None = None
+
+
+# Re-verified live against flypgs.com/kampanyali-ucak-biletleri/aktif-kampanyalar
+# on 2026-08-22: the page states this campaign's validity outright, so it is a
+# measured window rather than a guessed one.
+PC_KKTC_WINDOW = (date(2026, 8, 21), date(2026, 8, 23))
+
 
 PROMOS: list[RivalPromo] = [
     RivalPromo(
@@ -59,6 +94,8 @@ PROMOS: list[RivalPromo] = [
             "kapsıyor; koltuk kontenjanı ve tarih ayrıntıları resmi kampanya sayfasında."
         ),
         url="https://www.flypgs.com/kampanyali-ucak-biletleri/2026-yaz-sezonu-yurt-disi-biletlerim-bolbollura-9-euro-vergilerden-baslayan-fiyatlarla",
+        # A fare floor, not a percentage -- discount_pct stays None.
+        markets="europe",
     ),
     RivalPromo(
         airline_code="PC",
@@ -69,6 +106,7 @@ PROMOS: list[RivalPromo] = [
             "sadakat programı bağlama stratejisinin tipik bir örneği."
         ),
         url="https://www.flypgs.com/kampanyali-ucak-biletleri/bolbollulara-yurt-ici-ucuslari-mobil-uygulamaya-ozel-30-indirimli",
+        discount_pct=30,
     ),
     RivalPromo(
         airline_code="PC",
@@ -79,6 +117,8 @@ PROMOS: list[RivalPromo] = [
             "fiyat hamlesi."
         ),
         url="https://www.flypgs.com/kampanyali-ucak-biletleri/genc-bolbollulara-yurt-disi-ucuslari-50-indirimli",
+        discount_pct=50,
+        markets="europe",
     ),
     RivalPromo(
         airline_code="PC",
@@ -89,6 +129,10 @@ PROMOS: list[RivalPromo] = [
             "kampanya yürütüyor. Zayıf günlere talep kaydırma (day-of-week pricing) örneği."
         ),
         url="https://www.flypgs.com/kampanyali-ucak-biletleri/kuzey-kibris-ucuslari-salidan-persembeye-40-indirimli",
+        discount_pct=40,
+        markets="kuzey kıbrıs",
+        sale_starts=PC_KKTC_WINDOW[0],
+        sale_ends=PC_KKTC_WINDOW[1],
     ),
     RivalPromo(
         airline_code="QR",
@@ -101,6 +145,7 @@ PROMOS: list[RivalPromo] = [
             "sayfası bot koruması nedeniyle doğrulanamadı.)"
         ),
         url="https://www.travelandtourworld.com/news/article/nx1x6rzjiftn/",
+        discount_pct=25,
     ),
     RivalPromo(
         airline_code="EK",
@@ -143,6 +188,89 @@ async def _airline_entity(db: AsyncSession, code: str) -> Entity | None:
             select(Entity).where(Entity.entity_type == "airline", Entity.code == code)
         )
     ).scalar_one_or_none()
+
+
+# Airline display names for the structured rows, keyed the same way the
+# timeline's lanes are (frontend/src/lib/nav.ts airlineTabs).
+AIRLINE_NAMES: dict[str, str] = {
+    "AF": "Air France", "BA": "British Airways", "EK": "Emirates",
+    "EY": "Etihad Airways", "KL": "KLM", "LH": "Lufthansa",
+    "QR": "Qatar Airways", "PC": "Pegasus Airlines", "VF": "AJet",
+    "TK": "Turkish Airlines",
+}
+
+
+async def _seed_promotion_rows(db: AsyncSession, now: datetime) -> int:
+    """The structured half: one `promotions` row per campaign entry.
+
+    Only `subcategory == "promotion"` entries become rows. The Emirates entry
+    is filed under "pricing" because it reports a carrier explicitly *not*
+    discounting -- real intelligence, and exactly the thing that must not be
+    drawn as a campaign bar on a campaign timeline.
+
+    Idempotent by URL, and a re-run refreshes the row in place so a corrected
+    date or rate propagates. `detected_at` is set once and never touched again:
+    re-seeding is not re-detecting, and refreshing it would keep these
+    permanently badged "Yeni".
+
+    Idempotent by *campaign* as well, because the URL alone is not enough: once
+    a seeded campaign has been merged with the airline's own page for it
+    (app/pipeline/promo_dedup.py), the merged row lives at the airline's URL and
+    a re-seed would find nothing under this one and helpfully re-create the
+    duplicate the merge just removed.
+    """
+    inserted = 0
+    for promo in PROMOS:
+        if promo.subcategory != "promotion":
+            continue
+        existing = (
+            await db.execute(select(Promotion).where(Promotion.url == promo.url))
+        ).scalar_one_or_none()
+        candidate = PromoCandidate(
+            airline_code=promo.airline_code,
+            airline_name=AIRLINE_NAMES.get(promo.airline_code, promo.airline_code),
+            title_tr=promo.headline_tr[:300],
+            summary_tr=promo.summary_tr,
+            url=promo.url[:500],
+            source_name=SOURCE_NAME,
+            detected_at=now,
+            discount_pct=promo.discount_pct,
+            markets=promo.markets,
+            sale_starts=promo.sale_starts,
+            sale_ends=promo.sale_ends,
+            region=promo.region,
+        )
+        if existing is not None:
+            # Curation is the newer reading of what this entry says, so it wins
+            # every field it states -- but a blank here must not erase a window
+            # the airline's own page contributed.
+            merge_candidate(existing, candidate, prefer_candidate=True)
+            continue
+        twin = await find_duplicate(db, candidate)
+        if twin is not None:
+            merge_candidate(twin, candidate)
+            await db.flush()
+            continue
+        db.add(
+            Promotion(
+                airline_code=promo.airline_code,
+                airline_name=AIRLINE_NAMES.get(promo.airline_code, promo.airline_code),
+                title_tr=promo.headline_tr[:300],
+                summary_tr=promo.summary_tr,
+                discount_pct=promo.discount_pct,
+                markets=promo.markets,
+                sale_starts=promo.sale_starts,
+                sale_ends=promo.sale_ends,
+                travel_starts=None,
+                travel_ends=None,
+                url=promo.url[:500],
+                source_name=SOURCE_NAME,
+                region=promo.region,
+                detected_at=now,
+            )
+        )
+        inserted += 1
+    return inserted
 
 
 async def seed_promos(db: AsyncSession) -> int:
@@ -201,6 +329,10 @@ async def seed_promos(db: AsyncSession) -> int:
         await index_article_text(db, article.id, f"{article.title} {promo.summary_tr}")
         inserted += 1
 
+    structured = await _seed_promotion_rows(db, now)
+
     await db.commit()
-    logger.info("promos_seeded", inserted=inserted, total=len(PROMOS))
+    logger.info(
+        "promos_seeded", inserted=inserted, structured=structured, total=len(PROMOS)
+    )
     return inserted
