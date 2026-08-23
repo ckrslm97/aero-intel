@@ -1,4 +1,5 @@
-"""The evidence-backed action recommendations behind the /oneriler page."""
+"""The evidence-backed action recommendations behind İçgörüler' Öneriler tab
+(/insights?tab=oneriler; the old /oneriler path redirects there)."""
 from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 

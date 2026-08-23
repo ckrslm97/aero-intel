@@ -1,11 +1,8 @@
-import { RecommendationsClient } from "@/components/recommendations-client";
+import { redirect } from "next/navigation";
 
-export const metadata = {
-  title: "Öneriler — AeroIntel",
-  description:
-    "Haber arşivi, yolcu yorumları ve etkinlik takviminden türetilen, kaynağı gösterilen aksiyon önerileri.",
-};
-
+// Öneriler is a tab of İçgörüler now, not a page of its own. The route stays
+// alive as a redirect so old links, bookmarks and anything already pointing
+// here land on the tab instead of a 404.
 export default function RecommendationsPage() {
-  return <RecommendationsClient />;
+  redirect("/insights?tab=oneriler");
 }
