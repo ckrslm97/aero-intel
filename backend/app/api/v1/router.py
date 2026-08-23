@@ -12,6 +12,7 @@ from app.api.v1 import (
     kpis,
     pivot,
     recommendations,
+    risks,
     search,
     subscribers,
     taxonomy,
@@ -29,6 +30,7 @@ api_router.include_router(search.router)
 api_router.include_router(kpis.router)
 api_router.include_router(pivot.router)
 api_router.include_router(recommendations.router)
+api_router.include_router(risks.router)
 api_router.include_router(subscribers.router)
 api_router.include_router(admin.router)
 api_router.include_router(taxonomy.router)

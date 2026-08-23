@@ -12,7 +12,7 @@ from sqlalchemy.orm import selectinload
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.llm.factory import get_llm_provider
-from app.llm.heuristic import HeuristicProvider, detect_region
+from app.llm.heuristic import HeuristicProvider, classify_risk_heuristic, detect_region
 from app.models.article import Article, ArticleEnrichment
 from app.models.entity import ArticleEntity
 from app.pipeline.headlines import strip_publisher_suffix
@@ -20,6 +20,7 @@ from app.pipeline.relevance import score_article
 from app.pipeline.search_indexing import index_article_text
 from app.pipeline.verify import compute_confidence
 from app.repositories.entity_repository import EntityRepository
+from app.taxonomy import is_valid_risk_type, risk_family_of
 
 logger = get_logger(__name__)
 
@@ -43,6 +44,60 @@ async def _translate_pair(engine, headline: str, summary: str) -> tuple[str | No
         await engine.translate(summary) if summary else None,
     )
 
+
+
+async def _classify_risk(engine, title: str, content: str, entities) -> dict[str, str | None]:
+    """Risk Radarı fields for one article, from the LLM where the provider has
+    a risk classifier and from the keyword heuristic otherwise.
+
+    Same optional-method shape as _translate_pair above: providers opt in by
+    defining classify_risk rather than every implementation having to grow a
+    method. Two extra guarantees on top of the provider's own validation:
+
+      * the closed taxonomy is re-checked here, so nothing off-slug can reach
+        the database no matter which path produced it, and
+      * a live call that fails, or answers null while the keywords are certain,
+        falls back to the heuristic instead of silently dropping the event --
+        the LLM budget is spent on relevance-gated articles only (see
+        enrich_pending_articles), so the heuristic is the path most articles
+        take anyway.
+    """
+    result: dict[str, str | None] | None = None
+    classifier = getattr(engine, "classify_risk", None)
+    if classifier is not None:
+        try:
+            result = await classifier(title, content)
+        except Exception as exc:  # noqa: BLE001 -- never fail a whole article on this
+            logger.warning("risk_classification_failed_falling_back", error=str(exc)[:200])
+            result = None
+
+    if not result or not result.get("risk_type"):
+        result = classify_risk_heuristic(title, content, entities)
+
+    risk_type = result.get("risk_type")
+    if not is_valid_risk_type(risk_type):
+        return {
+            "risk_type": None, "risk_family": None, "risk_severity": None,
+            "risk_country": None, "risk_city": None,
+        }
+
+    # The model may name a place the gazetteer never would; keep it, but fall
+    # back to the entity-derived location when it says nothing.
+    country = result.get("country")
+    city = result.get("city")
+    if not country:
+        from app.llm.heuristic import detect_risk_place
+
+        country, city_fallback = detect_risk_place(title, content, entities)
+        city = city or city_fallback
+
+    return {
+        "risk_type": risk_type,
+        "risk_family": risk_family_of(risk_type),
+        "risk_severity": result.get("severity") or "low",
+        "risk_country": (country or None) and country[:80],
+        "risk_city": (city or None) and city[:80],
+    }
 
 
 # Aggregator feeds carry a lot of ranked-list clickbait ("7 Airlines That...").
@@ -207,6 +262,7 @@ async def enrich_pending_articles(db: AsyncSession, limit: int | None = None) ->
         # same regardless of which provider extracted the entities.
         region = detect_region(entities)
         subcategory = await engine.subcategorize(article.title, article.raw_content, category)
+        risk = await _classify_risk(engine, article.title, article.raw_content, entities)
         if category == "events":
             # Events don't have keyword-detectable subcategories -- they're
             # "regional" whenever a region was detected, "general" otherwise.
@@ -258,6 +314,7 @@ async def enrich_pending_articles(db: AsyncSession, limit: int | None = None) ->
             summary_tr=summary_tr,
             translated_at=datetime.now(timezone.utc) if translated else None,
             translation_provider=provider.name if translated else None,
+            **risk,
         )
         # Each article writes inside its own savepoint. The NOT EXISTS filter
         # closes the common case, but another worker can still enrich an
@@ -549,3 +606,77 @@ async def clean_stored_headlines(db: AsyncSession, batch_size: int = 200) -> dic
     await db.commit()
     logger.info("headlines_cleaned", cleaned=cleaned, scanned=len(articles))
     return {"cleaned": cleaned, "scanned": len(articles)}
+
+
+async def backfill_risk_classification(
+    db: AsyncSession, limit: int | None = None, batch_size: int = 100
+) -> dict[str, int]:
+    """Classify Risk Radarı fields on already-enriched articles, in place.
+
+    Same reasoning as reclassify_articles: enrichment runs once per article, so
+    every article ingested before this feature existed carries null risk fields
+    and would stay invisible to /risks forever. This touches only the five
+    risk_* columns -- category, translations, headlines, entities and status are
+    left exactly as they are, so it can be re-run after a keyword change
+    without un-publishing anything.
+
+    Deliberately heuristic-only. The live classifier is a per-article LLM call,
+    and the archive is thousands of articles; a backfill that costs the whole
+    daily token budget would not be runnable. Fresh articles still get the LLM
+    path through enrich_pending_articles().
+    """
+    provider = HeuristicProvider()
+
+    query = (
+        select(Article)
+        .options(selectinload(Article.enrichment))
+        .where(Article.is_duplicate.is_(False), Article.status == "enriched")
+        .order_by(Article.published_at.desc().nulls_last())
+    )
+    if limit is not None:
+        query = query.limit(limit)
+    articles = list((await db.execute(query)).scalars().all())
+
+    classified = cleared = 0
+    for index, article in enumerate(articles, start=1):
+        enrichment = article.enrichment
+        if enrichment is None:
+            continue
+
+        entities = await provider.extract_entities(article.title, article.raw_content)
+        result = classify_risk_heuristic(article.title, article.raw_content, entities)
+        risk_type = result["risk_type"] if is_valid_risk_type(result["risk_type"]) else None
+
+        if risk_type is None:
+            # An article that no longer classifies must lose its old value --
+            # otherwise tightening a keyword guard leaves the false positive it
+            # was written to remove sitting in the database.
+            if enrichment.risk_type is not None:
+                cleared += 1
+            enrichment.risk_type = None
+            enrichment.risk_family = None
+            enrichment.risk_severity = None
+            enrichment.risk_country = None
+            enrichment.risk_city = None
+        else:
+            classified += 1
+            enrichment.risk_type = risk_type
+            enrichment.risk_family = risk_family_of(risk_type)
+            enrichment.risk_severity = result["severity"] or "low"
+            enrichment.risk_country = (result["country"] or None) and result["country"][:80]
+            enrichment.risk_city = (result["city"] or None) and result["city"][:80]
+
+        # Periodic commits, same as reclassify_articles: a single end-of-run
+        # commit over a pooled remote database loses whole batches to idle
+        # timeouts here.
+        if index % batch_size == 0:
+            await db.commit()
+
+    await db.commit()
+    logger.info(
+        "risk_backfill_complete",
+        scanned=len(articles),
+        classified=classified,
+        cleared=cleared,
+    )
+    return {"scanned": len(articles), "classified": classified, "cleared": cleared}

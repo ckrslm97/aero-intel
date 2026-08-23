@@ -83,4 +83,23 @@ class ArticleEnrichment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     translated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     translation_provider: Mapped[str | None] = mapped_column(String(30), nullable=True)
 
+    # --- Risk Radarı classification (see app/taxonomy.py RISK_TYPES) ---------
+    # All nullable, and null is the overwhelmingly common case: most aviation
+    # articles are not disaster or conflict events. Kept on ArticleEnrichment
+    # rather than Article because it is a derived judgement about the story,
+    # not a fact about the fetched document -- so a re-enrichment pass may
+    # freely change or clear it without touching raw data.
+    #
+    # risk_family is stored rather than derived from risk_type on read so the
+    # /risks endpoint can filter and group on it in SQL. It is written only
+    # through app.taxonomy.risk_family_of(), so the two can never disagree.
+    risk_type: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
+    risk_family: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
+    risk_severity: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    risk_country: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    # Frequently null even when risk_country is set -- see the note in
+    # app/llm/heuristic.py detect_risk_place() on how limited city resolution
+    # is without a full airport/city reference dataset.
+    risk_city: Mapped[str | None] = mapped_column(String(80), nullable=True)
+
     article: Mapped["Article"] = relationship(back_populates="enrichment")

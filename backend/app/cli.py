@@ -5,6 +5,7 @@ Usage: python -m app.cli <command>
 """
 import argparse
 import asyncio
+import sys
 
 from app.core.db import AsyncSessionLocal
 from app.core.logging import configure_logging, get_logger
@@ -99,6 +100,17 @@ async def _translate_backlog(limit: int) -> None:
     async with AsyncSessionLocal() as db:
         translated = await translate_pending_articles(db, limit=limit)
         print(f"Translated {translated} previously-untranslated articles")
+
+
+async def _backfill_risks(limit: int | None) -> None:
+    from app.pipeline.enrich import backfill_risk_classification
+
+    async with AsyncSessionLocal() as db:
+        result = await backfill_risk_classification(db, limit=limit)
+        print(
+            f"Scanned {result['scanned']} articles: {result['classified']} classified "
+            f"as risk events, {result['cleared']} stale classifications cleared"
+        )
 
 
 async def _seed_events() -> None:
@@ -231,6 +243,7 @@ def main() -> None:
             "full-cycle",
             "re-enrich",
             "reclassify",
+            "backfill-risks",
             "build-insight",
             "repair-translations",
             "clean-headlines",
@@ -257,7 +270,10 @@ def main() -> None:
         "--limit",
         type=int,
         default=12,
-        help="translate-backlog: how many articles to translate this run (default: 12)",
+        help=(
+            "translate-backlog: how many articles to translate this run (default: 12). "
+            "backfill-risks reads this too, but treats the default as 'no limit' -- see below."
+        ),
     )
     args = parser.parse_args()
 
@@ -271,6 +287,13 @@ def main() -> None:
         asyncio.run(_build_insight())
     elif args.command == "reclassify":
         asyncio.run(_reclassify())
+    elif args.command == "backfill-risks":
+        # --limit's parser default is 12 (it exists for translate-backlog),
+        # but a risk backfill wants the whole archive by default -- it is free,
+        # heuristic-only, and a partial pass would leave the radar half-blind.
+        # Only an explicitly-passed --limit caps it.
+        explicit = "--limit" in sys.argv
+        asyncio.run(_backfill_risks(args.limit if explicit else None))
     elif args.command == "repair-translations":
         asyncio.run(_repair_translations())
     elif args.command == "clean-headlines":

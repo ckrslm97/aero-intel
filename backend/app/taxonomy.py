@@ -255,3 +255,66 @@ COUNTRY_TO_REGION: dict[str, str] = {
     "philippines": "southeast-asia", "singapore": "southeast-asia",
     "australia": "oceania", "new zealand": "oceania",
 }
+
+
+# ---------------------------------------------------------------------------
+# Risk Radarı taxonomy
+#
+# A closed set of 9 event types in 2 families, classified out of the *existing*
+# news feed by the enrichment pipeline -- there is no separate disaster data
+# source. Deliberately closed: an open-ended "what kind of disaster is this"
+# field would drift into dozens of near-synonyms across re-enrichment runs and
+# make the country rollup uncountable. Anything that doesn't fit one of these
+# nine is not a risk event as far as this product is concerned, and stays null.
+#
+# The frontend (frontend/src/components/risk-radar-client.tsx) mirrors these
+# slugs with the same Turkish labels and its own icon per type -- keep both
+# sides in sync when the taxonomy changes.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class RiskTypeDef:
+    slug: str
+    family: str  # natural | conflict
+    label_tr: str
+
+
+RISK_FAMILIES: tuple[str, ...] = ("natural", "conflict")
+
+RISK_TYPES: list[RiskTypeDef] = [
+    RiskTypeDef("earthquake", "natural", "Deprem"),
+    RiskTypeDef("flood", "natural", "Sel"),
+    RiskTypeDef("wildfire", "natural", "Yangın"),
+    RiskTypeDef("volcano", "natural", "Volkanik"),
+    RiskTypeDef("storm", "natural", "Fırtına"),
+    RiskTypeDef("war", "conflict", "Savaş/Çatışma"),
+    RiskTypeDef("coup", "conflict", "Darbe"),
+    RiskTypeDef("attack", "conflict", "Saldırı"),
+    RiskTypeDef("unrest", "conflict", "Toplumsal Gerginlik"),
+]
+
+RISK_TYPE_SLUGS: tuple[str, ...] = tuple(r.slug for r in RISK_TYPES)
+RISK_TYPE_FAMILY: dict[str, str] = {r.slug: r.family for r in RISK_TYPES}
+RISK_TYPE_LABELS_TR: dict[str, str] = {r.slug: r.label_tr for r in RISK_TYPES}
+
+# Reuses the app's existing high|medium|low convention (event impact_level,
+# recommendation priority) rather than inventing a fourth severity vocabulary.
+RISK_SEVERITIES: tuple[str, ...] = ("high", "medium", "low")
+
+# Weighted score behind the "Sıcak Noktalar" ranking. Computed server-side (see
+# app/api/v1/risks.py) so the map, the ranking and the list all order countries
+# by the same number instead of three client-side re-derivations of it.
+RISK_SEVERITY_WEIGHT: dict[str, int] = {"high": 3, "medium": 2, "low": 1}
+
+
+def is_valid_risk_type(slug: str | None) -> bool:
+    """Closed-set gate. Everything that writes risk_type -- the LLM path, the
+    heuristic, the CLI backfill -- goes through this, so a model inventing
+    "tsunami" or "hurricane" writes null rather than a slug nothing can render.
+    """
+    return slug in RISK_TYPE_SLUGS
+
+
+def risk_family_of(slug: str | None) -> str | None:
+    return RISK_TYPE_FAMILY.get(slug) if slug else None
