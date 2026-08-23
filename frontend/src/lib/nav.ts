@@ -8,8 +8,6 @@ import {
   Megaphone,
   Newspaper,
   Radar,
-  Search,
-  Sparkles,
   Star,
 } from "lucide-react";
 
@@ -19,25 +17,29 @@ export interface NavItem {
   icon: LucideIcon;
 }
 
-// The product's pages, plus Ara as a utility. The old Takvim page folded into
-// Gazete's Etkinlik category; the former scaffold sections, the admin/login
-// surface and the Analiz pivot table are gone. Öneriler sits next to İçgörüler
-// because both answer "what does the data say", as opposed to "what happened"
-// (Gazete).
+// Nine destinations, one per question the product answers -- deliberately
+// fewer than the pages behind them. Gazete, Kampanyalar and Risk Radarı say
+// what happened (and what is about to); İçgörüler says what the data means
+// across all of it, and carries Öneriler as its second tab
+// (they answered the same question from two sidebar slots, so they are one
+// destination now, /oneriler redirecting into the tab). The old Takvim page
+// folded into Gazete's Etkinlik category; the former scaffold sections, the
+// admin/login surface and the Analiz pivot table are gone. Ara has no entry
+// either: the topbar's search box is on every page already, so a nav slot for
+// it would buy nothing -- /search is still a real route, just reached from
+// there.
 export const primaryNav: NavItem[] = [
   { href: "/", label: "Kontrol Paneli", icon: LayoutDashboard },
   { href: "/newspaper", label: "Gazete", icon: Newspaper },
   // Directly after Gazete because a campaign is the same kind of thing as a
   // news story -- something a rival just did -- only with a window attached.
   { href: "/kampanyalar", label: "Kampanyalar", icon: Megaphone },
-  { href: "/insights", label: "İçgörüler", icon: Lightbulb },
-  { href: "/oneriler", label: "Öneriler", icon: Sparkles },
-  { href: "/hublar", label: "Hub'lar", icon: Globe2 },
   { href: "/risk-radari", label: "Risk Radarı", icon: Radar },
+  { href: "/insights", label: "İçgörüler", icon: Lightbulb },
+  { href: "/hublar", label: "Hub'lar", icon: Globe2 },
   { href: "/biz", label: "BİZ", icon: Star },
   { href: "/know-how", label: "Know How", icon: GraduationCap },
   { href: "/archive", label: "Arşiv", icon: Archive },
-  { href: "/search", label: "Ara", icon: Search },
 ];
 
 export const airlineTabs = [
