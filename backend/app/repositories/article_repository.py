@@ -1,18 +1,42 @@
 import uuid
 from datetime import date, datetime, time, timedelta, timezone
 
-from sqlalchemy import exists, func, select
+from sqlalchemy import case, exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer, selectinload
 
 from app.models.article import Article, ArticleEnrichment
 from app.models.entity import ArticleEntity, Entity
-from app.taxonomy import RIVAL_CODES
+from app.taxonomy import FOCUS_BONUS, RIVAL_CODES
 
 # Articles are timestamped in UTC but published_at can be missing for feeds
 # that omit dates -- day-based views (the archive) fall back to fetched_at so
 # every article belongs to exactly one day.
 _DAY_EXPR = func.coalesce(Article.published_at, Article.fetched_at)
+
+
+def _focus_weighted_importance():
+    """`importance_score + FOCUS_BONUS[category]`, as SQL.
+
+    The Gazete's `min_importance` floor compares against this, not against the
+    raw column. importance_score is `confidence * 0.7 + min(corroborating, 5) *
+    0.06`, which rewards *corroboration* -- so a flat floor on it keeps the
+    stories ten wires ran and drops the ones a single outlet broke. Measured
+    over 30 days, a flat 0.47 kept 52% of Filo but only 15% of Gelir Yönetimi
+    and 35% of Etkinlik: exactly backwards from the desk's priority, because a
+    Boeing order is on every wire while a rival's fare move is on one.
+
+    Adding the same editorial bonus the front page already ranks by
+    (app/services/edition_service.py) makes the floor mean "important to an RM
+    desk" instead of "widely syndicated". Ordering follows the desk's priority
+    once weighted: Gelir Yönetimi and Etkinlik keep a larger share than Filo
+    and Genel, which is the point.
+
+    NULL-safe on both sides: importance_score is nullable, and a category with
+    no bonus (or a NULL category) falls through the CASE to 0.0.
+    """
+    bonus = case(FOCUS_BONUS, value=ArticleEnrichment.category, else_=0.0)
+    return func.coalesce(ArticleEnrichment.importance_score, 0.0) + bonus
 
 
 def _entity_mentions(entity_type: str, value: str, *, by_code: bool = True):
@@ -72,6 +96,8 @@ class ArticleRepository:
         country: str | None = None,
         airport: str | None = None,
         translated_only: bool = False,
+        exclude_categories: list[str] | None = None,
+        min_importance: float | None = None,
     ):
         """Shared filter clause for list_recent and count, so the "load more"
         pagination in the newspaper can trust that total counts the same rows
@@ -84,7 +110,14 @@ class ArticleRepository:
             query = query.where(
                 _DAY_EXPR >= day_start, _DAY_EXPR < day_start + timedelta(days=1)
             )
-        if category or subcategory or region or translated_only:
+        if (
+            category
+            or subcategory
+            or region
+            or translated_only
+            or exclude_categories
+            or min_importance is not None
+        ):
             # One join covers every enrichment-backed filter; the condition
             # mirrors the clauses below so translated_only can pull the join in
             # on its own without double-joining when a category already did.
@@ -101,6 +134,20 @@ class ArticleRepository:
                 # translation failed) fall back to their original-language
                 # headline, which has no business in a Turkish paper.
                 query = query.where(ArticleEnrichment.translated_at.isnot(None))
+            if exclude_categories:
+                # The Gazete's simplification: four categories are still
+                # ingested and classified (nothing is deleted), they are just
+                # not part of the paper. Opt-in per request, so the archive,
+                # search, the hubs and the per-date edition keep full coverage.
+                query = query.where(
+                    ArticleEnrichment.category.notin_(exclude_categories)
+                )
+            if min_importance is not None:
+                # "Fewer, more critical stories" -- but weighted, see
+                # _focus_weighted_importance(): a flat floor on the raw column
+                # is a floor on how widely syndicated a story is, which culls
+                # the desk's two priority beats hardest.
+                query = query.where(_focus_weighted_importance() >= min_importance)
         if airline:
             # Entity-based: the "Ana Rakipler" filter matches any article that
             # *mentions* the airline, regardless of category -- rival news lives
@@ -145,6 +192,8 @@ class ArticleRepository:
         country: str | None = None,
         airport: str | None = None,
         translated_only: bool = False,
+        exclude_categories: list[str] | None = None,
+        min_importance: float | None = None,
     ) -> list[Article]:
         query = (
             select(Article)
@@ -171,6 +220,8 @@ class ArticleRepository:
             country=country,
             airport=airport,
             translated_only=translated_only,
+            exclude_categories=exclude_categories,
+            min_importance=min_importance,
         )
         result = await self.db.execute(query)
         return list(result.scalars().unique().all())
@@ -186,6 +237,8 @@ class ArticleRepository:
         country: str | None = None,
         airport: str | None = None,
         translated_only: bool = False,
+        exclude_categories: list[str] | None = None,
+        min_importance: float | None = None,
     ) -> int:
         # Plain COUNT, not COUNT(DISTINCT): the airline filter is a semi-join
         # now, so no clause can multiply rows, and COUNT(DISTINCT uuid) forces
@@ -201,6 +254,8 @@ class ArticleRepository:
             country=country,
             airport=airport,
             translated_only=translated_only,
+            exclude_categories=exclude_categories,
+            min_importance=min_importance,
         )
         result = await self.db.execute(query)
         return int(result.scalar_one())
@@ -227,7 +282,11 @@ class ArticleRepository:
         return {day.date().isoformat(): count for day, count in result.all()}
 
     async def count_by_category(
-        self, since: datetime | None = None, translated_only: bool = False
+        self,
+        since: datetime | None = None,
+        translated_only: bool = False,
+        exclude_categories: list[str] | None = None,
+        min_importance: float | None = None,
     ) -> dict[str, int]:
         """One grouped query behind the newspaper's tab badges -- the alternative
         is a request per category every time the page loads."""
@@ -243,6 +302,13 @@ class ArticleRepository:
         # filtered list will render (this query already joins the enrichment).
         if translated_only:
             query = query.where(ArticleEnrichment.translated_at.isnot(None))
+        if exclude_categories:
+            query = query.where(ArticleEnrichment.category.notin_(exclude_categories))
+        if min_importance is not None:
+            # Identical predicate to _apply_filters, focus weighting included --
+            # a badge counting rows on a different rule than the list is a badge
+            # that lies, and the weighting shifts counts a long way per category.
+            query = query.where(_focus_weighted_importance() >= min_importance)
         result = await self.db.execute(query)
         return {category: count for category, count in result.all()}
 
