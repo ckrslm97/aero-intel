@@ -15,6 +15,24 @@ from app.models.promotion import NEW_WINDOW_HOURS, Promotion
 
 router = APIRouter(prefix="/promotions", tags=["promotions"])
 
+# Faz 15 contract fix: neither endpoint below filtered on this at all, so a
+# row pipeline_v2's build_promotion() writes at the low band (or Faz 13's
+# mark_legacy_campaigns_superseded() marks superseded) would still have shown
+# up here once pipeline_v2 is on -- the "K8 rows stop being served" claim was
+# only true of the confidence system, not of this read path. NULL is
+# deliberately allowed through: every scraped Pegasus row (promo_scrape.py)
+# has never been scored by the new system at all, and treating "never
+# assessed" the same as "assessed and found wanting" would empty the live
+# page of everything it serves today.
+def _publishable_promotions():
+    return and_(
+        Promotion.superseded_at.is_(None),
+        or_(
+            Promotion.confidence_band.is_(None),
+            Promotion.confidence_band.in_(("high", "medium")),
+        ),
+    )
+
 
 class PromotionOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -73,7 +91,7 @@ async def list_promotions(
     public_cache(response, FRESH)
     # Newest sighting first: this endpoint's headline job is "what just
     # launched", and the timeline re-sorts into lanes client-side anyway.
-    query = select(Promotion).order_by(Promotion.detected_at.desc())
+    query = select(Promotion).where(_publishable_promotions()).order_by(Promotion.detected_at.desc())
 
     if airline:
         query = query.where(Promotion.airline_code.in_(airline))
@@ -129,7 +147,9 @@ async def count_new_promotions(
     cutoff = datetime.now(timezone.utc) - timedelta(hours=NEW_WINDOW_HOURS)
     rows = (
         await db.execute(
-            select(Promotion.airline_code).where(Promotion.detected_at >= cutoff)
+            select(Promotion.airline_code).where(
+                Promotion.detected_at >= cutoff, _publishable_promotions()
+            )
         )
     ).scalars().all()
     return {
