@@ -40,6 +40,29 @@ YAHOO_BRENT_URL = "https://finance.yahoo.com/quote/BZ=F"
 YAHOO_FX_URL = "https://finance.yahoo.com/quote/TRY=X"
 FRANKFURTER_URL = "https://www.frankfurter.app/"
 
+# Kokpit's five live pairs. USD/TRY is first because it is the metric every
+# other part of the app already reads (fuel/oil cards' peer comparisons, the
+# original dashboard). The other four are Kokpit-only -- nothing outside
+# app/api/v1/kokpit.py reads their metric_key.
+# (metric_key, Yahoo symbol, Frankfurter base, Frankfurter quote, unit)
+LIVE_FX_PAIRS: tuple[tuple[str, str, str, str, str], ...] = (
+    ("fx_usd_try", "TRY=X", "USD", "TRY", "TRY"),
+    ("fx_eur_usd", "EURUSD=X", "EUR", "USD", "USD"),
+    ("fx_usd_jpy", "JPY=X", "USD", "JPY", "JPY"),
+    ("fx_eur_gbp", "EURGBP=X", "EUR", "GBP", "GBP"),
+    ("fx_usd_cny", "CNY=X", "USD", "CNY", "CNY"),
+)
+
+# metric_key -> display pair name, e.g. "USD/TRY". Shared by the Kokpit API
+# and the Market Pulse grounding builder so both name a pair identically.
+FX_PAIR_LABELS: dict[str, str] = {
+    "fx_usd_try": "USD/TRY",
+    "fx_eur_usd": "EUR/USD",
+    "fx_usd_jpy": "USD/JPY",
+    "fx_eur_gbp": "EUR/GBP",
+    "fx_usd_cny": "USD/CNY",
+}
+
 # Jet fuel trades at a premium ("crack spread") over Brent. IATA's June 2026
 # outlook assumes USD 95/bbl Brent and a USD 57/bbl crack spread, giving jet
 # fuel at USD 152/bbl -- a spread blown wide by the 2026 energy crisis. It is
@@ -132,20 +155,23 @@ async def refresh_all_kpis(db: AsyncSession) -> int:
         )
         recorded += 1
 
-    usd_try = await fetch_quote(settings.yahoo_finance_base_url, "TRY=X")
-    if usd_try is not None:
-        repo.record("fx_usd_try", usd_try, "TRY", "Yahoo Finance (TRY=X)", False, now, YAHOO_FX_URL)
+    for metric_key, yahoo_symbol, fk_base, fk_quote, unit in LIVE_FX_PAIRS:
+        rate = await fetch_quote(settings.yahoo_finance_base_url, yahoo_symbol)
+        if rate is None:
+            continue
+        yahoo_url = f"https://finance.yahoo.com/quote/{yahoo_symbol}"
+        repo.record(metric_key, rate, unit, f"Yahoo Finance ({yahoo_symbol})", False, now, yahoo_url)
         recorded += 1
 
         # Independent cross-check against a second, unrelated source (ECB
         # reference rates via Frankfurter). Stored as a non-primary reading so
-        # it corroborates the dashboard value without feeding its trend line.
-        frankfurter_rate = await fetch_frankfurter_rate("USD", "TRY")
+        # it corroborates the board value without feeding its trend line.
+        frankfurter_rate = await fetch_frankfurter_rate(fk_base, fk_quote)
         if frankfurter_rate is not None:
             repo.record(
-                "fx_usd_try",
+                metric_key,
                 frankfurter_rate,
-                "TRY",
+                unit,
                 "Frankfurter.app (ECB referans kurları)",
                 False,
                 now,
@@ -153,10 +179,11 @@ async def refresh_all_kpis(db: AsyncSession) -> int:
                 is_primary=False,
             )
             recorded += 1
-            diff_pct = abs(usd_try - frankfurter_rate) / usd_try * 100
+            diff_pct = abs(rate - frankfurter_rate) / rate * 100
             logger.info(
                 "fx_cross_check",
-                yahoo=usd_try,
+                pair=metric_key,
+                yahoo=rate,
                 frankfurter=frankfurter_rate,
                 diff_pct=round(diff_pct, 3),
             )

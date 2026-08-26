@@ -18,6 +18,7 @@ on:
           - refresh-tk-reviews
           - seed-promos
           - prune-kpi-duplicates
+          - seed-curated-data
           - re-enrich
           - reclassify
           - repair-translations
@@ -94,6 +95,11 @@ jobs:
               python -m app.cli seed-promos ;;
             prune-kpi-duplicates)
               python -m app.cli prune-kpi-duplicates ;;
+            seed-curated-data)
+              # Reconciles fx_forecasts/iata_indicators to app/ingest/curated_seed.py --
+              # run after every PR that edits that file, same as seed-kpi-history.
+              alembic upgrade head
+              python -m app.cli seed-curated-data ;;
             re-enrich)
               if [ -n "${DAYS}" ]; then
                 python -m app.cli re-enrich --days "${DAYS}"
