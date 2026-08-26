@@ -7,16 +7,17 @@ UI untranslated. classify_article is monkeypatched with recorded outcomes
 rather than calling a real model -- CI must not depend on a model being
 reachable or answering the same way twice.
 """
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 import pytest
 
 from app.agents import runner as runner_module
 from app.agents.runner import run_pipeline_v2
-from app.llm.classify import Classification, ClassificationResult, RiskAssessment
+from app.llm.classify import CampaignExtraction, Classification, ClassificationResult, RiskAssessment
 from app.models.article import Article
 from app.models.entity import ArticleEntity, Entity
 from app.models.news_event import NewsEvent
+from app.models.promotion import Promotion
 from app.models.source import Source
 from app.pipeline.outcomes import Outcome
 
@@ -363,3 +364,100 @@ async def test_clustered_articles_share_one_event_and_classification(db_session,
 
     event = (await db_session.execute(NewsEvent.__table__.select())).mappings().one()
     assert event["article_count"] == 2
+
+
+async def test_a_validated_campaign_produces_a_promotion_row(db_session, monkeypatch):
+    """Balkanlar %50'ye Varan İndirimle! -- one of only two rows in production
+    that were genuine, correctly-attributed, dated campaigns."""
+    async def _campaign_answer(title, content, *, topic_fragment=""):
+        return ClassificationResult(
+            article=Outcome.classified(
+                Classification(
+                    category="revenue_management", subcategory="promotion",
+                    title_tr="Balkanlar %50'ye Varan İndirimle!",
+                    summary_tr="Pegasus, Balkanlar'a vergiler hariç %50'ye varan indirim sunuyor.",
+                    confidence=0.9, airlines=[{"code": "PC", "name": "Pegasus Airlines", "role": "subject"}],
+                    airports=[], countries=[],
+                ),
+                certainty=0.9,
+            ),
+            risk=Outcome.not_applicable("not_a_risk"),
+            campaign=Outcome.classified(
+                CampaignExtraction(
+                    airline_code="PC", discount_pct=50,
+                    sale_starts=date(2026, 8, 25), sale_ends=date(2026, 8, 27),
+                    travel_starts=None, travel_ends=None, markets={"regions": [], "countries": [], "cities": []},
+                ),
+                certainty=0.9,
+            ),
+        )
+
+    monkeypatch.setattr(runner_module, "classify_article", _campaign_answer)
+
+    source = await _source(db_session, name="Pegasus", trust=0.9)
+    await _article(
+        db_session, source, "https://a.example/balkanlar",
+        "Balkanlar %50'ye Varan İndirimle!",
+        content="Pegasus BolBol üyelerine özel Balkanlar hattında indirim kampanyası başladı.",
+    )
+    await db_session.commit()
+
+    stats = await run_pipeline_v2(db_session, limit=10)
+
+    assert stats["campaigns"] == 1
+    promotion = (await db_session.execute(Promotion.__table__.select())).mappings().one()
+    assert promotion["airline_code"] == "PC"
+    assert promotion["airline_name"] == "Pegasus Airlines"
+    assert promotion["discount_pct"] == 50
+    assert promotion["sale_starts"] == date(2026, 8, 25)
+    assert promotion["validation_state"] == "valid"
+    assert promotion["confidence_band"] in ("high", "medium")
+    assert promotion["event_id"] is not None
+
+
+async def test_an_expired_titled_campaign_is_not_persisted(db_session, monkeypatch):
+    """[Expired] [Deal Alert] Save up to 30% on Economy and Business Fares --
+    a real published row whose title said it was already over. Etihad Airways
+    (the full two-word form) clears the gate on its own -- this test is about
+    the downstream expired-title veto in campaign_airline.py, not the gate."""
+    async def _with_campaign(title, content, *, topic_fragment=""):
+        return ClassificationResult(
+            article=Outcome.classified(
+                Classification(
+                    category="revenue_management", subcategory="promotion",
+                    title_tr="[Expired] Ekonomi ve Business'ta %30'a Varan İndirim",
+                    summary_tr="Etihad Airways'in ekonomi ve business bilet kampanyasının süresi doldu.",
+                    confidence=0.8, airlines=[{"code": "EY", "name": "Etihad Airways", "role": "subject"}],
+                    airports=[], countries=[],
+                ),
+                certainty=0.8,
+            ),
+            risk=Outcome.not_applicable("not_a_risk"),
+            campaign=Outcome.classified(
+                CampaignExtraction(
+                    airline_code="EY", discount_pct=30,
+                    sale_starts=date(2026, 1, 1), sale_ends=date(2026, 1, 31),
+                    travel_starts=None, travel_ends=None, markets={},
+                ),
+                certainty=0.8,
+            ),
+        )
+
+    monkeypatch.setattr(runner_module, "classify_article", _with_campaign)
+
+    source = await _source(db_session, name="OneMileAtATime", trust=0.6)
+    await _article(
+        db_session, source, "https://a.example/expired",
+        "[Expired] [Deal Alert] Save up to 30% on Economy and Business Fares With Etihad Airways",
+        content="Etihad Airways'in ekonomi ve business sınıfı bilet kampanyası hakkında havayolu haberi.",
+    )
+    await db_session.commit()
+
+    stats = await run_pipeline_v2(db_session, limit=10)
+
+    assert stats["campaigns"] == 0
+    assert (await db_session.execute(Promotion.__table__.select())).mappings().all() == []
+    # The event itself still exists -- it is a real (if non-campaign) news
+    # item -- and its not_applicable_reasons records why no campaign followed.
+    event = (await db_session.execute(NewsEvent.__table__.select())).mappings().one()
+    assert event["not_applicable_reasons"]["campaign"] == "expired_title"
