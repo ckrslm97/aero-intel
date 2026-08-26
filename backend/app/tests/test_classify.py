@@ -100,17 +100,39 @@ def test_unparseable_response_fails_every_verdict():
         assert not outcome.was_assessed
 
 
-def test_off_taxonomy_risk_type_is_a_failure_not_a_silent_drop():
-    """A model inventing "hurricane" would write a slug nothing renders. The
-    row would look classified and be silently wrong."""
+def test_off_taxonomy_risk_category_is_a_failure_not_a_silent_drop():
+    """A model inventing "hurricane" -- a leaf type from the taxonomy this
+    replaced, not a family in the new one -- would write a slug nothing
+    renders. The row would look classified and be silently wrong."""
     result = parse(
         _response(
             is_risk=True,
-            risk={"type": "hurricane", "severity": "high", "country": "United States"},
+            risk={
+                "category": "hurricane", "severity": "high",
+                "probability": 0.9, "aviation_impact_score": 0.8,
+                "country": "United States",
+            },
         )
     )
     assert result.risk.state is OutcomeState.FAILED
-    assert result.risk.reason.startswith("off_taxonomy_risk_type")
+    assert result.risk.reason.startswith("off_taxonomy_risk_category")
+
+
+def test_a_risk_missing_its_scoring_inputs_is_a_failure():
+    """probability and aviation_impact_score feed pipeline/risk_scoring.py
+    directly -- a risk flagged without them is not a usable answer, the same
+    way a risk flagged without a type or severity isn't."""
+    result = parse(
+        _response(
+            is_risk=True,
+            risk={
+                "category": "conflict", "severity": "high",
+                "country": "Ukraine",
+            },
+        )
+    )
+    assert result.risk.state is OutcomeState.FAILED
+    assert result.risk.reason == "risk_missing_scoring_inputs"
 
 
 def test_off_taxonomy_category_is_a_failure():

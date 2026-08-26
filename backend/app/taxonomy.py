@@ -397,3 +397,106 @@ def is_valid_risk_type(slug: str | None) -> bool:
 
 def risk_family_of(slug: str | None) -> str | None:
     return RISK_TYPE_FAMILY.get(slug) if slug else None
+
+
+# ---------------------------------------------------------------------------
+# Risk Radarı taxonomy — v2 (Faz 7)
+#
+# A second, independent taxonomy alongside the one above. Deliberately not a
+# replacement in place: `RISK_TYPES` and `is_valid_risk_type` are still what
+# app/llm/heuristic.py's classify_risk_heuristic (the only risk classifier
+# actually running in production today) reads and writes, and that keyword
+# matcher's patterns are built for natural-disaster/conflict granularity
+# (earthquake vs. flood vs. wildfire). Repointing those constants to this
+# taxonomy would silently change what the live Risk Radar shows before v2 has
+# been compared against v1 for a single day. The pipeline v2 runner
+# (app/agents/runner.py) and the consolidated classifier (app/llm/classify.py)
+# import from here instead; v1 never sees this section.
+#
+# The reorganisation itself is the owner's: a revenue-management desk does not
+# file "fuel price spike" and "earthquake" as siblings under a generic
+# "disaster" umbrella. Eight families group risk by what kind of business
+# decision it should trigger -- geopolitical and operational read close to the
+# old natural/conflict split, but economic, fuel-cost, market-competitive,
+# demand and infrastructure have no equivalent in the old scheme at all, and
+# are exactly the categories a fare-and-network desk actually watches for.
+#
+# Two leaf types per family: specific enough to be different events, closed
+# enough that the country/family rollups stay countable. A model inventing a
+# type outside this set fails the call (see llm/classify.py) rather than
+# writing a slug nothing can render.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class RiskCategoryDef:
+    slug: str
+    family: str
+    label_tr: str
+
+
+RISK_CATEGORY_FAMILIES: tuple[str, ...] = (
+    "geopolitical", "operational", "regulatory", "economic",
+    "fuel_cost", "market_competitive", "demand", "infrastructure",
+)
+
+RISK_CATEGORY_FAMILY_LABELS_TR: dict[str, str] = {
+    "geopolitical": "Jeopolitik",
+    "operational": "Operasyonel",
+    "regulatory": "Düzenleyici",
+    "economic": "Ekonomik",
+    "fuel_cost": "Yakıt-Maliyet",
+    "market_competitive": "Pazar-Rekabet",
+    "demand": "Talep",
+    "infrastructure": "Altyapı",
+}
+
+RISK_CATEGORIES: list[RiskCategoryDef] = [
+    # Geopolitical -- war, unrest and attacks were three separate types before;
+    # a revenue desk reacts to all three the same way (route suspension,
+    # insurance, crew safety), so they are one type here. Sanctions are their
+    # own because the reaction is different (payment/clearing risk, not
+    # operational risk).
+    RiskCategoryDef("conflict", "geopolitical", "Çatışma"),
+    RiskCategoryDef("sanctions", "geopolitical", "Yaptırım"),
+    # Operational -- an accident/incident (the old "storm" grounding a
+    # weather-named fighter jet lived here by keyword accident; it no longer
+    # can, since this taxonomy has no bare weather types to collide with) vs.
+    # a disruption that stops flights without anyone being hurt (strike,
+    # closure, ATC action affecting one carrier).
+    RiskCategoryDef("accident_incident", "operational", "Kaza/Olay"),
+    RiskCategoryDef("disruption", "operational", "Operasyonel Aksama"),
+    # Regulatory
+    RiskCategoryDef("restriction", "regulatory", "Kısıtlama/Yasak"),
+    RiskCategoryDef("policy_change", "regulatory", "Mevzuat Değişikliği"),
+    # Economic
+    RiskCategoryDef("currency_crisis", "economic", "Kur Krizi"),
+    RiskCategoryDef("macro_shock", "economic", "Makroekonomik Şok"),
+    # Fuel / cost
+    RiskCategoryDef("fuel_price_spike", "fuel_cost", "Yakıt Fiyat Artışı"),
+    RiskCategoryDef("fuel_shortage", "fuel_cost", "Yakıt Kıtlığı"),
+    # Market / competitive
+    RiskCategoryDef("capacity_shift", "market_competitive", "Kapasite Değişimi"),
+    RiskCategoryDef("price_war", "market_competitive", "Fiyat Savaşı"),
+    # Demand
+    RiskCategoryDef("demand_shock", "demand", "Talep Düşüşü"),
+    RiskCategoryDef("demand_surge", "demand", "Talep Artışı"),
+    # Infrastructure -- an airport-side problem (closure, damage, congestion)
+    # vs. an airspace/ATC-side one (a country closing its airspace, a control
+    # centre outage) are different mitigations (reroute a station vs. reroute
+    # a flight path), so they stay separate types.
+    RiskCategoryDef("airport_disruption", "infrastructure", "Havalimanı Aksaması"),
+    RiskCategoryDef("atc_disruption", "infrastructure", "Hava Trafik Aksaması"),
+]
+
+RISK_CATEGORY_SLUGS: tuple[str, ...] = tuple(r.slug for r in RISK_CATEGORIES)
+RISK_CATEGORY_FAMILY_OF: dict[str, str] = {r.slug: r.family for r in RISK_CATEGORIES}
+RISK_CATEGORY_LABELS_TR: dict[str, str] = {r.slug: r.label_tr for r in RISK_CATEGORIES}
+
+
+def is_valid_risk_category(slug: str | None) -> bool:
+    return slug in RISK_CATEGORY_SLUGS
+
+
+def risk_category_family_of(slug: str | None) -> str | None:
+    return RISK_CATEGORY_FAMILY_OF.get(slug) if slug else None

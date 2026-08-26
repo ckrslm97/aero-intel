@@ -282,6 +282,78 @@ _CURATED_AIRPORTS: dict[str, tuple[str, str]] = {
     "izmir": ("Izmir Adnan Menderes", "ADB"),
 }
 
+# Turkish country names, folded on the way in via _country_aliases() ->
+# canonical English name (the key COUNTRY_TO_REGION uses). Written with
+# diacritics for readability; fold_for_match strips them, so "Türkiye" and
+# "Turkiye" reach the same key.
+#
+# This closes the gap that put a Turkish THY network op-ed in Aruba and a
+# Ukrainian airbase strike in China: twelve Turkish-language feeds run through
+# this gazetteer, and until now "turkish airlines" (English) was the only
+# Turkish-adjacent string in the whole file. A Turkish article naming its own
+# country's neighbours resolved nothing.
+#
+# Deliberately excludes ordinary Turkish words that happen to also be country
+# names, the same discipline _AMBIGUOUS_COUNTRY_NAMES uses for English:
+#   "Mali" -- "mali" is the common Turkish adjective for financial/fiscal
+#             ("mali yıl", "mali tablo"); every finance article would resolve
+#             to the country Mali.
+#   "Çad", "Gine" -- short, and folded to a bare token ("cad", "gine") that
+#             risks matching address abbreviations and other short strings;
+#             excluded out of the same caution as their English counterparts,
+#             not because a real collision was found. Both stay reachable
+#             through their airports.
+_TURKISH_COUNTRY_NAMES: dict[str, str] = {
+    "türkiye": "turkey", "almanya": "germany", "rusya": "russia",
+    "ukrayna": "ukraine", "italya": "italy", "fransa": "france",
+    "ingiltere": "united kingdom", "birleşik krallık": "united kingdom",
+    "ispanya": "spain", "hollanda": "netherlands", "belçika": "belgium",
+    "i̇sviçre": "switzerland", "avusturya": "austria", "yunanistan": "greece",
+    "portekiz": "portugal", "polonya": "poland", "i̇sveç": "sweden",
+    "norveç": "norway", "danimarka": "denmark", "finlandiya": "finland",
+    "i̇rlanda": "ireland", "i̇zlanda": "iceland", "çekya": "czech republic",
+    "çek cumhuriyeti": "czech republic", "macaristan": "hungary",
+    "romanya": "romania", "bulgaristan": "bulgaria", "hırvatistan": "croatia",
+    "sırbistan": "serbia", "slovenya": "slovenia", "slovakya": "slovakia",
+    "estonya": "estonia", "letonya": "latvia", "litvanya": "lithuania",
+    "beyaz rusya": "belarus", "moldova": "moldova", "malta": "malta",
+    "kıbrıs": "cyprus", "lüksemburg": "luxembourg", "monako": "monaco",
+    "amerika": "united states", "kanada": "canada", "meksika": "mexico",
+    "brezilya": "brazil", "arjantin": "argentina", "şili": "chile",
+    "kolombiya": "colombia", "peru": "peru", "ekvador": "ecuador",
+    "venezuela": "venezuela", "uruguay": "uruguay", "paraguay": "paraguay",
+    "bolivya": "bolivia", "panama": "panama", "küba": "cuba",
+    "jamaika": "jamaica", "katar": "qatar", "suudi arabistan": "saudi arabia",
+    "birleşik arap emirlikleri": "united arab emirates", "umman": "oman",
+    "kuveyt": "kuwait", "bahreyn": "bahrain", "i̇srail": "israel",
+    "filistin": "palestinian territory", "ürdün": "jordan", "lübnan": "lebanon",
+    "suriye": "syria", "irak": "iraq", "i̇ran": "iran", "yemen": "yemen",
+    "mısır": "egypt", "fas": "morocco", "cezayir": "algeria",
+    "tunus": "tunisia", "libya": "libya", "sudan": "sudan",
+    "etiyopya": "ethiopia", "kenya": "kenya", "tanzanya": "tanzania",
+    "uganda": "uganda", "nijerya": "nigeria", "gana": "ghana",
+    "fildişi sahili": "côte d'ivoire", "senegal": "senegal",
+    "güney afrika": "south africa", "namibya": "namibia",
+    "zimbabve": "zimbabwe", "zambiya": "zambia", "angola": "angola",
+    "mozambik": "mozambique", "somali": "somalia", "kongo": "democratic republic of the congo",
+    "çin": "china", "japonya": "japan", "güney kore": "south korea",
+    "kuzey kore": "north korea", "hindistan": "india", "pakistan": "pakistan",
+    "bangladeş": "bangladesh", "sri lanka": "sri lanka", "nepal": "nepal",
+    "afganistan": "afghanistan", "kazakistan": "kazakhstan",
+    "özbekistan": "uzbekistan", "türkmenistan": "turkmenistan",
+    "kırgızistan": "kyrgyzstan", "tacikistan": "tajikistan",
+    "azerbaycan": "azerbaijan", "ermenistan": "armenia", "gürcistan": "georgia",
+    "moğolistan": "mongolia", "endonezya": "indonesia", "malezya": "malaysia",
+    "tayland": "thailand", "vietnam": "vietnam", "filipinler": "philippines",
+    "singapur": "singapore", "myanmar": "myanmar", "kamboçya": "cambodia",
+    "laos": "laos", "brunei": "brunei", "tayvan": "taiwan",
+    "avustralya": "australia", "yeni zelanda": "new zealand",
+    "fiji": "fiji", "kosova": "kosovo", "karadağ": "montenegro",
+    "kuzey makedonya": "north macedonia", "bosna hersek": "bosnia and herzegovina",
+    "arnavutluk": "albania",
+}
+
+
 # ISO-ish common country names, lowercase.
 _CURATED_COUNTRIES: set[str] = {
     "united states", "united kingdom", "france", "germany", "turkey", "qatar",
@@ -323,6 +395,8 @@ def _country_aliases() -> dict[str, str]:
         aliases[fold_for_match(name)] = name
     for name in _CURATED_COUNTRIES:
         aliases[fold_for_match(name)] = name
+    for turkish_name, canonical in _TURKISH_COUNTRY_NAMES.items():
+        aliases[fold_for_match(turkish_name)] = canonical
     return aliases
 
 

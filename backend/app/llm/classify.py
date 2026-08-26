@@ -34,7 +34,7 @@ from app.taxonomy import (
     GENERAL_CATEGORY,
     RISK_SEVERITIES,
     SUBCATEGORY_KEYWORDS,
-    is_valid_risk_type,
+    is_valid_risk_category,
 )
 
 logger = get_logger(__name__)
@@ -75,11 +75,20 @@ class Classification:
 
 @dataclass(frozen=True)
 class RiskAssessment:
-    type: str
+    category: str
     severity: str
+    #: The model's own certainty that this event is real, distinct from
+    #: `Outcome.certainty` (which is the *classification* confidence -- "I am
+    #: sure this is what the article says" -- not "I am sure this happened").
+    #: Feeds pipeline/risk_scoring.py.
+    probability: float
+    #: How directly this touches commercial aviation, 0-1. The second input
+    #: risk_scoring.py needs and the keyword heuristic had no way to produce --
+    #: it could only say a word matched, never how much the match mattered.
+    aviation_impact_score: float
     country: str | None
     city: str | None
-    aviation_impact: str | None
+    aviation_impact_note: str | None
 
 
 @dataclass(frozen=True)
@@ -283,21 +292,31 @@ def _parse_risk(payload: dict) -> Outcome[RiskAssessment]:
         # a failed call rather than a silent "no".
         return Outcome.failed("risk_flagged_without_payload")
 
-    risk_type = (_clean_str(risk.get("type")) or "").lower()
-    if not is_valid_risk_type(risk_type):
-        return Outcome.failed(f"off_taxonomy_risk_type:{risk_type or 'missing'}")
+    risk_category = (_clean_str(risk.get("category")) or "").lower()
+    if not is_valid_risk_category(risk_category):
+        return Outcome.failed(f"off_taxonomy_risk_category:{risk_category or 'missing'}")
 
     severity = (_clean_str(risk.get("severity")) or "").lower()
     if severity not in RISK_SEVERITIES:
         return Outcome.failed(f"off_taxonomy_risk_severity:{severity or 'missing'}")
 
+    probability = _clean_confidence(risk.get("probability"))
+    aviation_impact_score = _clean_confidence(risk.get("aviation_impact_score"))
+    # Both are load-bearing inputs to the risk score, not optional colour --
+    # a model that flags a risk but won't estimate how likely or how relevant
+    # it is has not really answered the question.
+    if probability is None or aviation_impact_score is None:
+        return Outcome.failed("risk_missing_scoring_inputs")
+
     return Outcome.classified(
         RiskAssessment(
-            type=risk_type,
+            category=risk_category,
             severity=severity,
+            probability=probability,
+            aviation_impact_score=aviation_impact_score,
             country=_clean_str(risk.get("country")),
             city=_clean_str(risk.get("city")),
-            aviation_impact=_clean_str(risk.get("aviation_impact")),
+            aviation_impact_note=_clean_str(risk.get("aviation_impact_note")),
         ),
         certainty=certainty,
     )

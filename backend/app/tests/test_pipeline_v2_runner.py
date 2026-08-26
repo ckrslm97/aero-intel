@@ -229,8 +229,9 @@ async def test_a_risk_verdict_is_persisted_with_a_score(db_session, monkeypatch)
             ),
             risk=Outcome.classified(
                 RiskAssessment(
-                    type="war", severity="high", country="Russia", city=None,
-                    aviation_impact="Hava üssü operasyonları etkilendi.",
+                    category="conflict", severity="high", probability=0.95,
+                    aviation_impact_score=0.8, country="Russia", city=None,
+                    aviation_impact_note="Hava üssü operasyonları etkilendi.",
                 ),
                 certainty=0.9,
             ),
@@ -252,10 +253,12 @@ async def test_a_risk_verdict_is_persisted_with_a_score(db_session, monkeypatch)
     await run_pipeline_v2(db_session, limit=10)
 
     event = (await db_session.execute(NewsEvent.__table__.select())).mappings().one()
-    assert event["risk_type"] == "war"
-    assert event["risk_family"] == "conflict"
+    assert event["risk_type"] == "conflict"
+    assert event["risk_family"] == "geopolitical"
     assert event["risk_severity"] == "high"
-    assert event["risk_country"] == "Russia"
+    # Lowercase, matching the existing convention: v1's detect_risk_place
+    # also stores country.lower() so it lines up with COUNTRY_TO_REGION's keys.
+    assert event["risk_country"] == "russia"
     assert event["risk_assessed_at"] is not None
     assert event["risk_score"] is not None
     assert event["region"] == "europe"
