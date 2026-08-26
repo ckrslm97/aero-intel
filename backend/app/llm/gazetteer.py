@@ -83,6 +83,29 @@ AIRLINES: dict[str, tuple[str, str]] = {
     "pegasus airlines": ("Pegasus Airlines", "PC"),
     "ajet": ("AJet", "VF"),
     "turkish airlines": ("Turkish Airlines", "TK"),
+    # --- Turkish-language names -------------------------------------------
+    #
+    # Twelve Turkish feeds run through this gazetteer and, until now, the only
+    # Turkish-language carrier name in the table was "turkish airlines" -- which
+    # is English. So a Turkish article about the home carrier produced no TK
+    # entity at all, and the airline filter, the campaign attribution and the
+    # BİZ page each silently lost every Turkish source.
+    #
+    # Aliases are folded (fold_for_match) before lookup, so the diacritics here
+    # are for readability: "Türk Hava Yolları" is matched as "turk hava yollari"
+    # and a headline that spells it without diacritics matches the same entry.
+    "türk hava yolları": ("Turkish Airlines", "TK"),
+    "türk havayolları": ("Turkish Airlines", "TK"),
+    # The abbreviation Turkish coverage actually uses. Safe as a bare token:
+    # "thy" is otherwise only archaic English, which does not appear in an
+    # aviation feed.
+    "thy": ("Turkish Airlines", "TK"),
+    "anadolujet": ("AJet", "VF"),
+    "anadolu jet": ("AJet", "VF"),
+    "pegasus hava yolları": ("Pegasus Airlines", "PC"),
+    "pegasus havayolları": ("Pegasus Airlines", "PC"),
+    "sun express": ("SunExpress", "XQ"),
+    "corendon airlines": ("Corendon Airlines", "XC"),
     "delta": ("Delta Air Lines", "DL"),
     "delta air lines": ("Delta Air Lines", "DL"),
     "united airlines": ("United Airlines", "UA"),
