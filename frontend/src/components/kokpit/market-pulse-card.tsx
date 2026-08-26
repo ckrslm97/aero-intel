@@ -1,8 +1,9 @@
 "use client";
 
 import { ExternalLink, Sparkles } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
+import { DataSourceError } from "@/components/data-source-error";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiFetch, ApiError } from "@/lib/api";
@@ -11,13 +12,19 @@ import type { MarketPulseOut } from "@/lib/types";
 /** The daily synthesis over Kokpit's own already-curated numbers -- never a
  * fresh claim of the model's own, see backend/app/services/market_pulse_service.py.
  * A 404 here (no pulse generated yet, or generation hasn't run today) is a
- * quiet empty state, not an error -- the honest "nothing generated" case. */
+ * quiet empty state, not an error -- the honest "nothing generated" case, so
+ * it's kept separate from a real fetch failure rather than folded into the
+ * shared useDataSource hook's single error state. */
 export function MarketPulseCard() {
   const [pulse, setPulse] = useState<MarketPulseOut | null>(null);
   const [state, setState] = useState<"loading" | "ok" | "empty" | "error">("loading");
+  const [retryToken, setRetryToken] = useState(0);
+  const retry = useCallback(() => setRetryToken((t) => t + 1), []);
 
   useEffect(() => {
     let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch driven by retry change; must flip synchronously with it
+    setState("loading");
     apiFetch<MarketPulseOut>("/kokpit/pulse", { cache: "default" })
       .then((data) => {
         if (cancelled) return;
@@ -31,13 +38,15 @@ export function MarketPulseCard() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [retryToken]);
 
   if (state === "loading") {
     return <Skeleton className="h-32 w-full rounded-xl" />;
   }
   if (state === "error") {
-    return <p className="text-sm text-muted-foreground">Market Pulse yüklenemedi.</p>;
+    return (
+      <DataSourceError onRetry={retry} lastUpdated={pulse ? new Date(pulse.generated_at) : null} />
+    );
   }
   if (state === "empty" || !pulse) {
     return (

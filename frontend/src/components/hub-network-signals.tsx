@@ -1,12 +1,14 @@
 "use client";
 
 import { ExternalLink } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import { AirlineLogo } from "@/components/airline-logo";
+import { DataSourceError, LastUpdatedStamp, StaleDataBanner } from "@/components/data-source-error";
 import { MotionItem, MotionList } from "@/components/motion/motion-list";
 import { RouteSignalMap } from "@/components/route-signal-map";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useDataSource } from "@/hooks/use-data-source";
 import { apiFetch } from "@/lib/api";
 import { worldRegions } from "@/lib/nav";
 import type { NetworkSignalGroup, RouteSignalArticle } from "@/lib/types";
@@ -25,39 +27,22 @@ function formatSignalDate(iso: string | null): string | null {
  * -- one row per event rather than per article, so a story three outlets
  * ran doesn't count as three signals. */
 export function HubNetworkSignals() {
-  const [groups, setGroups] = useState<NetworkSignalGroup[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [carrier, setCarrier] = useState<string | null>(null);
   const [city, setCity] = useState<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    apiFetch<NetworkSignalGroup[]>("/hubs/network-signals?days=30", { cache: "default" })
-      .then((data) => {
-        if (!cancelled) setGroups(data);
-      })
-      .catch(() => {
-        if (!cancelled) setError("Ağ sinyalleri yüklenemedi. Sunucu çalışıyor mu?");
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const fetcher = useCallback(
+    (signal: AbortSignal) =>
+      apiFetch<NetworkSignalGroup[]>("/hubs/network-signals?days=30", { cache: "default", signal }),
+    [],
+  );
+  const { data: groups, error, loaded, lastUpdated, stale, retry } = useDataSource(fetcher, []);
 
   const flatSignals: RouteSignalArticle[] = useMemo(
     () => (groups ?? []).flatMap((group) => group.articles),
     [groups],
   );
 
-  if (error) {
-    return (
-      <p className="rounded-lg border border-dashed border-border p-6 text-sm text-muted-foreground">
-        {error}
-      </p>
-    );
-  }
-
-  if (!groups) {
+  if (!loaded) {
     return (
       <div className="flex flex-col gap-4">
         <Skeleton className="h-[320px] w-full rounded-xl" />
@@ -65,6 +50,12 @@ export function HubNetworkSignals() {
       </div>
     );
   }
+
+  if (error && !groups) {
+    return <DataSourceError onRetry={retry} lastUpdated={lastUpdated} />;
+  }
+
+  if (!groups) return null;
 
   if (groups.length === 0) {
     return (
@@ -76,6 +67,7 @@ export function HubNetworkSignals() {
 
   return (
     <div className="flex flex-col gap-6">
+      {stale && <StaleDataBanner onRetry={retry} lastUpdated={lastUpdated} />}
       <div className="overflow-hidden rounded-xl shadow-elev-1">
         <RouteSignalMap
           signals={flatSignals}
@@ -130,6 +122,7 @@ export function HubNetworkSignals() {
           </section>
         ))}
       </div>
+      <LastUpdatedStamp date={lastUpdated} />
     </div>
   );
 }

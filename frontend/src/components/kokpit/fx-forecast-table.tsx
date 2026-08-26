@@ -1,10 +1,12 @@
 "use client";
 
 import { ExternalLink } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
+import { DataSourceError, LastUpdatedStamp, StaleDataBanner } from "@/components/data-source-error";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useDataSource } from "@/hooks/use-data-source";
 import { apiFetch } from "@/lib/api";
 import type { FxForecastOut } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -21,24 +23,15 @@ const chip = (active: boolean) =>
  * Every row is one institution's own, individually-attributed number: never
  * averaged, never re-labelled onto a normalised horizon. */
 export function FxForecastTable() {
-  const [rows, setRows] = useState<FxForecastOut[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [pair, setPair] = useState<string | null>(null);
   const [horizon, setHorizon] = useState<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    apiFetch<FxForecastOut[]>("/kokpit/fx-forecasts", { cache: "default" })
-      .then((data) => {
-        if (!cancelled) setRows(data);
-      })
-      .catch(() => {
-        if (!cancelled) setError("Banka tahminleri yüklenemedi.");
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const fetcher = useCallback(
+    (signal: AbortSignal) =>
+      apiFetch<FxForecastOut[]>("/kokpit/fx-forecasts", { cache: "default", signal }),
+    [],
+  );
+  const { data: rows, error, loaded, lastUpdated, stale, retry } = useDataSource(fetcher, []);
 
   const pairs = useMemo(
     () => [...new Set((rows ?? []).map((r) => r.currency_pair))].sort(),
@@ -61,13 +54,13 @@ export function FxForecastTable() {
     [rows, pair, horizon],
   );
 
-  if (error) {
-    return <p className="text-sm text-muted-foreground">{error}</p>;
-  }
-  if (!rows) {
+  if (!loaded) {
     return <Skeleton className="h-64 w-full rounded-xl" />;
   }
-  if (rows.length === 0) {
+  if (error && !rows) {
+    return <DataSourceError onRetry={retry} lastUpdated={lastUpdated} />;
+  }
+  if (!rows || rows.length === 0) {
     return (
       <p className="rounded-xl border border-dashed border-border p-6 text-sm text-muted-foreground">
         Henüz küratörlü bir banka tahmini yok.
@@ -77,6 +70,7 @@ export function FxForecastTable() {
 
   return (
     <div className="flex flex-col gap-3">
+      {stale && <StaleDataBanner onRetry={retry} lastUpdated={lastUpdated} />}
       <div className="flex flex-wrap gap-1.5">
         <button type="button" onClick={() => setPair(null)} className={chip(!pair)}>
           Tümü
@@ -153,6 +147,7 @@ export function FxForecastTable() {
           </tbody>
         </table>
       </Card>
+      <LastUpdatedStamp date={lastUpdated} />
     </div>
   );
 }

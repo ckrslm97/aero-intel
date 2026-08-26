@@ -2,12 +2,14 @@
 
 import { ArrowDownRight, ArrowUpRight, Minus } from "lucide-react";
 import dynamic from "next/dynamic";
-import { useEffect, useState } from "react";
+import { useCallback } from "react";
 
+import { DataSourceError, LastUpdatedStamp, StaleDataBanner } from "@/components/data-source-error";
 import { CountUp } from "@/components/motion/count-up";
 import { MotionItem, MotionList } from "@/components/motion/motion-list";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useDataSource } from "@/hooks/use-data-source";
 import { apiFetch } from "@/lib/api";
 import { formatDelta } from "@/lib/format";
 import type { KokpitFxBoardOut, KokpitFxPairOut } from "@/lib/types";
@@ -97,32 +99,13 @@ function FxPairCard({ pair, index }: { pair: KokpitFxPairOut; index: number }) {
 /** The five live pairs plus the USD/SAR peg badge -- see
  * backend/app/api/v1/kokpit.py:get_fx_board. */
 export function FxBoard() {
-  const [board, setBoard] = useState<KokpitFxBoardOut | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const fetcher = useCallback(
+    (signal: AbortSignal) => apiFetch<KokpitFxBoardOut>("/kokpit/fx", { cache: "default", signal }),
+    [],
+  );
+  const { data: board, error, loaded, lastUpdated, stale, retry } = useDataSource(fetcher, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    apiFetch<KokpitFxBoardOut>("/kokpit/fx", { cache: "default" })
-      .then((data) => {
-        if (!cancelled) setBoard(data);
-      })
-      .catch(() => {
-        if (!cancelled) setError("Kur tablosu yüklenemedi. Sunucu çalışıyor mu?");
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  if (error) {
-    return (
-      <p className="rounded-lg border border-dashed border-border p-6 text-sm text-muted-foreground">
-        {error}
-      </p>
-    );
-  }
-
-  if (!board) {
+  if (!loaded) {
     return (
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {Array.from({ length: 6 }).map((_, i) => (
@@ -132,8 +115,16 @@ export function FxBoard() {
     );
   }
 
+  if (error && !board) {
+    return <DataSourceError onRetry={retry} lastUpdated={lastUpdated} />;
+  }
+
+  if (!board) return null;
+
   return (
-    <MotionList className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+    <div className="flex flex-col gap-3">
+      {stale && <StaleDataBanner onRetry={retry} lastUpdated={lastUpdated} />}
+      <MotionList className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
       {board.pairs.map((pair, index) => (
         <MotionItem key={pair.currency_pair} variant="scalePop">
           <FxPairCard pair={pair} index={index} />
@@ -165,6 +156,8 @@ export function FxBoard() {
           </CardContent>
         </Card>
       </MotionItem>
-    </MotionList>
+      </MotionList>
+      <LastUpdatedStamp date={lastUpdated} />
+    </div>
   );
 }
