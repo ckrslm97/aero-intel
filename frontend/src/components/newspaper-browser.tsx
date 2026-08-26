@@ -1,16 +1,23 @@
 "use client";
 
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { CalendarDays, Download, List, Map as MapIcon } from "lucide-react";
+import {
+  Archive as ArchiveIcon,
+  CalendarDays,
+  Download,
+  List,
+  Map as MapIcon,
+} from "lucide-react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 
 import { ArticleCard } from "@/components/article-card";
 import { CategoryChipRow } from "@/components/filters/category-chip-row";
 import { EventsCalendar } from "@/components/events-calendar";
 import { AirlineLogo } from "@/components/airline-logo";
+import { Pagination } from "@/components/pagination";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiFetch } from "@/lib/api";
 import { airlineTabs } from "@/lib/nav";
@@ -159,12 +166,30 @@ function groupByDay(items: ArticleOut[]): DayGroup[] {
 
 export function NewspaperBrowser() {
   const reduceMotion = useReducedMotion();
+  const router = useRouter();
+  const pathname = usePathname();
 
   // Opening filters can come from the URL, so Know How's "Gelir Yönetimi
   // haberleri" link lands on the paper already filtered and a filtered view is
   // shareable. Read once, as the initial state: after that the chips own the
   // filters, and re-reading the URL would fight them.
   const searchParams = useSearchParams();
+
+  // Unlike the filter chips above, the page number stays URL-owned for its
+  // whole life -- that is what makes a paged link shareable and the back
+  // button land on the page you actually came from, per Faz 11's pagination
+  // contract. 1-indexed; an invalid or missing ?page= reads as page 1.
+  const pageParam = Number(searchParams.get("page"));
+  const page = Number.isFinite(pageParam) && pageParam >= 1 ? Math.floor(pageParam) : 1;
+
+  function setPage(next: number) {
+    const params = new URLSearchParams(searchParams.toString());
+    if (next <= 1) params.delete("page");
+    else params.set("page", String(next));
+    router.push(params.size ? `${pathname}?${params.toString()}` : pathname, { scroll: false });
+    window.scrollTo({ top: 0, behavior: reduceMotion ? "instant" : "smooth" });
+  }
+
   const initial = useMemo(() => {
     const wanted = searchParams.get("category");
     return {
@@ -192,9 +217,7 @@ export function NewspaperBrowser() {
 
   const [items, setItems] = useState<ArticleOut[]>([]);
   const [total, setTotal] = useState(0);
-  const [offset, setOffset] = useState(0);
-  const [loading, setLoading] = useState(true); // first page (filter change)
-  const [loadingMore, setLoadingMore] = useState(false); // subsequent pages
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const [counts, setCounts] = useState<Record<string, number>>({});
@@ -207,7 +230,7 @@ export function NewspaperBrowser() {
     setSubcategorySlug(null);
     // Region and rival filters deliberately survive a category switch: "show me
     // everything about Emirates" should stay pinned while browsing categories.
-    setOffset(0);
+    setPage(1);
   }
 
   // Tab badges: one grouped request, refreshed when the window is entered.
@@ -231,8 +254,8 @@ export function NewspaperBrowser() {
     return () => controller.abort();
   }, []);
 
-  // Article list. offset===0 replaces (a filter changed); offset>0 appends
-  // ("Daha fazla yükle"). Both live in one effect so they can't race.
+  // Article list. Every fetch replaces the page in place -- `page` (URL-owned,
+  // see above) is the only thing that changes which slice comes back.
   useEffect(() => {
     let cancelled = false;
     const controller = new AbortController();
@@ -240,11 +263,11 @@ export function NewspaperBrowser() {
       category: categorySlug,
       days: String(DAYS_WINDOW),
       limit: String(PAGE_LIMIT),
-      offset: String(offset),
+      offset: String((page - 1) * PAGE_LIMIT),
       // Gazete only shows stories that actually have a Turkish translation --
       // an untranslated article falls back to its original-language headline
       // and reads as raw German/English mixed into a Turkish paper. Filtered
-      // server-side so `total` / "Daha fazla yükle" stay in step with the list.
+      // server-side so `total` / the page count stay in step with the list.
       translated_only: "true",
     });
     appendGazeteFilters(params);
@@ -252,10 +275,8 @@ export function NewspaperBrowser() {
     if (regionSlug) params.set("region", regionSlug);
     if (airlineCode) params.set("airline", airlineCode);
 
-    const isFirstPage = offset === 0;
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch driven by filter/offset change; the loading flag must flip synchronously with the dependency change
-    if (isFirstPage) setLoading(true);
-    else setLoadingMore(true);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch driven by filter/page change; the loading flag must flip synchronously with the dependency change
+    setLoading(true);
 
     // cache: "default" lets the browser reuse its own copy -- the API now sends
     // max-age, so returning to a filter you already viewed is instant instead
@@ -267,7 +288,7 @@ export function NewspaperBrowser() {
     })
       .then((data) => {
         if (cancelled) return;
-        setItems((prev) => (isFirstPage ? data.items : [...prev, ...data.items]));
+        setItems(data.items);
         setTotal(data.total);
         setError(null);
       })
@@ -278,16 +299,15 @@ export function NewspaperBrowser() {
       .finally(() => {
         if (cancelled) return;
         setLoading(false);
-        setLoadingMore(false);
       });
     return () => {
       cancelled = true;
       controller.abort();
     };
-  }, [categorySlug, subcategorySlug, regionSlug, airlineCode, offset]);
+  }, [categorySlug, subcategorySlug, regionSlug, airlineCode, page]);
 
   const today = new Date().toISOString().slice(0, 10);
-  const hasMore = items.length < total;
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_LIMIT));
   // Same local-calendar key `groupByDay` builds, so "today" can be picked out
   // of the date headers without re-parsing every article.
   const todayGroupKey = (() => {
@@ -306,13 +326,24 @@ export function NewspaperBrowser() {
             Kategoriye göre doğrulanmış, güncel havacılık haberleri.
           </p>
         </div>
-        <Link
-          href={`/newspaper/${today}`}
-          className="flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-accent"
-        >
-          <Download className="size-3.5" />
-          Günün Gazetesi
-        </Link>
+        <div className="flex items-center gap-2">
+          {/* Arşiv stays a real route (Faz 11: six-page nav) -- just off the
+              primary sidebar, reached from here instead. */}
+          <Link
+            href="/archive"
+            className="flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-accent"
+          >
+            <ArchiveIcon className="size-3.5" />
+            Arşiv
+          </Link>
+          <Link
+            href={`/newspaper/${today}`}
+            className="flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-accent"
+          >
+            <Download className="size-3.5" />
+            Günün Gazetesi
+          </Link>
+        </div>
       </div>
 
       {/* Sticky category bar -- horizontally scrollable on mobile, blurred so
@@ -370,7 +401,7 @@ export function NewspaperBrowser() {
           <button
             onClick={() => {
               setSubcategorySlug(null);
-              setOffset(0);
+              setPage(1);
             }}
             className={cn(
               "rounded-full px-3 py-1 text-xs font-medium transition-colors",
@@ -386,7 +417,7 @@ export function NewspaperBrowser() {
               key={s.slug}
               onClick={() => {
                 setSubcategorySlug(s.slug);
-                setOffset(0);
+                setPage(1);
               }}
               className={cn(
                 "rounded-full px-3 py-1 text-xs font-medium transition-colors",
@@ -410,7 +441,7 @@ export function NewspaperBrowser() {
         <button
           onClick={() => {
             setRegionSlug(null);
-            setOffset(0);
+            setPage(1);
           }}
           className={cn(
             "rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
@@ -426,7 +457,7 @@ export function NewspaperBrowser() {
             key={r.slug}
             onClick={() => {
               setRegionSlug(regionSlug === r.slug ? null : r.slug);
-              setOffset(0);
+              setPage(1);
             }}
             className={cn(
               "rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
@@ -457,7 +488,7 @@ export function NewspaperBrowser() {
           value={regionSlug}
           onChange={(slug) => {
             setRegionSlug(slug);
-            setOffset(0);
+            setPage(1);
           }}
         />
       )}
@@ -480,7 +511,7 @@ export function NewspaperBrowser() {
               key={value}
               onClick={() => {
                 setAirlineCode(active ? null : value);
-                setOffset(0);
+                setPage(1);
               }}
               className={cn(
                 "rounded-full border px-3 py-1 text-xs font-semibold transition-colors",
@@ -502,7 +533,7 @@ export function NewspaperBrowser() {
               title={a.name}
               onClick={() => {
                 setAirlineCode(active ? null : a.code);
-                setOffset(0);
+                setPage(1);
               }}
               style={active ? { backgroundColor: a.color, borderColor: a.color } : undefined}
               className={cn(
@@ -614,17 +645,9 @@ export function NewspaperBrowser() {
             })}
           </div>
 
-          {hasMore && (
-            <div className="flex justify-center">
-              <button
-                onClick={() => setOffset(items.length)}
-                disabled={loadingMore}
-                className="rounded-md border border-border px-4 py-2 text-sm font-medium text-foreground transition-colors hover:bg-accent disabled:opacity-60"
-              >
-                {loadingMore ? "Yükleniyor…" : `Daha fazla yükle (${total - items.length})`}
-              </button>
-            </div>
-          )}
+          <div className="flex justify-center">
+            <Pagination page={page} totalPages={totalPages} onPageChange={setPage} />
+          </div>
         </>
       ) : (
         <div className="rounded-lg border border-dashed border-border p-10 text-center">

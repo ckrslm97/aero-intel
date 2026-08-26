@@ -1,13 +1,14 @@
 "use client";
 
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { ChevronDown, Plane } from "lucide-react";
+import { ChevronDown, Map as MapIcon, Plane, Route } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
 import { AirlineLogo } from "@/components/airline-logo";
 import { ArticleCard } from "@/components/article-card";
 import { HubMap } from "@/components/hub-map";
+import { HubNetworkSignals } from "@/components/hub-network-signals";
 import { MotionItem, MotionList } from "@/components/motion/motion-list";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiFetch } from "@/lib/api";
@@ -51,6 +52,7 @@ const PANEL_PREVIEW = 5;
 const NOTE_CLAMP_THRESHOLD = 180;
 
 export function HubsClient() {
+  const [view, setView] = useState<"hubs" | "network-signals">("hubs");
   const [days, setDays] = useState<number>(DAY_OPTIONS[1]);
   const [selected, setSelected] = useState<string | null>("IST");
   const [country, setCountry] = useState<string>("");
@@ -158,13 +160,41 @@ export function HubsClient() {
   return (
     <div className="flex flex-col gap-6 p-4 md:p-6">
       <header className="flex flex-col gap-1">
-        <h1 className="text-2xl font-semibold tracking-tight">Hub&apos;lar</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Hub</h1>
         <p className="max-w-2xl text-sm leading-relaxed text-muted-foreground">
           İzlenen aktarma merkezleri ve haber arşivinin onlar hakkında biriktirdikleri.
           Bir hub seçin ya da ülkeye göre daraltın.
         </p>
       </header>
 
+      <div className="flex w-fit items-center gap-1 self-start rounded-lg border border-border p-0.5">
+        {(
+          [
+            ["hubs", "Genel Bakış", MapIcon],
+            ["network-signals", "Ağ Sinyalleri", Route],
+          ] as const
+        ).map(([value, label, Icon]) => (
+          <button
+            key={value}
+            type="button"
+            onClick={() => setView(value)}
+            className={cn(
+              "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors",
+              view === value
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:bg-accent",
+            )}
+          >
+            <Icon className="size-3.5" />
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {view === "network-signals" ? (
+        <HubNetworkSignals />
+      ) : (
+        <>
       {error && (
         <p className="rounded-lg border border-critical/40 bg-critical/10 p-3 text-sm text-critical">
           {error}
@@ -296,6 +326,8 @@ export function HubsClient() {
           )}
         </section>
       </div>
+        </>
+      )}
     </div>
   );
 }

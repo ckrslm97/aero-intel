@@ -13,6 +13,7 @@ import {
 import { useEffect, useState } from "react";
 
 import { ArticleCard } from "@/components/article-card";
+import { BizSignals } from "@/components/biz-signals";
 import { CountUp } from "@/components/motion/count-up";
 import { MotionItem, MotionList } from "@/components/motion/motion-list";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -187,6 +188,11 @@ export function BizClient() {
           {data.sources.map((s) => `${s.name} (${s.count})`).join(" · ") || "henüz yok"}
         </p>
       </div>
+
+      {/* Rakip / ağ / ticari / stratejik sinyaller -- pipeline v2 üzerinden,
+          bkz. backend/app/services/biz_service.py. Yolcu yorumu bloğu (aşağıda,
+          değişmedi) ayrı ve mevcut bir özellik. */}
+      <BizSignals />
 
       {/* Stat tiles */}
       <MotionList className="grid grid-cols-1 gap-5 sm:grid-cols-3">

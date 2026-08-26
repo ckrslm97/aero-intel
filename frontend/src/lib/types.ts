@@ -358,3 +358,153 @@ export interface RiskRadarOut {
   type_counts: Record<string, number>;
   family_counts: Record<string, number>;
 }
+
+/* --- Kokpit ------------------------------------------------------------- */
+/** Mirrors backend/app/schemas/kokpit.py. */
+
+export interface KokpitFxPairOut {
+  currency_pair: string;
+  value: number;
+  unit: string;
+  /** null where there isn't yet a reading far enough back -- an honest "not
+   * enough history", never a fabricated 0%. Fills in as the 15-minute refresh
+   * job (see backend/app/services/kpi_service.py) accumulates history. */
+  day_delta_pct: number | null;
+  week_delta_pct: number | null;
+  month_delta_pct: number | null;
+  sparkline: number[];
+  as_of: string;
+  source: string;
+  source_url: string | null;
+  frequency_label: string;
+}
+
+export interface KokpitFxPegOut {
+  currency_pair: string;
+  value: number;
+  label: string;
+  source: string;
+  source_url: string;
+}
+
+export interface KokpitFxBoardOut {
+  pairs: KokpitFxPairOut[];
+  peg: KokpitFxPegOut;
+}
+
+/** A single bank's own forecast for one pair/horizon -- never normalised
+ * across institutions, see backend/app/models/curated.py. */
+export interface FxForecastOut {
+  institution: string;
+  currency_pair: string;
+  horizon_label: string;
+  horizon_months: number | null;
+  value: number;
+  publication_date: string;
+  source_url: string;
+  note_tr: string | null;
+}
+
+export interface IataIndicatorOut {
+  metric: string;
+  kind: "forecast" | "actual";
+  value: number;
+  unit: string;
+  period_start: string;
+  period_end: string;
+  period_label_tr: string;
+  region: string | null;
+  publication_date: string;
+  source_url: string;
+  interpretation_tr: string | null;
+}
+
+export interface MarketPulseCitationOut {
+  claim: string;
+  source: string;
+  source_url: string;
+}
+
+export interface MarketPulseOut {
+  summary_tr: string;
+  citations: MarketPulseCitationOut[];
+  generated_at: string;
+}
+
+/* --- Hub network signals -------------------------------------------------- */
+/** Same shape as InsightsOut['new_route_signals'], produced from pipeline v2
+ * events instead of raw articles -- see
+ * backend/app/services/network_signals_service.py. */
+export type NetworkSignalGroup = RouteSignalGroup;
+
+/* --- Biz ------------------------------------------------------------------ */
+/** Mirrors backend/app/services/biz_service.py. */
+
+export interface BizEventOut {
+  id: string;
+  slug: string;
+  headline: string | null;
+  category: string | null;
+  confidence_band: string | null;
+  last_seen: string;
+}
+
+export interface BizRiskEventOut extends BizEventOut {
+  risk_type: string | null;
+  risk_family: string | null;
+  risk_severity: string | null;
+  risk_score: number | null;
+}
+
+export interface BizCampaignOut {
+  id: string;
+  airline_code: string;
+  airline_name: string;
+  title: string;
+  discount_pct: number | null;
+  sale_starts: string | null;
+  sale_ends: string | null;
+  confidence_band: string | null;
+  url: string;
+}
+
+export interface BizCompetitorSignal {
+  airline_code: string;
+  airline_name: string;
+  count: number;
+  events: BizEventOut[];
+}
+
+/** The structural no-filler wrapper every Biz section shares: a section is
+ * either genuinely populated, or honestly says so -- never a bare `[]` a
+ * caller could render as if it meant something. See biz_service._section(). */
+export interface BizSection<T> {
+  available: boolean;
+  items: T[];
+  empty_message: string | null;
+}
+
+/** Mirrors the `Recommendation` interface recommendations-client.tsx declares
+ * for itself (that page's own comment explains why it doesn't import from
+ * here) -- same backend shape (backend/app/services/recommendations.py),
+ * declared again here because Biz's commercial_signals section is a second,
+ * independent consumer. */
+export interface BizCommercialSignal {
+  id: string;
+  title: string;
+  rationale: string;
+  severity: "high" | "medium" | "low";
+  category: string | null;
+  region: string | null;
+  airline_code: string | null;
+  evidence: { headline: string; url: string; source_name: string; published_at: string | null }[];
+  metric: { label: string; value: number; previous: number | null } | null;
+}
+
+export interface BizOverviewOut {
+  days: number;
+  competitor_signals: BizSection<BizCompetitorSignal>;
+  network_signals: BizSection<NetworkSignalGroup>;
+  commercial_signals: BizSection<BizCommercialSignal>;
+  strategic_developments: BizSection<BizEventOut>;
+}
