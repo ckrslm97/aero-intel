@@ -26,15 +26,14 @@ Stages, per batch:
    classifier's own certainty, field completeness, and cluster size. A record
    below the medium band is written but `is_published=False` -- the low band
    is the audit trail of what this run chose not to show, not a bug.
-5. **Persist** one `NewsEvent` per surviving cluster, and link every member
-   article to it via `Article.event_id`.
-
-Campaign extraction is deliberately out of scope here -- `result.campaign` is
-recorded into `not_applicable_reasons` for the audit trail, but nothing is
-written to `promotions`. That table's rewrite is its own pipeline
-(`agents/campaign_airline.py`, not yet built) with its own validation rules;
-folding it into this runner would make one module answer two different
-questions.
+5. **Persist** one `NewsEvent` per surviving cluster, link every member
+   article to it via `Article.event_id`, and, when the classifier called the
+   event a campaign, hand it to `agents/campaign_airline.py` for a second
+   validation pass and a `Promotion` row. Campaign rules live in that module,
+   not here, because "is this a usable campaign" is a different question from
+   "is this a usable event" with its own required fields and its own guards
+   (an expired title, an implausible sale window) -- this runner only calls
+   it at the right point and persists what it returns.
 """
 from __future__ import annotations
 
@@ -44,12 +43,15 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.logging import get_logger
+from app.agents.campaign_airline import build_promotion, validate_campaign
 from app.agents.gate import evaluate as gate_evaluate
+from app.core.logging import get_logger
 from app.llm.classify import classify_article
+from app.llm.gazetteer import COUNTRY_ALIASES, fold_for_match
 from app.models.article import Article
 from app.models.entity import ArticleEntity
 from app.models.news_event import NewsEvent
@@ -57,7 +59,6 @@ from app.pipeline.clustering import EventCandidate, cluster, pick_primary
 from app.pipeline.confidence import ConfidenceInput, is_publishable, score
 from app.pipeline.language import resolve as resolve_language
 from app.pipeline.outcomes import OutcomeState
-from app.llm.gazetteer import COUNTRY_ALIASES, fold_for_match
 from app.pipeline.risk_scoring import score as score_risk
 from app.taxonomy import COUNTRY_TO_REGION, risk_category_family_of
 
@@ -126,6 +127,7 @@ class RunStats:
     candidates: int = 0
     events: int = 0
     published: int = 0
+    campaigns: int = 0
     rejected_language: int = 0
     rejected_gate: int = 0
     not_relevant: int = 0
@@ -136,6 +138,7 @@ class RunStats:
             "candidates": self.candidates,
             "events": self.events,
             "published": self.published,
+            "campaigns": self.campaigns,
             "rejected_language": self.rejected_language,
             "rejected_gate": self.rejected_gate,
             "not_relevant": self.not_relevant,
@@ -295,7 +298,22 @@ async def run_pipeline_v2(db: AsyncSession, *, limit: int = DEFAULT_BATCH_SIZE) 
                 ).score
             else:
                 not_applicable["risk"] = result.risk.reason
-        if result.campaign.state is OutcomeState.NOT_APPLICABLE:
+
+        # A second validation layer on top of the model's own "is this a
+        # campaign" verdict: agents/campaign_airline.py catches the
+        # expired-title and implausible-sale-window patterns that were still
+        # reaching production after the model-level fix. It only ever narrows
+        # a CLASSIFIED verdict to NOT_APPLICABLE, never the reverse.
+        campaign_to_persist = None
+        if result.campaign.state is OutcomeState.CLASSIFIED:
+            campaign_verdict = validate_campaign(
+                primary.title, result.campaign.payload, today=now.date()
+            )
+            if campaign_verdict.is_classified:
+                campaign_to_persist = campaign_verdict.payload
+            else:
+                not_applicable["campaign"] = campaign_verdict.reason
+        elif result.campaign.state is OutcomeState.NOT_APPLICABLE:
             not_applicable["campaign"] = result.campaign.reason
 
         region = _region_for(risk_country) or _region_for(
@@ -326,13 +344,50 @@ async def run_pipeline_v2(db: AsyncSession, *, limit: int = DEFAULT_BATCH_SIZE) 
             article_count=len(members),
             is_published=is_publishable(confidence.band),
         )
-        db.add(event)
-        await db.flush()  # need event.id before linking members
 
-        for member in members:
-            member.event_id = event.id
+        # Captured before the savepoint, not read from `primary` after: a
+        # rollback expires every instance touched inside the block, and
+        # reading an expired attribute triggers an implicit reload that
+        # SQLAlchemy's asyncio mode cannot do outside an active greenlet --
+        # caught by this test suite as a MissingGreenlet masking the real
+        # IntegrityError underneath it.
+        primary_url = primary.url
+
+        # Each cluster writes inside its own savepoint, the same discipline
+        # pipeline/enrich.py uses for the same reason: `promotions.url` is
+        # unique, and a rare collision (this article already produced a
+        # promotion in an earlier run that crashed after insert but before
+        # commit, or a concurrent run) must cost this one cluster, not the
+        # rest of the batch.
+        wrote_campaign = False
+        try:
+            async with db.begin_nested():
+                db.add(event)
+                await db.flush()  # need event.id before linking members
+
+                for member in members:
+                    member.event_id = event.id
+
+                if campaign_to_persist is not None:
+                    promotion = build_promotion(
+                        event=event,
+                        primary=primary,
+                        campaign=campaign_to_persist,
+                        certainty=result.campaign.certainty,
+                        source_tier=primary_candidate.tier,
+                        source_count=len(members),
+                        detected_at=now,
+                    )
+                    db.add(promotion)
+                    wrote_campaign = True
+        except IntegrityError:
+            logger.info("pipeline_v2_cluster_collision", primary_article_url=primary_url)
+            stats.failed += 1
+            continue
 
         stats.events += 1
+        if wrote_campaign:
+            stats.campaigns += 1
         if event.is_published:
             stats.published += 1
 

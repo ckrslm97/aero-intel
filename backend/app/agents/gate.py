@@ -65,6 +65,13 @@ _AVIATION = _keyword_pattern(AVIATION_TERMS)
 # Named carriers. A story about any of these is what this desk watches, however
 # briefly it is worded -- "Turkish Airlines Targets Lima" scored below the old
 # gate purely for being terse.
+#
+# "etihad" is deliberately NOT bare here, unlike "emirates"/"lufthansa": Etihad
+# Rail is a distinct, unrelated entity (the UAE's national rail operator) that
+# shares the brand prefix, and it is one of the rail distractors below. A bare
+# "etihad" would make "Etihad Rail passenger tickets" match the carrier in the
+# title and win the title-decides-subject rule against its own rail rejection
+# -- caught by this file's own tests before it shipped.
 WATCHED_CARRIERS: tuple[str, ...] = (
     "turkish airlines", "turk hava yollari", "thy", "ajet", "anadolujet",
     "pegasus", "emirates", "qatar airways", "etihad airways", "lufthansa",
