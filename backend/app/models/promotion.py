@@ -16,9 +16,11 @@ from a measured one once it is drawn as a bar. The frontend renders each
 missing field honestly instead: an open-ended bar fades out, a campaign with
 no start date at all becomes a point marker at `detected_at` rather than a bar.
 """
+import uuid
 from datetime import date, datetime
 
-from sqlalchemy import Date, DateTime, Integer, String, Text
+from sqlalchemy import Date, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
@@ -47,6 +49,14 @@ class Promotion(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # nothing but a migration's worth of ceremony.
     markets: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
+    #: The structured form, for the cascading Region -> Country -> City filter:
+    #: {"regions": [...], "countries": [...], "cities": [...]}. The comment above
+    #: is right that JSON bought nothing while the only consumer split on commas
+    #: and rendered chips -- a cascading filter is the consumer that changes
+    #: that. Added alongside rather than replacing `markets`, so the old writer
+    #: keeps working until the campaign agent replaces it.
+    markets_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
     # When tickets can be BOUGHT. This is the window the timeline draws and the
     # calendar ribbons, because it is the one a revenue desk has to react to.
     sale_starts: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
@@ -62,7 +72,37 @@ class Promotion(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     source_name: Mapped[str] = mapped_column(String(120))
     region: Mapped[str | None] = mapped_column(String(30), nullable=True, index=True)
 
-    # When WE first saw it -- not when the airline launched it. This is what
+    #: The news event this campaign was extracted from, when it came from an
+    #: article rather than a scraped campaign page.
+    event_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("news_events.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # --- validation and confidence ------------------------------------------
+    #
+    # 55% of what this table published was not a campaign: Etihad Rail tickets,
+    # a Eurostar review, a Marriott points guide, an LNG pricing article, an
+    # IAG Cargo revenue *decline* read as a 9% discount, and three rows whose
+    # titles literally began "[Expired]". 92% had no sale date at all. The
+    # columns below are how a row now has to earn its place on the page.
+
+    #: valid | incomplete | rejected. Set by the campaign agent's validate()
+    #: before anything is written, so an unvalidated row cannot exist.
+    validation_state: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    confidence_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    #: Read endpoints serve high and medium. A campaign missing its sale window
+    #: is capped at medium by pipeline/confidence.py and, if it is missing more
+    #: than half its required fields, at low -- which means invisible.
+    confidence_band: Mapped[str | None] = mapped_column(String(10), nullable=True, index=True)
+    confidence_detail: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
+    #: Soft delete. The 124 mis-extracted rows are marked rather than destroyed,
+    #: so the before/after comparison stays checkable.
+    superseded_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+        # When WE first saw it -- not when the airline launched it. This is what
     # drives the "Yeni" badge and the 48h banner, and it is the only freshness
     # claim we can actually stand behind: an airline's own page carries no
     # publication timestamp, and a news report's date is the reporter's, not

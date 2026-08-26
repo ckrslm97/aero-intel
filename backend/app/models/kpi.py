@@ -1,7 +1,7 @@
 """Point-in-time KPI observations for the dashboard (e.g. flights_airborne, fx_usd_try, oil_brent)."""
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, Index, String
+from sqlalchemy import Boolean, DateTime, Float, Index, String, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
@@ -10,7 +10,17 @@ from app.models.base import UUIDPrimaryKeyMixin
 
 class KPI(UUIDPrimaryKeyMixin, Base):
     __tablename__ = "kpis"
-    __table_args__ = (Index("ix_kpis_metric_as_of", "metric_key", "as_of"),)
+    __table_args__ = (
+        Index("ix_kpis_metric_as_of", "metric_key", "as_of"),
+        # The dashboard's read: latest primary reading per metric. Declared
+        # so autogenerate leaves the hand-written index alone.
+        Index(
+            "ix_kpis_metric_primary_asof",
+            "metric_key",
+            "is_primary",
+            text("as_of DESC"),
+        ),
+    )
 
     metric_key: Mapped[str] = mapped_column(String(50))  # e.g. "flights_airborne", "oil_brent_usd"
     value: Mapped[float] = mapped_column(Float)
