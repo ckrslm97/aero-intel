@@ -1,17 +1,24 @@
 "use client";
 
 import { ExternalLink } from "lucide-react";
+import dynamic from "next/dynamic";
 import { useCallback, useMemo, useState } from "react";
 
 import { AirlineLogo } from "@/components/airline-logo";
 import { DataSourceError, LastUpdatedStamp, StaleDataBanner } from "@/components/data-source-error";
 import { MotionItem, MotionList } from "@/components/motion/motion-list";
-import { RouteSignalMap } from "@/components/route-signal-map";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDataSource } from "@/hooks/use-data-source";
 import { apiFetch } from "@/lib/api";
 import { worldRegions } from "@/lib/nav";
 import type { NetworkSignalGroup, RouteSignalArticle } from "@/lib/types";
+
+// echarts only needed once the map renders -- Faz 14, same pattern as
+// newspaper-browser.tsx's RegionMap.
+const RouteSignalMap = dynamic(
+  () => import("@/components/route-signal-map").then((m) => m.RouteSignalMap),
+  { ssr: false, loading: () => <Skeleton className="h-[320px] w-full rounded-xl" /> },
+);
 
 const REGION_NAME: Record<string, string> = Object.fromEntries(
   worldRegions.map((r) => [r.slug, r.name]),

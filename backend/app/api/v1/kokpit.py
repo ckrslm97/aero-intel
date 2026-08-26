@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.cache_headers import AGGREGATES, CURATED, public_cache
+from app.api.cache_headers import CURATED, FX, public_cache
 from app.core.db import get_db
 from app.repositories.curated_repository import CuratedRepository
 from app.repositories.kpi_repository import KpiRepository
@@ -50,7 +50,7 @@ def _delta_pct(latest: float, prior: float | None) -> float | None:
 
 @router.get("/fx", response_model=KokpitFxBoardOut)
 async def get_fx_board(response: Response, db: AsyncSession = Depends(get_db)) -> KokpitFxBoardOut:
-    public_cache(response, AGGREGATES)
+    public_cache(response, FX)
     repo = KpiRepository(db)
     now = datetime.now(timezone.utc)
 

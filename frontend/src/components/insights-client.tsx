@@ -4,9 +4,10 @@ import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { ChevronDown, CircleDashed, ExternalLink, Lightbulb, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
+import dynamic from "next/dynamic";
+
 import { AirlineLogo } from "@/components/airline-logo";
 import { MotionItem, MotionList, MotionRail } from "@/components/motion/motion-list";
-import { RouteSignalMap } from "@/components/route-signal-map";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiFetch } from "@/lib/api";
 import { useChartTheme } from "@/lib/chart-theme";
@@ -14,6 +15,13 @@ import { collapseSection, reduceVariants, useMeasuredHeight } from "@/lib/motion
 import { airlineTabs, worldRegions } from "@/lib/nav";
 import type { InsightsOut, RouteSignalArticle } from "@/lib/types";
 import { cn } from "@/lib/utils";
+
+// echarts only needed once the map renders -- Faz 14, same pattern as
+// newspaper-browser.tsx's RegionMap.
+const RouteSignalMap = dynamic(
+  () => import("@/components/route-signal-map").then((m) => m.RouteSignalMap),
+  { ssr: false, loading: () => <Skeleton className="h-[320px] w-full rounded-xl" /> },
+);
 
 /** One route signal, flattened out of its region group so the whole set can be
  * filtered and re-grouped as a single list. */
