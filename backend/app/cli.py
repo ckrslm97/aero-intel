@@ -281,6 +281,28 @@ async def _prune_kpi_duplicates() -> None:
         print(f"Pruned {deleted} duplicate published-estimate rows")
 
 
+async def _seed_curated_data() -> None:
+    from app.ingest.curated_seed import seed_curated_data
+
+    async with AsyncSessionLocal() as db:
+        result = await seed_curated_data(db)
+        print(
+            f"Curated data reconciled: {result['fx_forecasts_new']} new FX forecasts, "
+            f"{result['iata_indicators_new']} new IATA indicators"
+        )
+
+
+async def _refresh_market_pulse() -> None:
+    from app.services.market_pulse_service import generate_market_pulse
+
+    async with AsyncSessionLocal() as db:
+        pulse = await generate_market_pulse(db)
+        if pulse is None:
+            print("Market Pulse not regenerated (no LLM configured, no grounding data, or generation failed)")
+        else:
+            print(f"Market Pulse generated: {len(pulse.citations)} citations")
+
+
 async def _refresh_pdf() -> None:
     from datetime import datetime, timezone
 
@@ -360,6 +382,8 @@ def main() -> None:
             "refresh-promotions",
             "dedupe-promotions",
             "prune-kpi-duplicates",
+            "seed-curated-data",
+            "refresh-market-pulse",
             "refresh-pdf",
             "send-newsletter",
             "daily-if-due",
@@ -435,6 +459,10 @@ def main() -> None:
         asyncio.run(_dedupe_promotions())
     elif args.command == "prune-kpi-duplicates":
         asyncio.run(_prune_kpi_duplicates())
+    elif args.command == "seed-curated-data":
+        asyncio.run(_seed_curated_data())
+    elif args.command == "refresh-market-pulse":
+        asyncio.run(_refresh_market_pulse())
     elif args.command == "refresh-pdf":
         asyncio.run(_refresh_pdf())
     elif args.command == "send-newsletter":

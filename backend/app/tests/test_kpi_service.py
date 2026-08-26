@@ -24,7 +24,14 @@ async def test_refresh_all_kpis_records_real_and_estimated_metrics(db_session, m
         return 100
 
     async def fake_quote(base_url, symbol):
-        return {"BZ=F": 80.0, "TRY=X": 40.0}[symbol]
+        return {
+            "BZ=F": 80.0,
+            "TRY=X": 40.0,
+            "EURUSD=X": 1.08,
+            "JPY=X": 149.0,
+            "EURGBP=X": 0.84,
+            "CNY=X": 7.2,
+        }[symbol]
 
     async def fake_frankfurter(base_currency, quote_currency):
         return 40.2
@@ -36,11 +43,11 @@ async def test_refresh_all_kpis_records_real_and_estimated_metrics(db_session, m
 
     recorded = await kpi_service.refresh_all_kpis(db_session)
 
-    # 8 live rows -- flights_airborne, flights_today, oil_price, fuel_price,
-    # fx_usd_try (primary), its Frankfurter cross-check, and the two stored
-    # last-year market prices -- plus one row per published IATA figure,
-    # which an empty database has none of yet.
-    assert recorded == 8 + len(kpi_service.latest_published_estimates())
+    # 16 live rows -- flights_airborne, flights_today, oil_price, fuel_price,
+    # five FX pairs (primary + Frankfurter cross-check each), and the two
+    # stored last-year market prices -- plus one row per published IATA
+    # figure, which an empty database has none of yet.
+    assert recorded == 16 + len(kpi_service.latest_published_estimates())
 
     result = await db_session.execute(select(KPI).where(KPI.metric_key == "flights_airborne"))
     airborne = result.scalar_one()
@@ -84,7 +91,14 @@ async def test_refresh_does_not_rewrite_published_figures_that_have_not_moved(db
         return 100
 
     async def fake_quote(base_url, symbol):
-        return {"BZ=F": 80.0, "TRY=X": 40.0}[symbol]
+        return {
+            "BZ=F": 80.0,
+            "TRY=X": 40.0,
+            "EURUSD=X": 1.08,
+            "JPY=X": 149.0,
+            "EURGBP=X": 0.84,
+            "CNY=X": 7.2,
+        }[symbol]
 
     async def fake_frankfurter(base_currency, quote_currency):
         return 40.2
@@ -97,7 +111,7 @@ async def test_refresh_does_not_rewrite_published_figures_that_have_not_moved(db
     await kpi_service.refresh_all_kpis(db_session)
     second_run = await kpi_service.refresh_all_kpis(db_session)
 
-    assert second_run == 8  # the live rows, and nothing else
+    assert second_run == 16  # the live rows, and nothing else
 
 
 async def test_refresh_all_kpis_skips_frankfurter_row_when_unavailable(db_session, monkeypatch):
@@ -105,7 +119,14 @@ async def test_refresh_all_kpis_skips_frankfurter_row_when_unavailable(db_sessio
         return 100
 
     async def fake_quote(base_url, symbol):
-        return {"BZ=F": 80.0, "TRY=X": 40.0}[symbol]
+        return {
+            "BZ=F": 80.0,
+            "TRY=X": 40.0,
+            "EURUSD=X": 1.08,
+            "JPY=X": 149.0,
+            "EURGBP=X": 0.84,
+            "CNY=X": 7.2,
+        }[symbol]
 
     async def fake_frankfurter_unavailable(base_currency, quote_currency):
         return None
@@ -117,8 +138,8 @@ async def test_refresh_all_kpis_skips_frankfurter_row_when_unavailable(db_sessio
 
     recorded = await kpi_service.refresh_all_kpis(db_session)
 
-    # one fewer than a full run -- no cross-check row
-    assert recorded == 7 + len(kpi_service.latest_published_estimates())
+    # five fewer than a full run -- no cross-check row for any of the five pairs
+    assert recorded == 11 + len(kpi_service.latest_published_estimates())
 
     result = await db_session.execute(select(KPI).where(KPI.metric_key == "fx_usd_try"))
     fx_rows = result.scalars().all()
@@ -164,7 +185,14 @@ async def test_refresh_stores_last_year_market_prices_off_the_request_path(db_se
         return 100
 
     async def fake_quote(base_url, symbol):
-        return {"BZ=F": 80.0, "TRY=X": 40.0}[symbol]
+        return {
+            "BZ=F": 80.0,
+            "TRY=X": 40.0,
+            "EURUSD=X": 1.08,
+            "JPY=X": 149.0,
+            "EURGBP=X": 0.84,
+            "CNY=X": 7.2,
+        }[symbol]
 
     async def fake_frankfurter(base_currency, quote_currency):
         return 40.2
@@ -192,7 +220,14 @@ async def test_refresh_survives_a_yahoo_history_outage(db_session, monkeypatch):
         return 100
 
     async def fake_quote(base_url, symbol):
-        return {"BZ=F": 80.0, "TRY=X": 40.0}[symbol]
+        return {
+            "BZ=F": 80.0,
+            "TRY=X": 40.0,
+            "EURUSD=X": 1.08,
+            "JPY=X": 149.0,
+            "EURGBP=X": 0.84,
+            "CNY=X": 7.2,
+        }[symbol]
 
     async def broken_history(base_url, symbol, period):
         raise RuntimeError("yahoo down")
@@ -207,7 +242,7 @@ async def test_refresh_survives_a_yahoo_history_outage(db_session, monkeypatch):
 
     # The live readings still land; only the LY rows are missing.
     recorded = await kpi_service.refresh_all_kpis(db_session)
-    assert recorded == 6 + len(kpi_service.latest_published_estimates())
+    assert recorded == 14 + len(kpi_service.latest_published_estimates())
     assert (
         await db_session.execute(select(KPI).where(KPI.metric_key == "oil_price_ly"))
     ).scalar_one_or_none() is None

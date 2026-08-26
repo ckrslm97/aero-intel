@@ -183,6 +183,24 @@ class KpiRepository:
             corroborations.append(kpi)
         return corroborations
 
+    async def closest_before(
+        self, metric_key: str, before: datetime, is_primary: bool = True
+    ) -> KPI | None:
+        """The newest primary observation at or before `before` -- backs
+        Kokpit's day/week/month deltas, which compare "now" against a point a
+        fixed distance in the past rather than a fixed row count away."""
+        result = await self.db.execute(
+            select(KPI)
+            .where(
+                KPI.metric_key == metric_key,
+                KPI.is_primary.is_(is_primary),
+                KPI.as_of <= before,
+            )
+            .order_by(KPI.as_of.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
     async def distinct_metric_keys(self) -> list[str]:
         result = await self.db.execute(select(KPI.metric_key).distinct())
         return [row[0] for row in result.all()]
