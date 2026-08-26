@@ -4,25 +4,20 @@ import { notFound } from "next/navigation";
 import { ArticleCard } from "@/components/article-card";
 import { MotionItem, MotionList } from "@/components/motion/motion-list";
 import { API_BASE_URL, ApiError, apiFetch } from "@/lib/api";
+import { CATEGORY_LABELS_TR } from "@/lib/taxonomy.gen";
 import type { EditionOut } from "@/lib/types";
 
 // Cards open the in-app analysis drawer, which lives on ArticleDrawerProvider
 // in the app shell (components/layout/app-shell.tsx) -- every route is inside
 // it, so this page needs no wrapper of its own.
 
+// Category names come from the taxonomy, which is generated from
+// backend/app/taxonomy.py -- the same strings the newsletter and the PDF render,
+// so a reader arriving from either lands on sections with the same names.
+// "top_story" is the edition's lead slot, not a category.
 const SECTION_LABELS: Record<string, string> = {
   top_story: "Öne Çıkanlar",
-  general: "Genel",
-  revenue_management: "Gelir Yönetimi",
-  safety: "Emniyet",
-  finance: "Finans",
-  fleet: "Filo",
-  network: "Ağ & Rota",
-  regulatory: "Regülasyon",
-  sustainability: "Sürdürülebilirlik",
-  labor: "İşgücü",
-  airport: "Havalimanı",
-  events: "Etkinlik",
+  ...CATEGORY_LABELS_TR,
 };
 
 /** What the card will actually print for this article -- the same rule

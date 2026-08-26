@@ -250,7 +250,11 @@ async def test_public_reads_are_edge_cacheable(db_session):
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as client:
-        for path in ("/api/v1/taxonomy", "/api/v1/articles?limit=1", "/api/v1/articles/counts"):
+        for path in (
+            "/api/v1/taxonomy/countries",
+            "/api/v1/articles?limit=1",
+            "/api/v1/articles/counts",
+        ):
             response = await client.get(path)
             assert response.status_code == 200, path
             cache_control = response.headers.get("cache-control", "")
@@ -263,9 +267,9 @@ async def test_public_reads_are_edge_cacheable(db_session):
             assert "stale-while-revalidate=" in cdn_control, path
             # Without this the edge serves one visitor's CORS answer to
             # everyone: a curl request with no Origin header populated the
-            # cache for /pivot/dimensions, and every browser after it got that
-            # copy -- no Access-Control-Allow-Origin on it -- so the Analiz
-            # page failed to load while /insights was fine.
+            # cache for an aggregate endpoint, and every browser after it got
+            # that copy -- no Access-Control-Allow-Origin on it -- so the page
+            # failed to load while its neighbours were fine.
             assert "Origin" in response.headers.get("vary", ""), path
 
 

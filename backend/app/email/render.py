@@ -9,6 +9,7 @@ from app.core.config import get_settings
 from app.core.tr_dates import format_long_date
 from app.models.article import Article
 from app.models.edition import Edition
+from app.taxonomy import CATEGORY_LABELS_TR
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 _env = Environment(
@@ -16,23 +17,11 @@ _env = Environment(
     autoescape=select_autoescape(["html"]),
 )
 
-# Kept identical to the web section labels in
-# frontend/src/app/newspaper/[date]/page.tsx -- a reader who follows the PDF
-# link from the newsletter should land on sections with the same names.
-SECTION_LABELS: dict[str, str] = {
-    "top_story": "Öne Çıkanlar",
-    "general": "Genel",
-    "revenue_management": "Gelir Yönetimi",
-    "safety": "Emniyet",
-    "finance": "Finans",
-    "fleet": "Filo",
-    "network": "Ağ & Rota",
-    "regulatory": "Regülasyon",
-    "sustainability": "Sürdürülebilirlik",
-    "labor": "İşgücü",
-    "airport": "Havalimanı",
-    "events": "Etkinlik",
-}
+# The category labels come from app/taxonomy.py, so a reader who follows the PDF
+# link from the newsletter lands on sections with the same names as the web --
+# and stays that way, which retyping the list here did not guarantee.
+# "top_story" is not a category: it is the edition's lead slot.
+SECTION_LABELS: dict[str, str] = {"top_story": "Öne Çıkanlar", **CATEGORY_LABELS_TR}
 
 
 def _article_context(article: Article) -> dict:

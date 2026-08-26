@@ -1,11 +1,16 @@
-"""Real operational status for the admin panel -- data freshness, queue
-health, and scheduler state, all pulled from tables the pipeline already
-writes to (no separate monitoring stack required for this to be useful).
+"""Real operational status for the operator -- data freshness and queue
+health, pulled from tables the pipeline already writes to (no separate
+monitoring stack required for this to be useful).
+
+Behind the operator token: this response names source counts, subscriber
+counts, delivery failures and the configured LLM provider, which is a map of
+the deployment and was public until now.
 """
 from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps import require_admin
 from app.core.config import get_settings
 from app.core.db import get_db
 from app.models.article import Article
@@ -18,10 +23,9 @@ from app.schemas.admin import (
     AdminStatusOut,
     ArticleStatusCountOut,
     EmailDeliveryStatusCountOut,
-    SchedulerJobOut,
 )
 
-router = APIRouter(prefix="/admin", tags=["admin"])
+router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(require_admin)])
 
 
 @router.get("/status", response_model=AdminStatusOut)
@@ -67,14 +71,4 @@ async def admin_status(db: AsyncSession = Depends(get_db)) -> AdminStatusOut:
         subscribers_count=subscribers_count,
         email_deliveries_by_status=deliveries_by_status,
         latest_article_fetched_at=latest_article,
-        scheduler_jobs=[SchedulerJobOut(**job) for job in _scheduler_status()],
     )
-
-
-def _scheduler_status() -> list[dict]:
-    """APScheduler imported lazily: main.py refuses to start the scheduler under
-    VERCEL=1, so on serverless the import was pure cold-start cost for every
-    route that shares this module's import chain."""
-    from app.scheduler.jobs import get_scheduler_status
-
-    return get_scheduler_status()

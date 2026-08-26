@@ -38,6 +38,7 @@ from app.models.entity import ArticleEntity, Entity
 from app.models.event import AviationEvent
 from app.models.tk_review import REVIEW_THEMES, TkReview
 from app.services.insights_service import airline_momentum
+from app.taxonomy import CATEGORY_LABELS_TR, REGION_LABELS_TR
 
 logger = get_logger(__name__)
 
@@ -130,34 +131,6 @@ EVENT_IMMINENT_DAYS = 7
 EVENT_HIGH_IMPACT_TYPES = ("airshow", "conference", "holiday")
 EVENT_MAX_RECS = 4
 
-# Turkish display labels. Mirrors frontend/src/lib/nav.ts `worldRegions` and
-# frontend/src/lib/taxonomy.ts `CATEGORIES` -- the titles are written here, so
-# the labels have to live here too.
-REGION_LABELS_TR: dict[str, str] = {
-    "europe": "Avrupa",
-    "middle-east": "Orta Doğu",
-    "africa": "Afrika",
-    "north-america": "Kuzey Amerika",
-    "south-america": "Güney Amerika",
-    "central-america": "Orta Amerika",
-    "asia": "Asya",
-    "southeast-asia": "Güneydoğu Asya",
-    "oceania": "Okyanusya",
-}
-
-CATEGORY_LABELS_TR: dict[str, str] = {
-    "revenue_management": "Gelir Yönetimi",
-    "fleet": "Filo",
-    "network": "Ağ & Rota",
-    "finance": "Finans",
-    "safety": "Emniyet",
-    "regulatory": "Regülasyon",
-    "sustainability": "Sürdürülebilirlik",
-    "airport": "Havalimanı",
-    "labor": "İşgücü",
-    "events": "Etkinlik",
-    "general": "Genel",
-}
 
 
 # --- multi-select filter helpers -----------------------------------------

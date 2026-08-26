@@ -1,4 +1,5 @@
 import type { LucideIcon } from "lucide-react";
+
 import {
   Archive,
   Globe2,
@@ -10,6 +11,8 @@ import {
   Radar,
   Star,
 } from "lucide-react";
+
+import { REGION_LABELS_TR, REGION_SLUGS, type RegionSlug } from "@/lib/taxonomy.gen";
 
 export interface NavItem {
   href: string;
@@ -55,15 +58,24 @@ export const airlineTabs = [
   { code: "TK", name: "Turkish Airlines", color: "#c70a20" },
 ];
 
-// slugs mirror backend/app/taxonomy.py COUNTRY_TO_REGION values -- keep both in sync.
-export const worldRegions = [
-  { slug: "europe", name: "Avrupa" },
-  { slug: "middle-east", name: "Orta Doğu" },
-  { slug: "africa", name: "Afrika" },
-  { slug: "north-america", name: "Kuzey Amerika" },
-  { slug: "south-america", name: "Güney Amerika" },
-  { slug: "central-america", name: "Orta Amerika" },
-  { slug: "asia", name: "Asya" },
-  { slug: "southeast-asia", name: "Güneydoğu Asya" },
-  { slug: "oceania", name: "Okyanusya" },
+// Slugs come from backend/app/taxonomy.py COUNTRY_TO_REGION, via taxonomy.gen.ts.
+// The RegionSlug type means a renamed region fails `tsc`; the check below means a
+// region the backend added but nobody named in Turkish fails the build too.
+// The order here is display order and is deliberately not alphabetical.
+export const worldRegions: { slug: RegionSlug; name: string }[] = [
+  { slug: "europe", name: REGION_LABELS_TR["europe"] },
+  { slug: "middle-east", name: REGION_LABELS_TR["middle-east"] },
+  { slug: "africa", name: REGION_LABELS_TR["africa"] },
+  { slug: "north-america", name: REGION_LABELS_TR["north-america"] },
+  { slug: "south-america", name: REGION_LABELS_TR["south-america"] },
+  { slug: "central-america", name: REGION_LABELS_TR["central-america"] },
+  { slug: "asia", name: REGION_LABELS_TR["asia"] },
+  { slug: "southeast-asia", name: REGION_LABELS_TR["southeast-asia"] },
+  { slug: "oceania", name: REGION_LABELS_TR["oceania"] },
 ];
+
+for (const slug of REGION_SLUGS) {
+  if (!worldRegions.some((region) => region.slug === slug)) {
+    throw new Error(`nav.ts: backend region "${slug}" has no Turkish name.`);
+  }
+}
