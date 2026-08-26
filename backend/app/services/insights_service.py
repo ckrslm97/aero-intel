@@ -103,7 +103,7 @@ async def airline_momentum(db: AsyncSession, window_days: int = 7, limit: int = 
 MAX_SIGNAL_AIRPORTS = 3
 
 
-def _destination_airports(airports: list[dict], airlines: list[str]) -> list[dict]:
+def destination_airports(airports: list[dict], airlines: list[str]) -> list[dict]:
     """The airports a signal is actually *about*.
 
     Two corrections to the raw extraction, both aimed at the map:
@@ -223,7 +223,7 @@ async def new_route_signals(
                     article.published_at.isoformat() if article.published_at else None
                 ),
                 "airlines": airlines,
-                "airports": _destination_airports(
+                "airports": destination_airports(
                     airports_by_article.get(article.id, []), airlines
                 ),
             }

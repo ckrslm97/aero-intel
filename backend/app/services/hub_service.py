@@ -7,13 +7,20 @@ the page says so.
 """
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
+from app.data import airport
 from app.hubs import HUBS, HUBS_BY_CODE, Hub
 from app.models.article import Article, ArticleEnrichment
 from app.models.entity import ArticleEntity, Entity
+from app.models.news_event import NewsEvent
+from app.models.promotion import Promotion
+
+# Read endpoints only ever serve these two bands -- see confidence.py. A
+# fabricated-looking Hub tab is worse than a thin one.
+PUBLISHABLE_BANDS = ("high", "medium")
 
 # How many co-mentions before a pair of airports is drawn as a line. One shared
 # article is a coincidence -- a wire story listing six destinations links them
@@ -61,6 +68,13 @@ async def _routes(db: AsyncSession, days: int) -> list[dict]:
     This is a co-mention graph, not a schedule. We have no OAG feed on the free
     tier, so a "line" here means the archive keeps discussing these two places
     together -- which is the honest claim the map makes.
+
+    Both ends resolve against the full 3,241-airport reference table
+    (app.data.airport), not HUBS_BY_CODE. HUBS_BY_CODE only names the ~20
+    hubs this desk actively watches, so resolving against it silently dropped
+    any pair where either end was a real, mentioned airport this desk simply
+    doesn't track a carrier at -- the map lost most of its lines to airports
+    it had never heard of, not to airports that don't exist.
     """
     left_link = aliased(ArticleEntity)
     right_link = aliased(ArticleEntity)
@@ -88,7 +102,7 @@ async def _routes(db: AsyncSession, days: int) -> list[dict]:
 
     routes = []
     for from_code, to_code, count in result.all():
-        origin, destination = HUBS_BY_CODE.get(from_code), HUBS_BY_CODE.get(to_code)
+        origin, destination = airport(from_code), airport(to_code)
         # Both ends need coordinates or there is no line to draw.
         if origin is None or destination is None:
             continue
@@ -102,6 +116,111 @@ async def _routes(db: AsyncSession, days: int) -> list[dict]:
             }
         )
     return routes
+
+
+def _event_payload(event: NewsEvent) -> dict:
+    return {
+        "id": str(event.id),
+        "slug": event.slug,
+        "headline": event.title_tr,
+        "category": event.category,
+        "confidence_band": event.confidence_band,
+        "last_seen": event.last_seen.isoformat(),
+    }
+
+
+async def _hub_events(db: AsyncSession, hub: Hub, days: int) -> list[dict]:
+    """Pipeline-v2 events whose primary article names this airport --
+    everything the old article-mention count above rolls up, but as citable
+    rows rather than a bare number."""
+    mentions = (
+        select(ArticleEntity.article_id)
+        .join(Entity, Entity.id == ArticleEntity.entity_id)
+        .where(Entity.entity_type == "airport", Entity.code == hub.code)
+    )
+    rows = (
+        await db.execute(
+            select(NewsEvent)
+            .where(
+                NewsEvent.primary_article_id.in_(mentions),
+                NewsEvent.is_published.is_(True),
+                NewsEvent.confidence_band.in_(PUBLISHABLE_BANDS),
+                NewsEvent.superseded_at.is_(None),
+                NewsEvent.last_seen >= _since(days),
+            )
+            .order_by(NewsEvent.last_seen.desc())
+            .limit(20)
+        )
+    ).scalars().all()
+    return [_event_payload(e) for e in rows]
+
+
+async def _hub_risks(db: AsyncSession, hub: Hub, days: int) -> list[dict]:
+    """Risk events in this hub's country -- risk_country is stored lowercase
+    (see app/agents/runner.py._canonical_country), so the match is too."""
+    rows = (
+        await db.execute(
+            select(NewsEvent)
+            .where(
+                NewsEvent.risk_country == hub.country.lower(),
+                NewsEvent.risk_type.is_not(None),
+                NewsEvent.is_published.is_(True),
+                NewsEvent.confidence_band.in_(PUBLISHABLE_BANDS),
+                NewsEvent.superseded_at.is_(None),
+                NewsEvent.last_seen >= _since(days),
+            )
+            .order_by(NewsEvent.risk_score.desc().nulls_last())
+            .limit(20)
+        )
+    ).scalars().all()
+    return [
+        {
+            **_event_payload(e),
+            "risk_type": e.risk_type,
+            "risk_family": e.risk_family,
+            "risk_severity": e.risk_severity,
+            "risk_score": e.risk_score,
+        }
+        for e in rows
+    ]
+
+
+async def _hub_campaigns(db: AsyncSession, hub: Hub, days: int) -> list[dict]:
+    """Campaigns touching this hub's market. `markets_json`'s country/city
+    lists are the precise match; `region` is the fallback for the campaigns
+    the agent hasn't (yet) populated markets_json for -- see Promotion's own
+    docstring on why the two coexist."""
+    rows = (
+        await db.execute(
+            select(Promotion)
+            .where(
+                Promotion.confidence_band.in_(PUBLISHABLE_BANDS),
+                Promotion.superseded_at.is_(None),
+                Promotion.detected_at >= _since(days),
+                or_(
+                    Promotion.region == hub.region,
+                    Promotion.markets_json["countries"].op("?")(hub.country),
+                    Promotion.markets_json["cities"].op("?")(hub.city),
+                ),
+            )
+            .order_by(Promotion.detected_at.desc())
+            .limit(20)
+        )
+    ).scalars().all()
+    return [
+        {
+            "id": str(p.id),
+            "airline_code": p.airline_code,
+            "airline_name": p.airline_name,
+            "title": p.title_tr,
+            "discount_pct": p.discount_pct,
+            "sale_starts": p.sale_starts.isoformat() if p.sale_starts else None,
+            "sale_ends": p.sale_ends.isoformat() if p.sale_ends else None,
+            "confidence_band": p.confidence_band,
+            "url": p.url,
+        }
+        for p in rows
+    ]
 
 
 async def hub_overview(db: AsyncSession, days: int = 30) -> dict:
@@ -157,6 +276,12 @@ async def hub_detail(db: AsyncSession, code: str, days: int = 90) -> dict | None
         )
     ).all()
 
+    events, risks, campaigns = (
+        await _hub_events(db, hub, days),
+        await _hub_risks(db, hub, days),
+        await _hub_campaigns(db, hub, days),
+    )
+
     return {
         **_hub_payload(hub),
         "days": days,
@@ -171,4 +296,9 @@ async def hub_detail(db: AsyncSession, code: str, days: int = 90) -> dict | None
             {"code": code, "name": name, "article_count": count}
             for code, name, count in carriers
         ],
+        # Pipeline-v2 composition (K9/Faz 10): events, risks and campaigns
+        # touching this hub, each a citable row rather than a bare count.
+        "events": events,
+        "risks": risks,
+        "campaigns": campaigns,
     }
