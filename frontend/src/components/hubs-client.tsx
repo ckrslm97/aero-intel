@@ -3,15 +3,23 @@
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { ChevronDown, Map as MapIcon, Plane, Route } from "lucide-react";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { useEffect, useMemo, useState } from "react";
 
 import { AirlineLogo } from "@/components/airline-logo";
 import { ArticleCard } from "@/components/article-card";
-import { HubMap } from "@/components/hub-map";
 import { HubNetworkSignals } from "@/components/hub-network-signals";
 import { MotionItem, MotionList } from "@/components/motion/motion-list";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiFetch } from "@/lib/api";
+
+// echarts is only needed once the map actually renders -- Faz 14: this was
+// the one heavy map/chart bundle in the app still loaded eagerly, the same
+// pattern (see newspaper-browser.tsx's RegionMap) just not yet applied here.
+const HubMap = dynamic(
+  () => import("@/components/hub-map").then((m) => m.HubMap),
+  { ssr: false, loading: () => <Skeleton className="h-[380px] w-full rounded-xl" /> },
+);
 import {
   collapseSection,
   fadeUpItem,

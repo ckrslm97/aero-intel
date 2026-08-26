@@ -18,16 +18,23 @@ import {
   Waves,
   type LucideIcon,
 } from "lucide-react";
+import dynamic from "next/dynamic";
 import { useEffect, useMemo, useState } from "react";
 
 import { MotionItem, MotionList, MotionRail } from "@/components/motion/motion-list";
-import { RiskMap } from "@/components/risk-map";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiFetch } from "@/lib/api";
 import { worldRegions } from "@/lib/nav";
 import { RISK_TYPES, type RiskTypeSlug } from "@/lib/taxonomy.gen";
 import type { RiskCountry, RiskItem, RiskRadarOut } from "@/lib/types";
 import { cn } from "@/lib/utils";
+
+// echarts only needed once the map renders -- Faz 14, same pattern as
+// newspaper-browser.tsx's RegionMap.
+const RiskMap = dynamic(
+  () => import("@/components/risk-map").then((m) => m.RiskMap),
+  { ssr: false, loading: () => <Skeleton className="h-[420px] w-full rounded-xl" /> },
+);
 
 const DAYS = 14;
 

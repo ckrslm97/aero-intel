@@ -55,6 +55,12 @@ class NewsEvent(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # a separate ALTER once both exist -- without it SQLAlchemy cannot sort the
     # tables and silently skips both foreign keys when building a schema, which
     # is what the test fixtures do on every test.
+    # Faz 14: indexed because Hub/Biz's per-airport and per-carrier event
+    # lookups (app/services/hub_service.py, biz_service.py,
+    # network_signals_service.py) all filter or join on this column -- added
+    # once those callers existed, not when the column was first written,
+    # which is exactly the kind of hot-path gap a query plan catches and a
+    # migration diff does not.
     primary_article_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey(
@@ -64,6 +70,7 @@ class NewsEvent(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             name="fk_news_events_primary_article_id",
         ),
         nullable=True,
+        index=True,
     )
 
     # --- classification -----------------------------------------------------

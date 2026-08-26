@@ -20,8 +20,16 @@ from fastapi import Response
 # below a minute.
 FRESH = 30
 ARTICLES = 60
+# Faz 14's own number for "kur": the FX board's five pairs refresh from the
+# cron every ~15 minutes (app/services/kpi_service.py), so a 1-minute edge
+# cache is nowhere near the source of any real staleness -- it exists purely
+# to absorb repeat requests within that minute, not to gate freshness.
+FX = 60
 AGGREGATES = 300  # counts, insights, kpis -- expensive to compute, cheap to age
-CURATED = 600  # TK reviews: changes only on a manual curation pass
+# Faz 14's own number for "küratörlü tablolar": bank FX forecasts, IATA
+# indicators and TK reviews all change only when a person edits a seed file
+# or runs a curation pass -- not between one request and the next.
+CURATED = 3600
 STATIC = 3600  # taxonomy, event calendar
 
 
