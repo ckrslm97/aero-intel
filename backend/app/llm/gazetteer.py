@@ -45,7 +45,7 @@ _NON_ALNUM_CASED_RE = re.compile(r"[^A-Za-z0-9\s]")
 
 
 def fold_tokens(text: str) -> tuple[list[str], list[str]]:
-    """Folded tokens, and the same tokens with their original casing.
+    r"""Folded tokens, and the same tokens with their original casing.
 
     The two lists are aligned index for index by construction: they differ
     only in the final `.lower()`, and `[^A-Za-z0-9\s]` and `[^a-z0-9\s]`

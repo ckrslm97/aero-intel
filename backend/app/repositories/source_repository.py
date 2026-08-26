@@ -63,6 +63,8 @@ def _apply_seed(source: Source, seed: SourceSeed) -> None:
     source.source_type = seed.source_type
     source.category = seed.category
     source.trust_weight = seed.trust_weight
+    source.tier = seed.tier
+    source.language = seed.language
     source.is_premium_stub = seed.is_premium_stub
     source.is_active = True
 
@@ -74,5 +76,7 @@ def _source_from_seed(seed: SourceSeed) -> Source:
         source_type=seed.source_type,
         category=seed.category,
         trust_weight=seed.trust_weight,
+        tier=seed.tier,
+        language=seed.language,
         is_premium_stub=seed.is_premium_stub,
     )
