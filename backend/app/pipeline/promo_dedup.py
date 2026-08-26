@@ -45,8 +45,6 @@ LSH, the article `is_duplicate` graph -- solves a problem this table does not
 have: `promotions` holds hundreds of rows, not hundreds of thousands, and a
 duplicate here must be *merged away*, not flagged and kept.
 """
-import re
-import unicodedata
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 
@@ -55,6 +53,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
 from app.models.promotion import Promotion
+from app.pipeline.text_tr import STEM_LEN, stem_tokens, tr_normalize
 
 logger = get_logger(__name__)
 
@@ -79,7 +78,6 @@ MAX_DETECTION_GAP = timedelta(days=45)
 # word wearing three case endings, and campaign copy inflects freely. Comparing
 # fixed-length prefixes is the cheap standard fix and costs nothing in
 # precision here, because the subject veto works on the same stems.
-STEM_LEN = 6
 
 # Source names that mean "the airline said this about its own campaign". The
 # authority that follows from it is narrow and deliberate: dates, rate and the
@@ -87,20 +85,6 @@ STEM_LEN = 6
 # than a journalist's, so summaries are picked on substance instead.
 AIRLINE_PAGE_SOURCES = frozenset({"Pegasus kampanya sayfası"})
 
-# "I".lower() is "i" and "İ".lower() is "i" + U+0307 -- both wrong for Turkish,
-# where the dotted and dotless letters are separate. Map them first, then fold
-# every Turkish letter to ASCII so a headline written "Kibris" without diacritics
-# still matches one written "Kıbrıs".
-_TR_UPPER = {ord("I"): "ı", ord("İ"): "i"}
-_TR_ASCII = str.maketrans(
-    {"ı": "i", "ş": "s", "ğ": "g", "ü": "u", "ö": "o", "ç": "c",
-     "â": "a", "î": "i", "û": "u", "å": "a", "é": "e"}
-)
-# "Pegasus'tan", "%40'a", "Salı'dan": Turkish attaches case endings after an
-# apostrophe. The suffix carries no meaning for matching and differs between two
-# tellings of the same campaign, so it goes.
-_APOSTROPHE_SUFFIX = re.compile(r"['’`´]\s*[a-z]*")
-_NON_ALNUM = re.compile(r"[^a-z0-9]+")
 
 # Words that appear in campaign titles regardless of WHICH campaign it is.
 # Two kinds: marketing/structural filler, and the carrier and loyalty-programme
@@ -122,20 +106,9 @@ _FILLER = (
 )
 
 
-def tr_normalize(text: str) -> str:
-    """Lowercase, de-diacritic and de-punctuate a title, Turkish-correctly."""
-    lowered = unicodedata.normalize("NFC", text).translate(_TR_UPPER).lower()
-    # A stray "İ" that reached us already lowercased leaves its combining dot.
-    lowered = lowered.replace("̇", "")
-    folded = lowered.translate(_TR_ASCII)
-    folded = _APOSTROPHE_SUFFIX.sub(" ", folded)
-    return " ".join(_NON_ALNUM.sub(" ", folded).split())
-
-
 def title_tokens(title: str) -> set[str]:
-    """Stemmed content tokens. Single characters are dropped: they are what is
-    left of a mangled word, never a word."""
-    return {token[:STEM_LEN] for token in tr_normalize(title).split() if len(token) > 1}
+    """Stemmed content tokens for a campaign title."""
+    return stem_tokens(title)
 
 
 GENERIC_TOKENS = frozenset(tr_normalize(word)[:STEM_LEN] for word in _FILLER)
