@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.env
+logs/
+output/
+*.db
+.venv/
+venv/
+.pytest_cache/
+# Üretilen Excel şablonları (tools/make_ond_template.py ile yeniden üretilir)
+data/ond_template*.xlsx
