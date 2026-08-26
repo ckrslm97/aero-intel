@@ -4,6 +4,7 @@ from fastapi import APIRouter
 from app.api.v1 import (
     admin,
     articles,
+    biz,
     editions,
     events,
     health,
@@ -23,6 +24,7 @@ from app.api.v1 import (
 api_router = APIRouter()
 api_router.include_router(health.router)
 api_router.include_router(articles.router)
+api_router.include_router(biz.router)
 api_router.include_router(editions.router)
 api_router.include_router(events.router)
 api_router.include_router(hubs.router)
