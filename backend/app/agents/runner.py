@@ -78,15 +78,13 @@ REQUIRED_NEWS_FIELDS = ("title_tr", "summary_tr", "category")
 
 
 def _tier_for_trust_weight(weight: float) -> str:
-    """Bridge from the continuous 0-1 `Source.trust_weight` to the five
-    discrete tiers pipeline/confidence.py scores against.
+    """Bucket a bare trust_weight into a tier, for sources with none declared.
 
-    Provisional: the source ladder in Faz 5's plan gives every seeded source
-    an explicit tier (`agents.base.SourceSpec.tier`); until sources_seed.py is
-    rewritten to carry one, this bucketing is the honest approximation. No
-    seeded source currently reaches 1.0, so "official" is never produced here
-    -- that tier is reserved for sources this bridge cannot see, like a
-    campaign page scraped directly from an airline's own domain.
+    Every source app/ingest/sources_seed.py seeds now declares a real tier
+    (SourceSeed.tier), reconciled onto Source.tier by ensure_seeded(). This
+    bucketing only fires for a row seeded before that field existed and not
+    yet reconciled, or a source added by hand outside the seed list -- it is
+    the fallback, not the primary path. See _tier_for_source below.
     """
     if weight >= 0.90:
         return "regulator"
@@ -95,6 +93,15 @@ def _tier_for_trust_weight(weight: float) -> str:
     if weight >= 0.50:
         return "trade"
     return "aggregator"
+
+
+def _tier_for_source(source) -> str:
+    """The declared tier when there is one; the trust_weight bucket otherwise."""
+    if source is None:
+        return "trade"
+    if source.tier:
+        return source.tier
+    return _tier_for_trust_weight(source.trust_weight)
 
 
 def _slugify(title: str, article_id) -> str:
@@ -227,7 +234,7 @@ async def run_pipeline_v2(db: AsyncSession, *, limit: int = DEFAULT_BATCH_SIZE) 
             article_id=a.id,
             title=a.title,
             entities=_entity_codes(a),
-            tier=_tier_for_trust_weight(a.source.trust_weight if a.source else 0.5),
+            tier=_tier_for_source(a.source),
             published_at=(a.published_at or a.fetched_at).isoformat(),
         )
         for a in articles
@@ -240,7 +247,12 @@ async def run_pipeline_v2(db: AsyncSession, *, limit: int = DEFAULT_BATCH_SIZE) 
         primary = by_id[primary_candidate.article_id]
         members = [by_id[c.article_id] for c in group]
 
-        verdict = resolve_language(primary.title, primary.raw_content)
+        # The source's own declared language, when it has one -- see
+        # pipeline/language.py for why a human's claim about a feed beats a
+        # detector working on a six-word headline, and why detection still
+        # runs as the safety net for mixed or undeclared sources.
+        declared_language = primary.source.language if primary.source else None
+        verdict = resolve_language(primary.title, primary.raw_content, declared=declared_language)
         for member in members:
             member.language = verdict.language
         if not verdict.is_supported:

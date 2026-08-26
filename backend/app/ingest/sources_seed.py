@@ -14,14 +14,28 @@ class SourceSeed:
     category: str  # org | airline | airport | financial | other
     trust_weight: float
     is_premium_stub: bool = False
+    #: The owner's source priority ladder: official announcement > regulator
+    #: (IATA/ICAO/EASA/national authority) > agency (national wires, major
+    #: press associations) > trade press > aggregator (Google News queries).
+    #: Defaults to "trade" because that describes most of this list -- the
+    #: independent aviation/travel press. Feeds pipeline/confidence.py directly
+    #: once seeded; app/agents/runner.py no longer has to bridge from
+    #: trust_weight to guess at a tier that was never declared.
+    tier: str = "trade"
+    #: ISO 639-1. Declared here because the feed list is curated and finite --
+    #: a human already knows what language a source publishes in, which is a
+    #: better answer than detecting it fresh from every article's first few
+    #: hundred characters. Defaults to English, since that is what most of
+    #: this list is.
+    language: str = "en"
 
 
 FREE_RSS_SOURCES: list[SourceSeed] = [
     SourceSeed("Simple Flying", "https://simpleflying.com/feed/", "rss", "other", 0.6),
     SourceSeed("AirlineGeeks", "https://airlinegeeks.com/feed/", "rss", "other", 0.6),
     SourceSeed("Aviation Week", "https://aviationweek.com/rss.xml", "rss", "other", 0.85),
-    SourceSeed("ACI", "https://aci.aero/feed/", "rss", "org", 0.9),
-    SourceSeed("Eurocontrol", "https://www.eurocontrol.int/rss.xml", "rss", "org", 0.9),
+    SourceSeed("ACI", "https://aci.aero/feed/", "rss", "org", 0.9, tier="agency"),
+    SourceSeed("Eurocontrol", "https://www.eurocontrol.int/rss.xml", "rss", "org", 0.9, tier="regulator"),
     SourceSeed("Airport Technology", "https://www.airport-technology.com/feed/", "rss", "airport", 0.7),
     # NOTE (round 7): icao.int started answering 403 to our egress IP on every
     # retry. Left in place because it may just be a regional/WAF block that CI
@@ -42,7 +56,6 @@ FREE_RSS_SOURCES: list[SourceSeed] = [
     SourceSeed("PaxEx.Aero", "https://paxex.aero/feed/", "rss", "other", 0.6),
     SourceSeed("AviationSource News", "https://aviationsourcenews.com/feed/", "rss", "other", 0.6),
     SourceSeed("Travel Radar", "https://www.travelradar.aero/feed/", "rss", "other", 0.55),
-    SourceSeed("Aviacionline", "https://www.aviacionline.com/rss", "rss", "other", 0.6),
     SourceSeed("Aviation Today", "https://www.aviationtoday.com/feed/", "rss", "other", 0.7),
     # Round-5 additions, live-verified (200 + real items) at build time. The
     # user's priority sources are IATA and OAG: IATA publishes no public RSS
@@ -70,7 +83,7 @@ FREE_RSS_SOURCES: list[SourceSeed] = [
     # without the substance. EASA and Eurocontrol carry that beat instead.
     SourceSeed(
         "EASA", "https://www.easa.europa.eu/en/newsroom-and-events/news/rss.xml",
-        "rss", "org", 0.95,
+        "rss", "org", 0.95, tier="regulator",
     ),
     # International trade press.
     SourceSeed("FlightGlobal News", "https://www.flightglobal.com/rss", "rss", "other", 0.85),
@@ -79,7 +92,6 @@ FREE_RSS_SOURCES: list[SourceSeed] = [
         "Aviation Business News", "https://www.aviationbusinessnews.com/feed/",
         "rss", "other", 0.7,
     ),
-    SourceSeed("aeroTELEGRAPH", "https://www.aerotelegraph.com/feed", "rss", "other", 0.65),
     SourceSeed(
         "Future Travel Experience", "https://www.futuretravelexperience.com/feed/",
         "rss", "other", 0.6,
@@ -111,13 +123,19 @@ FREE_RSS_SOURCES: list[SourceSeed] = [
     SourceSeed("eTurboNews", "https://www.eturbonews.com/feed/", "rss", "other", 0.55),
     # Airline newsrooms. Only a handful of carriers publish a real feed; the
     # rest are behind a CDN bot wall (see DROPPED_CANDIDATES).
-    SourceSeed("Delta News Hub", "https://news.delta.com/rss.xml", "rss", "airline", 0.75),
-    # Reddit: keyless .rss endpoints. Community chatter, so trust is the lowest
-    # in the list -- useful as an early-warning signal, never as a sole source.
-    SourceSeed("Reddit r/aviation", "https://www.reddit.com/r/aviation/.rss", "rss", "other", 0.35),
-    SourceSeed(
-        "Reddit r/awardtravel", "https://www.reddit.com/r/awardtravel/.rss", "rss", "other", 0.35,
-    ),
+    SourceSeed("Delta News Hub", "https://news.delta.com/rss.xml", "rss", "airline", 0.75, tier="official"),
+    # Reddit r/aviation and r/awardtravel used to be seeded here. Removed on the
+    # owner's explicit instruction: community chatter surfaced as news (a photo
+    # caption -- "NARLY 62 cruising down the Hudson corridor" -- and personal
+    # award-booking questions) and as competitor campaigns (a stranger asking
+    # about SFO-DEL award availability, filed as a fare sale). Removing a source
+    # from this list deactivates it in the live database on the next
+    # ensure_seeded() reconcile -- see app/repositories/source_repository.py --
+    # so this line is the whole fix, not just documentation of one.
+    #
+    # r/TurkishAirlines stays: it feeds BİZ's customer-voice channel
+    # (app/ingest/tk_reviews_live.py), a deliberately different use of Reddit
+    # from "treat it as a news source", and is not seeded here at all.
     # Google News topic radars: keyless aggregator RSS scoped to the newspaper's
     # focus areas (RM / pricing / NDC / ancillary / demand) and the user's main
     # rivals. Trust sits low because items come from arbitrary publishers; our
@@ -125,32 +143,32 @@ FREE_RSS_SOURCES: list[SourceSeed] = [
     SourceSeed(
         "Google News · Revenue Management",
         "https://news.google.com/rss/search?q=airline%20%22revenue%20management%22%20OR%20%22yield%20management%22&hl=en-US&gl=US&ceid=US:en",
-        "rss", "other", 0.5,
+        "rss", "other", 0.5, tier="aggregator",
     ),
     SourceSeed(
         "Google News · Fiyatlandırma",
         "https://news.google.com/rss/search?q=airline%20pricing%20OR%20airfares&hl=en-US&gl=US&ceid=US:en",
-        "rss", "other", 0.5,
+        "rss", "other", 0.5, tier="aggregator",
     ),
     SourceSeed(
         "Google News · NDC & Dağıtım",
         "https://news.google.com/rss/search?q=airline%20NDC%20OR%20%22airline%20distribution%22%20OR%20GDS&hl=en-US&gl=US&ceid=US:en",
-        "rss", "other", 0.5,
+        "rss", "other", 0.5, tier="aggregator",
     ),
     SourceSeed(
         "Google News · Ek Gelir",
         "https://news.google.com/rss/search?q=airline%20%22ancillary%20revenue%22&hl=en-US&gl=US&ceid=US:en",
-        "rss", "other", 0.5,
+        "rss", "other", 0.5, tier="aggregator",
     ),
     SourceSeed(
         "Google News · Talep & Kapasite",
         "https://news.google.com/rss/search?q=airline%20%22load%20factor%22%20OR%20%22capacity%20growth%22&hl=en-US&gl=US&ceid=US:en",
-        "rss", "other", 0.5,
+        "rss", "other", 0.5, tier="aggregator",
     ),
     SourceSeed(
         "Google News · Ana Rakipler",
         "https://news.google.com/rss/search?q=%22Emirates%22%20OR%20%22Qatar%20Airways%22%20OR%20%22Etihad%22%20OR%20%22Lufthansa%22%20OR%20%22Air%20France%22%20OR%20%22KLM%22%20OR%20%22British%20Airways%22%20OR%20%22Pegasus%20Airlines%22%20OR%20%22AJet%22&hl=en-US&gl=US&ceid=US:en",
-        "rss", "airline", 0.5,
+        "rss", "airline", 0.5, tier="aggregator",
     ),
     # Round 6, both verified live 2026-07-19 (100 items each):
     # TK radar feeds the BİZ page's news stream; the promo radar is the
@@ -160,12 +178,12 @@ FREE_RSS_SOURCES: list[SourceSeed] = [
     SourceSeed(
         "Google News · Türk Hava Yolları",
         "https://news.google.com/rss/search?q=%22Turkish%20Airlines%22%20OR%20%22T%C3%BCrk%20Hava%20Yollar%C4%B1%22&hl=en-US&gl=US&ceid=US:en",
-        "rss", "airline", 0.5,
+        "rss", "airline", 0.5, tier="aggregator",
     ),
     SourceSeed(
         "Google News · Rakip Kampanyalar",
         "https://news.google.com/rss/search?q=(%22Emirates%22%20OR%20%22Qatar%20Airways%22%20OR%20%22Lufthansa%22%20OR%20%22Air%20France%22%20OR%20%22British%20Airways%22%20OR%20%22Etihad%22%20OR%20%22KLM%22%20OR%20%22Pegasus%20Airlines%22%20OR%20%22AJet%22)%20(%22fare%20sale%22%20OR%20%22promotion%22%20OR%20%22discount%22%20OR%20%22flash%20sale%22)&hl=en-US&gl=US&ceid=US:en",
-        "rss", "airline", 0.5,
+        "rss", "airline", 0.5, tier="aggregator",
     ),
     # Round-7 radars: seven focus areas the publisher desks under-cover. Volume
     # is bounded by AGGREGATOR_ITEM_CAP in app/ingest/rss.py (40 items/run) and
@@ -173,37 +191,37 @@ FREE_RSS_SOURCES: list[SourceSeed] = [
     SourceSeed(
         "Google News · Bagaj & Ek Ücretler",
         "https://news.google.com/rss/search?q=airline%20%22baggage%20fee%22%20OR%20%22seat%20selection%20fee%22%20OR%20%22checked%20bag%22&hl=en-US&gl=US&ceid=US:en",
-        "rss", "other", 0.5,
+        "rss", "other", 0.5, tier="aggregator",
     ),
     SourceSeed(
         "Google News · Sadakat Programları",
         "https://news.google.com/rss/search?q=airline%20%22loyalty%20program%22%20OR%20%22frequent%20flyer%22%20OR%20%22award%20miles%22&hl=en-US&gl=US&ceid=US:en",
-        "rss", "other", 0.5,
+        "rss", "other", 0.5, tier="aggregator",
     ),
     SourceSeed(
         "Google News · İttifak & Ortak Uçuş",
         "https://news.google.com/rss/search?q=airline%20codeshare%20OR%20%22joint%20venture%22%20OR%20%22Star%20Alliance%22%20OR%20oneworld%20OR%20SkyTeam&hl=en-US&gl=US&ceid=US:en",
-        "rss", "airline", 0.5,
+        "rss", "airline", 0.5, tier="aggregator",
     ),
     SourceSeed(
         "Google News · Kapasite Kesintileri",
         "https://news.google.com/rss/search?q=airline%20%22capacity%20cuts%22%20OR%20%22route%20suspension%22%20OR%20%22cancels%20route%22&hl=en-US&gl=US&ceid=US:en",
-        "rss", "airline", 0.5,
+        "rss", "airline", 0.5, tier="aggregator",
     ),
     SourceSeed(
         "Google News · Dinamik Fiyatlama",
         "https://news.google.com/rss/search?q=airline%20%22dynamic%20pricing%22%20OR%20%22continuous%20pricing%22%20OR%20%22offer%20and%20order%22&hl=en-US&gl=US&ceid=US:en",
-        "rss", "other", 0.5,
+        "rss", "other", 0.5, tier="aggregator",
     ),
     SourceSeed(
         "Google News · Slot & Hub",
         "https://news.google.com/rss/search?q=%22airport%20slots%22%20OR%20%22slot%20allocation%22%20OR%20%22hub%20expansion%22%20airline&hl=en-US&gl=US&ceid=US:en",
-        "rss", "airport", 0.5,
+        "rss", "airport", 0.5, tier="aggregator",
     ),
     SourceSeed(
         "Google News · İstanbul Havalimanları",
         "https://news.google.com/rss/search?q=%22Istanbul%20Airport%22%20OR%20%22Sabiha%20G%C3%B6k%C3%A7en%22%20OR%20%22DHM%C4%B0%22&hl=tr&gl=TR&ceid=TR:tr",
-        "rss", "airport", 0.5,
+        "rss", "airport", 0.5, tier="aggregator", language="tr",
     ),
     # ---------------------------------------------------------------------
     # Round-8: Turkish-language desks. Until now the only TR-native input was
@@ -217,22 +235,22 @@ FREE_RSS_SOURCES: list[SourceSeed] = [
     # Havayolu 101 is the pick of the set: it runs actual revenue-management
     # analysis (yield, load factor, fare structure) rather than reprinted
     # press releases, which is why it outranks every other TR source here.
-    SourceSeed("Havayolu 101", "https://www.havayolu101.com/feed/", "rss", "other", 0.75),
-    SourceSeed("AirlineHaber", "https://www.airlinehaber.com/feed/", "rss", "other", 0.65),
-    SourceSeed("AirTürkHaber", "https://www.airturkhaber.com/feed/", "rss", "other", 0.6),
+    SourceSeed("Havayolu 101", "https://www.havayolu101.com/feed/", "rss", "other", 0.75, language="tr"),
+    SourceSeed("AirlineHaber", "https://www.airlinehaber.com/feed/", "rss", "other", 0.65, language="tr"),
+    SourceSeed("AirTürkHaber", "https://www.airturkhaber.com/feed/", "rss", "other", 0.6, language="tr"),
     # NOTE: this is the airporthaber2.com mirror on purpose. The main
     # airporthaber.com domain appears to geo-block non-Turkish egress IPs --
     # connection refused on every attempt from our egress, while the mirror
     # serves the same publication fine. If ingestion from this source ever
     # stops, re-test the primary domain before assuming the desk went dark.
     # Highest-volume TR aviation desk at ~10-15 items/day.
-    SourceSeed("AirportHaber", "https://www.airporthaber2.com/rss/", "rss", "other", 0.6),
+    SourceSeed("AirportHaber", "https://www.airporthaber2.com/rss/", "rss", "other", 0.6, language="tr"),
     # Press-release republisher, so trust sits low -- it rewrites carrier PR
     # rather than reporting it out. Kept anyway because it is the earliest and
     # most reliable TR signal for airline CAMPAIGN announcements (kampanya /
     # indirim), which is exactly what the promo tracking needs and what the
     # bot-walled carrier offer pages cannot give us.
-    SourceSeed("Air News Times", "https://www.airnewstimes.com/feed/", "rss", "other", 0.45),
+    SourceSeed("Air News Times", "https://www.airnewstimes.com/feed/", "rss", "other", 0.45, language="tr"),
     # NOTE: this feed declares encoding="windows-1254", not UTF-8, and serves
     # it as `text/xml` with no charset parameter. It is safe: RssSourceAdapter
     # hands feedparser `response.content` (bytes), and feedparser reads the
@@ -240,9 +258,9 @@ FREE_RSS_SOURCES: list[SourceSeed] = [
     # characters land correctly ("THY TEKNİK'TEN YENİ HANGAR"). See the
     # matching comment in app/ingest/rss.py; that bytes-not-str detail is the
     # only thing standing between this source and mojibake.
-    SourceSeed("Airkule", "https://www.airkule.com/sondakika.xml", "rss", "other", 0.55),
+    SourceSeed("Airkule", "https://www.airkule.com/sondakika.xml", "rss", "other", 0.55, language="tr"),
     # Mixed civil/defence, roughly weekly -- lowest priority of the TR set.
-    SourceSeed("Kokpit.Aero", "https://kokpit.aero/feed/", "rss", "other", 0.55),
+    SourceSeed("Kokpit.Aero", "https://kokpit.aero/feed/", "rss", "other", 0.55, language="tr"),
     # Adjacent desks: not aviation trade press, but the best TR sources for the
     # Etkinlik beat (congresses, festivals, sports) and for the demand-side
     # context a revenue-management desk reads underneath a fare move.
@@ -254,11 +272,11 @@ FREE_RSS_SOURCES: list[SourceSeed] = [
     # since the problem is topicality, not volume.
     SourceSeed(
         "Anadolu Ajansı · Ekonomi", "https://www.aa.com.tr/tr/rss/default?cat=ekonomi",
-        "rss", "org", 0.85,
+        "rss", "org", 0.85, tier="agency", language="tr",
     ),
-    SourceSeed("Turizm Günlüğü", "https://www.turizmgunlugu.com/feed/", "rss", "other", 0.6),
+    SourceSeed("Turizm Günlüğü", "https://www.turizmgunlugu.com/feed/", "rss", "other", 0.6, language="tr"),
     # Small volume, analytical -- demand and market-shift pieces.
-    SourceSeed("Turizm DataBank", "https://www.turizmdatabank.com/feed/", "rss", "other", 0.6),
+    SourceSeed("Turizm DataBank", "https://www.turizmdatabank.com/feed/", "rss", "other", 0.6, language="tr"),
 ]
 
 # Documented drops -- candidates fetched at round-7 build time that failed the
