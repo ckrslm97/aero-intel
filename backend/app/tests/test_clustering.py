@@ -1,0 +1,172 @@
+"""Event clustering.
+
+The measured problem: `Jin Air, Air Busan and Air Seoul to merge` was filed
+under `finance/equity` from its English source and `general` from its German
+one -- one event, two classifications, two rows. Roughly 12% of a 200-article
+sample was unmerged duplicates.
+"""
+import pytest
+
+from app.pipeline.clustering import (
+    EventCandidate,
+    canonicalize,
+    cluster,
+    distinctive_overlap,
+    needs_adjudication,
+    pick_primary,
+    same_event,
+    title_similarity,
+)
+
+
+def _c(id_, title, entities=(), tier="trade", published_at=None):
+    return EventCandidate(id_, title, frozenset(entities), tier, published_at)
+
+
+# --- canonicalisation ---------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "Türk Hava Yolları yeni hat açıyor",
+        "THY yeni hat açıyor",
+        "THY'nin yeni hattı",
+        "Turkish Airlines opens a new route",
+    ],
+)
+def test_every_form_of_the_carrier_name_collapses_to_its_code(title):
+    """`THY`, `Türk Hava Yolları` and `Turkish Airlines` are one carrier. Until
+    the gazetteer learned the Turkish names, none of them met."""
+    assert "tk" in canonicalize(title).split()
+
+
+def test_turkish_case_endings_do_not_survive_canonicalisation():
+    assert canonicalize("THY'nin") == canonicalize("THY")
+
+
+# --- the decision -------------------------------------------------------------
+
+
+def test_two_tellings_of_one_event_cluster_across_languages():
+    turkish = _c(1, "Türk Hava Yolları Lima hattını açıyor", {"TK", "LIM"})
+    english = _c(2, "Turkish Airlines launches Lima route", {"TK", "LIM"})
+    assert same_event(turkish, english)
+
+
+def test_two_turkish_tellings_cluster_despite_different_suffixes():
+    """Turkish writes the same idea with different endings and a different
+    verb, so the union grows while the intersection does not."""
+    a = _c(1, "THY'nin Lima hattı 2027'de açılıyor", {"TK", "LIM"})
+    b = _c(2, "Türk Hava Yolları Lima seferlerine başlıyor", {"TK", "LIM"})
+    assert title_similarity(a, b) < 0.30, "wording similarity really is this low"
+    assert same_event(a, b), "and they are still plainly the same event"
+
+
+def test_a_jaccard_threshold_could_not_have_separated_these():
+    """The measurement that killed the threshold approach: two *different*
+    Pegasus campaigns score HIGHER on wording similarity than two tellings of
+    one Turkish Airlines route launch. No threshold splits that."""
+    same_a = _c(1, "THY'nin Lima hattı 2027'de açılıyor", {"TK", "LIM"})
+    same_b = _c(2, "Türk Hava Yolları Lima seferlerine başlıyor", {"TK", "LIM"})
+    different_a = _c(3, "Pegasus'ta 6 hatta indirim kampanyası başladı", {"PC"})
+    different_b = _c(4, "Pegasus yeni kampanya duyurdu, biletlerde indirim", {"PC"})
+
+    assert title_similarity(different_a, different_b) > title_similarity(same_a, same_b)
+    assert same_event(same_a, same_b)
+    assert not same_event(different_a, different_b)
+
+
+def test_sharing_only_the_carrier_is_not_the_same_event():
+    """Every Turkish Airlines story shares the carrier."""
+    route = _c(1, "THY Lima hattını açıyor", {"TK", "LIM"})
+    order = _c(2, "THY yeni uçak siparişi verdi", {"TK"})
+    assert not same_event(route, order)
+
+
+def test_sharing_only_boilerplate_is_not_the_same_event():
+    """Two campaign announcements share their entire vocabulary."""
+    a = _c(1, "Pegasus yeni kampanya başlattı", {"PC"})
+    b = _c(2, "Pegasus yeni kampanya duyurdu", {"PC"})
+    assert distinctive_overlap(a, b) == set()
+    assert not same_event(a, b)
+
+
+def test_near_identical_titles_cluster_without_a_known_entity():
+    """Airport and regulator news often names nothing the gazetteer knows."""
+    a = _c(1, "EASA issues airworthiness directive for A320 fuel pumps")
+    b = _c(2, "EASA issues airworthiness directive covering A320 fuel pumps")
+    assert same_event(a, b)
+
+
+# --- adjudication --------------------------------------------------------------
+
+
+def test_a_suspicious_pair_with_nothing_to_confirm_it_is_flagged():
+    """Shares a distinguishing detail, names no known subject. A human would
+    look; so should a cheap model call. These are the only pairs worth one."""
+    a = _c(1, "Schiphol caps departing passengers for the winter season")
+    b = _c(2, "Amsterdam airport limits winter departing passenger numbers")
+    assert needs_adjudication(a, b)
+
+
+def test_a_confidently_decided_pair_is_not_sent_for_adjudication():
+    a = _c(1, "Türk Hava Yolları Lima hattını açıyor", {"TK", "LIM"})
+    b = _c(2, "Turkish Airlines launches Lima route", {"TK", "LIM"})
+    assert same_event(a, b)
+    assert not needs_adjudication(a, b)
+
+
+# --- primary source ------------------------------------------------------------
+
+
+def test_the_most_reliable_telling_becomes_the_primary():
+    """The primary is what gets classified and what "Kaynağa git" opens."""
+    members = [
+        _c(1, "THY Lima hattını açıyor", {"TK"}, tier="aggregator", published_at="2026-08-01"),
+        _c(2, "Turkish Airlines announces Lima", {"TK"}, tier="official", published_at="2026-08-02"),
+        _c(3, "TK to fly Lima", {"TK"}, tier="agency", published_at="2026-08-01"),
+    ]
+    assert pick_primary(members).article_id == 2
+
+
+def test_the_earliest_telling_breaks_a_tier_tie():
+    """The first report is the one the others are echoing."""
+    members = [
+        _c(1, "Turkish Airlines announces Lima", {"TK"}, tier="agency", published_at="2026-08-03"),
+        _c(2, "Turkish Airlines to serve Lima", {"TK"}, tier="agency", published_at="2026-08-01"),
+    ]
+    assert pick_primary(members).article_id == 2
+
+
+def test_an_event_needs_at_least_one_article():
+    with pytest.raises(ValueError):
+        pick_primary([])
+
+
+# --- grouping ------------------------------------------------------------------
+
+
+def test_clustering_groups_an_event_and_leaves_others_alone():
+    candidates = [
+        _c(1, "Türk Hava Yolları Lima hattını açıyor", {"TK", "LIM"}),
+        _c(2, "Turkish Airlines launches Lima route", {"TK", "LIM"}),
+        _c(3, "THY'nin Lima seferleri 2027'de başlıyor", {"TK", "LIM"}),
+        _c(4, "Pegasus'ta 6 hatta indirim kampanyası başladı", {"PC"}),
+        _c(5, "EASA issues airworthiness directive for A320 fuel pumps"),
+    ]
+    groups = cluster(candidates)
+    sizes = sorted(len(g) for g in groups)
+    assert sizes == [1, 1, 3]
+
+    lima = next(g for g in groups if len(g) == 3)
+    assert {c.article_id for c in lima} == {1, 2, 3}
+
+
+def test_a_single_article_is_still_an_event():
+    groups = cluster([_c(1, "Pegasus'ta indirim kampanyası", {"PC"})])
+    assert len(groups) == 1 and len(groups[0]) == 1
+
+
+def test_clustering_an_empty_window_is_not_an_error():
+    assert cluster([]) == []
