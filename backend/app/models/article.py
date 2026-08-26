@@ -2,7 +2,17 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    text,
+)
 from sqlalchemy.dialects.postgresql import TSVECTOR, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -14,7 +24,34 @@ class Article(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "articles"
     __table_args__ = (
         Index("ix_articles_content_hash", "content_hash"),
+        # The selection query for every pipeline stage: "rows in state X, oldest
+        # first". Previously a sequential scan over the whole table.
+        Index("ix_articles_status_fetched_at", "status", "fetched_at"),
         Index("ix_articles_search_vector", "search_vector", postgresql_using="gin"),
+        # --- declared here so autogenerate stops trying to drop them ---------
+        #
+        # These were created by hand in d5a81c3f76e4 after GET /articles was
+        # measured at 2.8s warm. Because the models never declared them,
+        # `alembic revision --autogenerate` proposed DROPping all of them on the
+        # next unrelated schema change -- a silent, reviewable-only-if-you-look
+        # undo of a measured fix. Declaring them makes autogenerate leave them
+        # alone.
+        #
+        # The newspaper's default query: not-duplicate, newest first.
+        Index(
+            "ix_articles_live_recency",
+            text("published_at DESC NULLS LAST"),
+            text("fetched_at DESC"),
+            postgresql_where=text("is_duplicate = false"),
+        ),
+        # The archive's day filter and /articles/daily-counts group on
+        # coalesce(published_at, fetched_at); only an expression index serves it.
+        Index(
+            "ix_articles_day_expr",
+            text("(coalesce(published_at, fetched_at))"),
+            postgresql_where=text("is_duplicate = false"),
+        ),
+        Index("ix_articles_source_id", "source_id"),
     )
 
     source_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("sources.id"))
@@ -29,18 +66,45 @@ class Article(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
+    # ISO 639-1, detected at ingest before anything else runs. The pipeline had
+    # no idea what language an article was in, which is how 18% of the feed
+    # reached a Turkish-language UI as untranslated German and Spanish. Null on
+    # rows ingested before detection existed.
+    language: Mapped[str | None] = mapped_column(String(5), nullable=True, index=True)
+
+    #: The event this article belongs to. Several articles share one event when
+    #: they report the same thing; the event carries the classification.
+    event_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("news_events.id", ondelete="SET NULL"), nullable=True
+    )
+
     content_hash: Mapped[str] = mapped_column(String(64))  # sha256 of normalized title+body
     # populated from title+headline+summary once enriched; title-only right after ingestion
     search_vector: Mapped[str | None] = mapped_column(TSVECTOR, nullable=True)
 
-    # status: new -> deduped -> enriched ; or duplicate (points at the canonical article)
+    # new -> deduped -> enriched ; or duplicate (points at the canonical article)
+    #
+    # v2 adds the rejection states. They exist so a rejected article is a fact
+    # with a reason attached rather than an absence: "why is this not in the
+    # paper" used to be unanswerable.
+    #   rejected_language  not English or Turkish
+    #   rejected_gate      failed the aviation-relevance gate before any LLM call
+    #   enrich_pending     cleared the gate, awaiting classification
+    #   enrich_failed      the classifier did not answer; retried, never published
     status: Mapped[str] = mapped_column(String(20), default="new")
+    #: Machine-readable reason for a rejected_* status, e.g. "language:de",
+    #: "no_aviation_terms", "listicle". Aggregated to answer what the gate is
+    #: actually filtering, so a too-strict rule is visible instead of silent.
+    rejection_reason: Mapped[str | None] = mapped_column(String(60), nullable=True)
     is_duplicate: Mapped[bool] = mapped_column(Boolean, default=False)
     duplicate_of_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("articles.id"), nullable=True
     )
 
     source: Mapped["Source"] = relationship(back_populates="articles")  # noqa: F821
+    event: Mapped["NewsEvent | None"] = relationship(  # noqa: F821
+        back_populates="articles", foreign_keys=[event_id]
+    )
     enrichment: Mapped["ArticleEnrichment | None"] = relationship(
         back_populates="article", uselist=False, cascade="all, delete-orphan"
     )
@@ -53,6 +117,13 @@ class ArticleEnrichment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     """One-to-one AI-derived fields for an article, kept separate so re-enrichment never touches raw data."""
 
     __tablename__ = "article_enrichment"
+    __table_args__ = (
+        # Category, subcategory and region arrive together from the filter rows;
+        # three single-column indexes force a bitmap AND. Declared here for the
+        # same reason as the article indexes above -- so autogenerate leaves the
+        # hand-written index alone.
+        Index("ix_enrichment_cat_sub_region", "category", "subcategory", "region"),
+    )
 
     article_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("articles.id"), unique=True
