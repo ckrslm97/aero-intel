@@ -391,3 +391,33 @@ async def dedupe_existing_promotions(db: AsyncSession) -> dict[str, int]:
 
     await db.commit()
     return {"scanned": len(rows), "merged": merged, "remaining": len(kept)}
+
+
+async def mark_legacy_campaigns_superseded(db: AsyncSession) -> dict[str, int]:
+    """Faz 13/K8: the ~124 rows the old, unvalidated pipeline published stay
+    in the table (never destroyed -- see the plan's own "yerini aldı" wording,
+    K8) but stop being served, so the before/after comparison stays checkable.
+
+    `validation_state` is the marker: it's a Faz 3 column, only ever written
+    by campaign_airline.py's build_promotion(), so a row where it is still
+    null was never seen by the new validation layer at all -- not "validated
+    and found incomplete" (that's validation_state="incomplete", a real,
+    still-served state), but "predates validation entirely". Idempotent: a
+    row already marked superseded is left alone.
+    """
+    rows = (
+        await db.execute(
+            select(Promotion).where(
+                Promotion.validation_state.is_(None),
+                Promotion.superseded_at.is_(None),
+            )
+        )
+    ).scalars().all()
+
+    now = datetime.now(timezone.utc)
+    for row in rows:
+        row.superseded_at = now
+
+    await db.commit()
+    logger.info("legacy_campaigns_superseded", count=len(rows))
+    return {"marked_superseded": len(rows)}

@@ -1,0 +1,41 @@
+name: Data quality
+
+# Faz 13's daily gate: five invariants over what's actually published (see
+# app/services/data_quality_service.py). A red run here IS the "task" a
+# violation opens -- no separate ticketing system to keep in sync with this
+# one. Runs after the news/KPI/campaign jobs have had a chance to run at
+# least once in the day, so a quiet morning isn't mistaken for a stale feed.
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jobs-data-quality
+  cancel-in-progress: false
+
+jobs:
+  check-data-quality:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Check data quality
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python -m app.cli check-data-quality

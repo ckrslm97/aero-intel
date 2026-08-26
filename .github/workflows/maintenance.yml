@@ -25,12 +25,19 @@ on:
           - clean-headlines
           - translate-backlog
           - build-insight
+          - evaluate-golden
+          - check-data-quality
+          - mark-legacy-campaigns-superseded
       days:
         description: "re-enrich only: limit to articles fetched in the last N days (blank = all)"
         required: false
         type: string
       limit:
         description: "translate-backlog only: how many articles to translate this run (default 12)"
+        required: false
+        type: string
+      full_surface:
+        description: "evaluate-golden only: risk | news | campaign -- runs the live re-fetch + classify pass for that surface (costs LLM calls). Blank = deterministic checks only."
         required: false
         type: string
 
@@ -71,6 +78,7 @@ jobs:
           LLM_API_KEY: ${{ secrets.GROQ_API_KEY }}
           DAYS: ${{ inputs.days }}
           LIMIT: ${{ inputs.limit }}
+          FULL_SURFACE: ${{ inputs.full_surface }}
         run: |
           set -euo pipefail
           case "${{ inputs.task }}" in
@@ -116,6 +124,16 @@ jobs:
               python -m app.cli translate-backlog --limit "${LIMIT:-12}" ;;
             build-insight)
               python -m app.cli build-insight ;;
+            evaluate-golden)
+              if [ -n "${FULL_SURFACE}" ]; then
+                python -m app.cli evaluate-golden --full-surface "${FULL_SURFACE}"
+              else
+                python -m app.cli evaluate-golden
+              fi ;;
+            check-data-quality)
+              python -m app.cli check-data-quality ;;
+            mark-legacy-campaigns-superseded)
+              python -m app.cli mark-legacy-campaigns-superseded ;;
             *)
               echo "Unknown task: ${{ inputs.task }}" >&2
               exit 1 ;;

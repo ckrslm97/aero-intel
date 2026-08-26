@@ -265,6 +265,16 @@ async def _dedupe_promotions() -> None:
         )
 
 
+async def _mark_legacy_campaigns_superseded() -> None:
+    """Faz 13/K8 one-time migration: the pre-validation campaign rows stop
+    being served, kept (not deleted) so the before/after stays checkable."""
+    from app.pipeline.promo_dedup import mark_legacy_campaigns_superseded
+
+    async with AsyncSessionLocal() as db:
+        result = await mark_legacy_campaigns_superseded(db)
+        print(f"Marked {result['marked_superseded']} legacy campaign rows as superseded")
+
+
 async def _seed_kpi_history() -> None:
     from app.ingest.historical_seed import seed_kpi_history
 
@@ -290,6 +300,72 @@ async def _seed_curated_data() -> None:
             f"Curated data reconciled: {result['fx_forecasts_new']} new FX forecasts, "
             f"{result['iata_indicators_new']} new IATA indicators"
         )
+
+
+async def _evaluate_golden(full_surface: str | None) -> None:
+    """Faz 13: the golden-set checks. Always runs the two deterministic ones
+    (no LLM, no network); `--full-surface` additionally runs the live
+    re-fetch + classify pass for one surface (risk | news | campaign), which
+    costs one LLM call and one HTTP fetch per record with a URL and does
+    nothing (prints why) if no LLM is configured."""
+    from app.services.golden_eval_service import (
+        evaluate_campaign_guards,
+        evaluate_full_pipeline,
+        evaluate_risk_country_normalisation,
+    )
+
+    guards = evaluate_campaign_guards()
+    print(
+        f"Campaign guards: {guards.bad_records_caught}/{guards.bad_records_parsed} "
+        f"golden 'bad' campaigns caught (narrow check -- see module docstring); "
+        f"{guards.ok_records_wrongly_rejected} genuine campaigns wrongly rejected"
+    )
+
+    country = evaluate_risk_country_normalisation()
+    pct = 100 * country.resolved / country.checked if country.checked else 0.0
+    print(f"Risk country normalisation: {country.resolved}/{country.checked} ({pct:.1f}%)")
+
+    if full_surface is None:
+        return
+
+    report = await evaluate_full_pipeline(surface=full_surface)
+    if report is None:
+        print("Full-pipeline evaluation skipped: no LLM configured")
+        return
+
+    # "warn" was the judge's own uncertainty on the OLD system's output --
+    # forcing it into agree/disagree here would manufacture false precision
+    # out of a verdict that was never a clean yes/no. Graded only against
+    # ok/bad, reported separately.
+    graded = [r for r in report.results if r.golden_verdict in ("ok", "bad")]
+    agree = sum(1 for r in graded if r.classified == (r.golden_verdict == "ok"))
+    warn_count = len(report.results) - len(graded)
+    print(
+        f"Full pipeline ({full_surface}): {agree}/{len(graded)} agree with the golden "
+        f"ok/bad verdict ({warn_count} 'warn' records excluded from grading; "
+        f"{report.skipped_no_url} skipped, no URL; {report.skipped_fetch_failed} skipped, fetch failed)"
+    )
+
+
+async def _check_data_quality() -> None:
+    """Faz 13's daily quality gate. Exits non-zero on any violation -- a
+    failed step in the scheduled workflow run is the "task" this opens, see
+    data_quality_service.py's module docstring."""
+    import sys
+
+    from app.services.data_quality_service import check_data_quality
+
+    async with AsyncSessionLocal() as db:
+        violations = await check_data_quality(db)
+
+    if not violations:
+        print("Data quality: all checks passed")
+        return
+
+    print(f"Data quality: {len(violations)} violation(s)")
+    for v in violations:
+        print(f"  [{v.check}] {v.detail}")
+    sys.exit(1)
 
 
 async def _refresh_market_pulse() -> None:
@@ -388,12 +464,25 @@ def main() -> None:
             "send-newsletter",
             "daily-if-due",
             "pipeline-v2",
+            "evaluate-golden",
+            "check-data-quality",
+            "mark-legacy-campaigns-superseded",
         ],
     )
     parser.add_argument(
         "--days",
         type=int,
         help="re-enrich: only articles fetched in the last N days (default: all)",
+    )
+    parser.add_argument(
+        "--full-surface",
+        choices=["risk", "news", "campaign"],
+        default=None,
+        help=(
+            "evaluate-golden: additionally run the live re-fetch + classify pass "
+            "for this surface (costs an LLM call + HTTP fetch per record). "
+            "Omit to run only the two deterministic, no-LLM checks."
+        ),
     )
     parser.add_argument(
         "--limit",
@@ -471,6 +560,12 @@ def main() -> None:
         asyncio.run(_daily_if_due())
     elif args.command == "pipeline-v2":
         asyncio.run(_pipeline_v2(args.limit))
+    elif args.command == "evaluate-golden":
+        asyncio.run(_evaluate_golden(args.full_surface))
+    elif args.command == "check-data-quality":
+        asyncio.run(_check_data_quality())
+    elif args.command == "mark-legacy-campaigns-superseded":
+        asyncio.run(_mark_legacy_campaigns_superseded())
 
 
 if __name__ == "__main__":
