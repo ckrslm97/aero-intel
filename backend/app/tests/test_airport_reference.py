@@ -267,18 +267,18 @@ def test_real_route_pair_is_untouched_by_the_blocklist():
 
 def test_signal_airports_drop_the_carriers_own_hub():
     """TK naming IST is stating its origin, not announcing a route to it."""
-    from app.services.insights_service import _destination_airports
+    from app.services.insights_service import destination_airports
 
     def ap(code: str) -> dict:
         return {"code": code, "name": code, "city": code, "country": "x",
                 "lat": 0.0, "lon": 0.0}
 
-    kept = [a["code"] for a in _destination_airports([ap("IST"), ap("BGO")], ["TK"])]
+    kept = [a["code"] for a in destination_airports([ap("IST"), ap("BGO")], ["TK"])]
     assert kept == ["BGO"]
 
 
 def test_signal_airports_are_capped_in_text_order():
-    from app.services.insights_service import MAX_SIGNAL_AIRPORTS, _destination_airports
+    from app.services.insights_service import MAX_SIGNAL_AIRPORTS, destination_airports
 
     def ap(code: str) -> dict:
         return {"code": code, "name": code, "city": code, "country": "x",
@@ -286,7 +286,7 @@ def test_signal_airports_are_capped_in_text_order():
 
     kept = [
         a["code"]
-        for a in _destination_airports(
+        for a in destination_airports(
             [ap("BGO"), ap("LHR"), ap("CDG"), ap("AMS")], ["TK"]
         )
     ]
@@ -296,10 +296,10 @@ def test_signal_airports_are_capped_in_text_order():
 
 def test_a_signal_whose_every_airport_is_a_hub_still_shows_them():
     """Dropping the last airport would erase the signal from the map."""
-    from app.services.insights_service import _destination_airports
+    from app.services.insights_service import destination_airports
 
     def ap(code: str) -> dict:
         return {"code": code, "name": code, "city": code, "country": "x",
                 "lat": 0.0, "lon": 0.0}
 
-    assert [a["code"] for a in _destination_airports([ap("IST")], ["TK"])] == ["IST"]
+    assert [a["code"] for a in destination_airports([ap("IST")], ["TK"])] == ["IST"]

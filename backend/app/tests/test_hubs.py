@@ -7,6 +7,8 @@ from app.hubs import HUBS, HUBS_BY_CODE
 from app.llm.gazetteer import AIRPORTS
 from app.models.article import Article, ArticleEnrichment
 from app.models.entity import ArticleEntity, Entity
+from app.models.news_event import NewsEvent
+from app.models.promotion import Promotion
 from app.models.source import Source
 from app.repositories.article_repository import ArticleRepository
 from app.schemas.article import ArticleOut
@@ -185,3 +187,143 @@ async def test_article_json_carries_the_carriers_a_card_draws_logos_from(db_sess
     assert payload["airlines"] == [{"name": "Turkish Airlines", "code": "TK"}]
     # The association rows themselves stay out of the JSON.
     assert "entity_links" not in payload
+
+
+async def test_a_route_between_two_real_airports_neither_of_which_is_a_watched_hub(db_session):
+    """The bug this fixes: `_routes()` used to resolve both ends against
+    HUBS_BY_CODE (the ~20 hubs this desk actively watches), so a real,
+    frequently co-mentioned pair like Aalborg/Aarhus -- neither a watched hub
+    -- was silently dropped even though the archive genuinely keeps
+    discussing them together. It must resolve against the full airport
+    reference table instead."""
+    source = await _source(db_session)
+    aal = Entity(entity_type="airport", name="Aalborg Airport", code="AAL")
+    aar = Entity(entity_type="airport", name="Aarhus Airport", code="AAR")
+    db_session.add_all([aal, aar])
+    await db_session.flush()
+    assert "AAL" not in HUBS_BY_CODE
+    assert "AAR" not in HUBS_BY_CODE
+
+    for i in range(MIN_ROUTE_MENTIONS):
+        await _article(db_session, source, f"dk-{i}", entities=[aal, aar])
+    await db_session.commit()
+
+    routes = (await hub_overview(db_session, days=30))["routes"]
+    assert [(r["from"], r["to"]) for r in routes] == [("AAL", "AAR")]
+    assert routes[0]["from_lat"] and routes[0]["to_lon"]
+
+
+async def _news_event(db, *, slug, primary_article_id=None, **fields):
+    now = datetime.now(timezone.utc)
+    event = NewsEvent(
+        slug=slug,
+        title_tr=fields.pop("title_tr", slug),
+        primary_article_id=primary_article_id,
+        first_seen=now,
+        last_seen=now,
+        is_published=True,
+        confidence_band=fields.pop("confidence_band", "high"),
+        **fields,
+    )
+    db.add(event)
+    await db.flush()
+    return event
+
+
+async def test_hub_detail_lists_events_mentioning_its_airport(db_session):
+    source = await _source(db_session)
+    ist = Entity(entity_type="airport", name="Istanbul Airport", code="IST")
+    db_session.add(ist)
+    await db_session.flush()
+    article = await _article(db_session, source, "ist-event", entities=[ist])
+    await db_session.commit()
+
+    await _news_event(
+        db_session, slug="ist-yeni-hat", primary_article_id=article.id, category="network"
+    )
+    await db_session.commit()
+
+    detail = await hub_detail(db_session, "IST")
+    assert [e["slug"] for e in detail["events"]] == ["ist-yeni-hat"]
+
+
+async def test_hub_detail_lists_risk_events_in_its_country(db_session):
+    await _news_event(
+        db_session,
+        slug="turkiye-deprem",
+        risk_type="earthquake",
+        risk_family="geopolitical",
+        risk_severity="high",
+        risk_country="turkey",
+        risk_score=0.8,
+    )
+    # A risk in a different country must not show up on the IST page.
+    await _news_event(
+        db_session,
+        slug="fransa-grev",
+        risk_type="strike",
+        risk_family="operational",
+        risk_severity="medium",
+        risk_country="france",
+        risk_score=0.4,
+    )
+    await db_session.commit()
+
+    detail = await hub_detail(db_session, "IST")
+    assert [e["slug"] for e in detail["risks"]] == ["turkiye-deprem"]
+    assert detail["risks"][0]["risk_score"] == 0.8
+
+
+async def test_hub_detail_lists_campaigns_touching_its_country(db_session):
+    now = datetime.now(timezone.utc)
+    db_session.add(
+        Promotion(
+            airline_code="TK",
+            airline_name="Turkish Airlines",
+            title_tr="Türkiye içi uçuşlarda kampanya",
+            url="https://example.com/promo-tr",
+            source_name="thy.com",
+            confidence_band="high",
+            detected_at=now,
+            markets_json={"countries": ["Turkey"], "cities": []},
+        )
+    )
+    db_session.add(
+        Promotion(
+            airline_code="AF",
+            airline_name="Air France",
+            title_tr="Fransa içi kampanya",
+            url="https://example.com/promo-fr",
+            source_name="airfrance.com",
+            confidence_band="high",
+            detected_at=now,
+            markets_json={"countries": ["France"], "cities": []},
+        )
+    )
+    await db_session.commit()
+
+    detail = await hub_detail(db_session, "IST")
+    assert [c["airline_code"] for c in detail["campaigns"]] == ["TK"]
+
+
+async def test_hub_detail_excludes_low_confidence_and_superseded_rows(db_session):
+    source = await _source(db_session)
+    ist = Entity(entity_type="airport", name="Istanbul Airport", code="IST")
+    db_session.add(ist)
+    await db_session.flush()
+    low_conf_article = await _article(db_session, source, "low-conf", entities=[ist])
+    superseded_article = await _article(db_session, source, "superseded", entities=[ist])
+    await db_session.commit()
+
+    await _news_event(
+        db_session, slug="dusuk-guven", primary_article_id=low_conf_article.id,
+        confidence_band="low",
+    )
+    superseded = await _news_event(
+        db_session, slug="degistirildi", primary_article_id=superseded_article.id,
+    )
+    superseded.superseded_at = datetime.now(timezone.utc)
+    await db_session.commit()
+
+    detail = await hub_detail(db_session, "IST")
+    assert detail["events"] == []
