@@ -1,5 +1,5 @@
 from app.models.article import Article, ArticleEnrichment
-from app.models.edition import Edition, EditionArticle
+from app.models.edition import Edition, EditionArticle, EditionPdf
 from app.models.email_delivery import EmailDelivery
 from app.models.entity import ArticleEntity, Entity
 from app.models.event import AviationEvent
@@ -17,6 +17,7 @@ __all__ = [
     "AviationEvent",
     "Edition",
     "EditionArticle",
+    "EditionPdf",
     "EmailDelivery",
     "Entity",
     "InsightDigest",

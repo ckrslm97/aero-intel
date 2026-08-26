@@ -41,4 +41,3 @@ async def test_admin_status_aggregates_real_counts(db_session):
     counts_by_status = {s.status: s.count for s in status.articles_by_status}
     assert counts_by_status == {"enriched": 1, "new": 1}
     assert status.latest_article_fetched_at is not None
-    assert isinstance(status.scheduler_jobs, list)

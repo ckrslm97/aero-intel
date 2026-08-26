@@ -1,5 +1,8 @@
-"""Command-line entrypoints for local/manual runs of the daily pipeline stages.
-Mirrors what the APScheduler jobs call in production -- see app/scheduler/jobs.py.
+"""Command-line entrypoints for every stage of the daily pipeline.
+
+This is not a convenience wrapper: the GitHub Actions workflows in
+.github/workflows/ are the only scheduler, and they invoke these commands.
+Nothing schedules itself in-process.
 
 Usage: python -m app.cli <command>
 """

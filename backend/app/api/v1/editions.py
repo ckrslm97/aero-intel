@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.deps import require_admin
 from app.core.db import get_db
 from app.models.edition import Edition
 from app.repositories.edition_repository import EditionRepository
@@ -104,8 +105,15 @@ async def download_edition_pdf(edition_date: date, db: AsyncSession = Depends(ge
 @router.post(
     "/{edition_date}/rebuild",
     response_model=EditionOut,
+    dependencies=[Depends(require_admin)],
 )
 async def rebuild_edition(edition_date: date, db: AsyncSession = Depends(get_db)) -> EditionOut:
+    """Reassemble one edition from scratch.
+
+    Operator-only: assembling an edition is the most expensive thing this API
+    can be asked to do, and it overwrites a published day. `python -m app.cli
+    build-edition` is the same action from the shell.
+    """
     await assemble_edition(db, edition_date)
     repo = EditionRepository(db)
     edition = await repo.get_by_date(edition_date)

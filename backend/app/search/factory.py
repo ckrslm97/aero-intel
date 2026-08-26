@@ -1,7 +1,9 @@
-"""Postgres FTS backs search unconditionally in this build. ELASTICSEARCH_URL is
-reserved for a future ElasticsearchBackend (see elasticsearch.py) -- it isn't
-wired to this selection yet, since that backend isn't a real implementation and
-silently switching to it would be worse than the Postgres default.
+"""Postgres FTS backs search, and it is the only backend.
+
+The Elasticsearch stub that used to sit beside this file was never a real
+implementation, so `ELASTICSEARCH_URL` selected nothing and the settings key
+only invited someone to believe otherwise. Both are gone. Reintroducing a
+second backend means writing one and wiring the choice here deliberately.
 """
 from sqlalchemy.ext.asyncio import AsyncSession
 

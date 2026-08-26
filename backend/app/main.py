@@ -25,18 +25,12 @@ async def lifespan(app: FastAPI):
         llm_provider=settings.llm_provider,
         serverless=IS_SERVERLESS,
     )
-    # A serverless function is frozen between requests, so an in-process
-    # scheduler would fire unpredictably (or never) and each cold start would
-    # spawn another one. In that deployment the same jobs run as GitHub Actions
-    # cron calling app/cli.py -- see .github/workflows/.
-    if settings.scheduler_enabled and not IS_SERVERLESS:
-        from app.scheduler.jobs import start_scheduler, stop_scheduler
-
-        start_scheduler()
-        yield
-        stop_scheduler()
-    else:
-        yield
+    # Nothing is scheduled in-process. Every recurring job is a GitHub Actions
+    # cron calling app/cli.py -- see .github/workflows/. There used to be an
+    # APScheduler here too, defining the same four jobs at the same intervals;
+    # it was dead on Vercel (frozen between requests) and double-fired
+    # everywhere else, because the workflows run against the same database.
+    yield
     logger.info("shutdown")
 
 

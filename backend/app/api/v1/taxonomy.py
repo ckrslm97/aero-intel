@@ -1,29 +1,24 @@
+"""Country coverage for the archive filters.
+
+The slug-listing endpoint that used to sit here existed so the frontend could
+check it had not drifted from app/taxonomy.py. Checking at runtime was always
+the weak version of that idea -- nothing acted on a mismatch. The frontend's
+taxonomy is now generated from the backend's (scripts/export_taxonomy.py) and
+CI fails when it is stale, so drift is caught before it ships.
+"""
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.cache_headers import AGGREGATES, STATIC, public_cache
+from app.api.cache_headers import AGGREGATES, public_cache
 from app.core.db import get_db
 from app.models.article import Article
 from app.models.entity import ArticleEntity, Entity
-from app.taxonomy import CATEGORIES, COUNTRY_TO_REGION, GENERAL_CATEGORY
+from app.taxonomy import COUNTRY_TO_REGION
 
 router = APIRouter(prefix="/taxonomy", tags=["taxonomy"])
-
-
-@router.get("")
-async def get_taxonomy(response: Response = None) -> list[dict]:  # type: ignore[assignment]
-    """Category/subcategory slugs only -- Turkish labels, colors, and icons are
-    owned by the frontend (frontend/src/lib/taxonomy.ts). This just lets the
-    frontend confirm it hasn't drifted from the backend's taxonomy.
-    """
-    # Python constants: they can only change on a deploy.
-    public_cache(response, STATIC)
-    return [
-        {"slug": c.slug, "subcategories": [s.slug for s in c.subcategories]} for c in CATEGORIES
-    ] + [{"slug": GENERAL_CATEGORY, "subcategories": []}]
 
 
 @router.get("/countries")

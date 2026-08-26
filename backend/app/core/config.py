@@ -1,13 +1,16 @@
 """Application configuration.
 
-Every external dependency (Redis, Elasticsearch, SMTP, LLM provider) is optional.
-When unset, the app falls back to an in-process implementation so the whole
-platform boots on a laptop with only Postgres installed.
+Every external dependency (SMTP, LLM provider) is optional. When unset, the app
+falls back to an in-process implementation so the whole platform boots on a
+laptop with only Postgres installed.
+
+ADMIN_TOKEN is the one exception: leaving it unset disables the operator
+endpoints rather than opening them.
 """
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -19,8 +22,11 @@ class Settings(BaseSettings):
     environment: Literal["development", "staging", "production"] = "development"
     debug: bool = True
     api_prefix: str = "/api/v1"
-    secret_key: str = Field(default="dev-insecure-secret-change-me")
-    access_token_expire_minutes: int = 60 * 12
+    # Bearer token guarding the operator endpoints (/admin/status, subscriber
+    # listing). There is no user table and no login: this is a single-desk
+    # product, so one deployment secret is the honest shape. Unset -> those
+    # endpoints refuse every request. See app/api/deps.py.
+    admin_token: str | None = None
     cors_origins: list[str] = ["http://localhost:3000"]
     # Where the newsletter's "read on the site" links point. Defaults to the
     # first configured CORS origin at use time (app/email/render.py) so a
@@ -29,12 +35,6 @@ class Settings(BaseSettings):
 
     # --- Database ---
     database_url: str = "postgresql+asyncpg://localhost:5432/aerointel"
-
-    # --- Cache / queue (optional; falls back to in-process memory cache) ---
-    redis_url: str | None = None
-
-    # --- Search (optional; falls back to Postgres full-text search) ---
-    elasticsearch_url: str | None = None
 
     # --- LLM provider (optional; falls back to heuristic/no-key pipeline) ---
     llm_provider: Literal["heuristic", "ollama", "openai_compat"] = "heuristic"
@@ -87,22 +87,9 @@ class Settings(BaseSettings):
             return cls.model_fields[info.field_name].default
         return value
 
-    # --- Storage ---
-    storage_backend: Literal["local", "s3"] = "local"
-    storage_local_dir: str = "../storage"
-    s3_bucket: str | None = None
-    s3_endpoint_url: str | None = None
-    s3_access_key: str | None = None
-    s3_secret_key: str | None = None
-
     # --- External data sources (free) ---
     opensky_base_url: str = "https://opensky-network.org/api"
     yahoo_finance_base_url: str = "https://query1.finance.yahoo.com/v8/finance/chart"
-
-    # --- Scheduler ---
-    scheduler_enabled: bool = True
-    daily_edition_hour_utc: int = 4  # newspaper assembled 04:00 UTC daily
-    daily_newsletter_hour_utc: int = 5
 
     # --- Rate limiting ---
     rate_limit_default: str = "120/minute"

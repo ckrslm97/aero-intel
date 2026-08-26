@@ -25,6 +25,7 @@ import { RiskMap } from "@/components/risk-map";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiFetch } from "@/lib/api";
 import { worldRegions } from "@/lib/nav";
+import { RISK_TYPES, type RiskTypeSlug } from "@/lib/taxonomy.gen";
 import type { RiskCountry, RiskItem, RiskRadarOut } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -35,24 +36,35 @@ const DAYS = 14;
  * placement is unknown -- but they are never a "hot spot". */
 const UNKNOWN_COUNTRY = "Belirtilmemiş";
 
-/** Closed taxonomy, mirroring backend/app/taxonomy.py RISK_TYPES.
+/** Icons only. The slugs, families and Turkish labels come from the backend via
+ * taxonomy.gen.ts -- they used to be retyped here, which meant renaming a risk
+ * type in Python left this file rendering a label for a slug the API no longer
+ * sent.
  *
  * The icons are chosen so FAMILY reads from the icon alone, without colour:
  * natural hazards get weather/terrain glyphs, conflict gets institutional and
  * martial ones. The map encodes the same split again as marker shape. */
-const TYPE_META: Record<string, { label: string; family: string; icon: LucideIcon }> = {
-  earthquake: { label: "Deprem", family: "natural", icon: Activity },
-  flood: { label: "Sel", family: "natural", icon: Waves },
-  wildfire: { label: "Yangın", family: "natural", icon: Flame },
-  volcano: { label: "Volkanik", family: "natural", icon: Mountain },
-  storm: { label: "Fırtına", family: "natural", icon: CloudLightning },
-  war: { label: "Savaş/Çatışma", family: "conflict", icon: Swords },
-  coup: { label: "Darbe", family: "conflict", icon: Landmark },
-  attack: { label: "Saldırı", family: "conflict", icon: ShieldAlert },
-  unrest: { label: "Toplumsal Gerginlik", family: "conflict", icon: Megaphone },
+const TYPE_ICONS: Record<RiskTypeSlug, LucideIcon> = {
+  earthquake: Activity,
+  flood: Waves,
+  wildfire: Flame,
+  volcano: Mountain,
+  storm: CloudLightning,
+  war: Swords,
+  coup: Landmark,
+  attack: ShieldAlert,
+  unrest: Megaphone,
 };
 
-const TYPE_ORDER = Object.keys(TYPE_META);
+const TYPE_META: Record<string, { label: string; family: string; icon: LucideIcon }> =
+  Object.fromEntries(
+    RISK_TYPES.map((type) => [
+      type.slug,
+      { label: type.labelTr, family: type.family, icon: TYPE_ICONS[type.slug] },
+    ]),
+  );
+
+const TYPE_ORDER = RISK_TYPES.map((type) => type.slug);
 
 const FAMILY_META: Record<string, string> = {
   natural: "Doğal",

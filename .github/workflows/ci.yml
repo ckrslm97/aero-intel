@@ -38,7 +38,13 @@ jobs:
         run: pip install -r requirements-dev.txt
 
       - name: Lint (ruff)
-        run: ruff check app
+        run: ruff check app scripts
+
+      # The frontend's taxonomy is generated from app/taxonomy.py. Editing the
+      # taxonomy without regenerating it used to be invisible until a filter
+      # came back empty in production; now it fails here.
+      - name: Taxonomy codegen is current
+        run: python -m scripts.export_taxonomy --check
 
       - name: Test
         env:

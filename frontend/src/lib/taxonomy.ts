@@ -14,14 +14,21 @@ import {
 } from "lucide-react";
 
 import { worldRegions } from "@/lib/nav";
+import {
+  CATEGORY_LABELS_TR,
+  CATEGORY_SLUGS,
+  type CategorySlug,
+  SUBCATEGORIES_BY_CATEGORY,
+  type SubcategorySlug,
+} from "@/lib/taxonomy.gen";
 
 export interface SubcategoryDef {
-  slug: string;
+  slug: SubcategorySlug;
   label: string;
 }
 
 export interface CategoryDef {
-  slug: string;
+  slug: CategorySlug;
   label: string;
   /** Full Tailwind class names (not built dynamically -- Tailwind's scanner
    * needs the literal strings present in source to generate them). See the
@@ -32,13 +39,15 @@ export interface CategoryDef {
   subcategories: SubcategoryDef[];
 }
 
-// Mirrors backend/app/taxonomy.py CATEGORIES exactly (slug-for-slug) -- keep
-// both files in sync when the taxonomy changes. Turkish labels, colors, and
-// icons are frontend-only; the backend only knows the slugs.
+// The slugs are typed against taxonomy.gen.ts, which is generated from
+// backend/app/taxonomy.py -- so a category that exists on one side and not the
+// other fails `tsc`, and the exhaustiveness check below catches a slug the
+// backend added and nobody gave a Turkish label to. Labels, colors and icons
+// are frontend-only; the backend knows only the slugs.
 export const CATEGORIES: CategoryDef[] = [
   {
     slug: "revenue_management",
-    label: "Gelir Yönetimi",
+    label: CATEGORY_LABELS_TR.revenue_management,
     textClass: "text-category-revenue-management",
     bgClass: "bg-category-revenue-management/10",
     icon: Banknote,
@@ -54,7 +63,7 @@ export const CATEGORIES: CategoryDef[] = [
   },
   {
     slug: "fleet",
-    label: "Filo",
+    label: CATEGORY_LABELS_TR.fleet,
     textClass: "text-category-fleet",
     bgClass: "bg-category-fleet/10",
     icon: Plane,
@@ -65,7 +74,7 @@ export const CATEGORIES: CategoryDef[] = [
   },
   {
     slug: "network",
-    label: "Ağ & Rota",
+    label: CATEGORY_LABELS_TR.network,
     textClass: "text-category-network",
     bgClass: "bg-category-network/10",
     icon: PlaneTakeoff,
@@ -77,7 +86,7 @@ export const CATEGORIES: CategoryDef[] = [
   },
   {
     slug: "finance",
-    label: "Finans",
+    label: CATEGORY_LABELS_TR.finance,
     textClass: "text-category-finance",
     bgClass: "bg-category-finance/10",
     icon: Landmark,
@@ -88,7 +97,7 @@ export const CATEGORIES: CategoryDef[] = [
   },
   {
     slug: "safety",
-    label: "Emniyet",
+    label: CATEGORY_LABELS_TR.safety,
     textClass: "text-category-safety",
     bgClass: "bg-category-safety/10",
     icon: ShieldAlert,
@@ -96,7 +105,7 @@ export const CATEGORIES: CategoryDef[] = [
   },
   {
     slug: "regulatory",
-    label: "Regülasyon",
+    label: CATEGORY_LABELS_TR.regulatory,
     textClass: "text-category-regulatory",
     bgClass: "bg-category-regulatory/10",
     icon: Scale,
@@ -104,7 +113,7 @@ export const CATEGORIES: CategoryDef[] = [
   },
   {
     slug: "sustainability",
-    label: "Sürdürülebilirlik",
+    label: CATEGORY_LABELS_TR.sustainability,
     textClass: "text-category-sustainability",
     bgClass: "bg-category-sustainability/10",
     icon: Sprout,
@@ -112,7 +121,7 @@ export const CATEGORIES: CategoryDef[] = [
   },
   {
     slug: "airport",
-    label: "Havalimanı",
+    label: CATEGORY_LABELS_TR.airport,
     textClass: "text-category-airport",
     bgClass: "bg-category-airport/10",
     icon: TowerControl,
@@ -120,7 +129,7 @@ export const CATEGORIES: CategoryDef[] = [
   },
   {
     slug: "labor",
-    label: "İşgücü",
+    label: CATEGORY_LABELS_TR.labor,
     textClass: "text-category-labor",
     bgClass: "bg-category-labor/10",
     icon: Users,
@@ -128,7 +137,7 @@ export const CATEGORIES: CategoryDef[] = [
   },
   {
     slug: "events",
-    label: "Etkinlik",
+    label: CATEGORY_LABELS_TR.events,
     textClass: "text-category-events",
     bgClass: "bg-category-events/10",
     icon: CalendarDays,
@@ -139,7 +148,7 @@ export const CATEGORIES: CategoryDef[] = [
   },
   {
     slug: "general",
-    label: "Genel",
+    label: CATEGORY_LABELS_TR.general,
     textClass: "text-category-general",
     bgClass: "bg-category-general/10",
     icon: CircleDashed,
@@ -150,6 +159,35 @@ export const CATEGORIES: CategoryDef[] = [
 export const CATEGORY_BY_SLUG: Record<string, CategoryDef> = Object.fromEntries(
   CATEGORIES.map((c) => [c.slug, c]),
 );
+
+// Drift guards. They run once at import, so a mismatch fails the build rather
+// than quietly emptying a filter in production. The slug *types* above already
+// catch a renamed slug; these two catch the other direction -- a slug that
+// exists on both sides but was never given a label or was filed under the
+// wrong parent.
+//
+// 1. Every category the backend can emit has a row above (icon, colors, label).
+for (const slug of CATEGORY_SLUGS) {
+  if (!CATEGORY_BY_SLUG[slug]) {
+    throw new Error(
+      `taxonomy.ts: backend category "${slug}" has no entry. Add one, or ` +
+        `regenerate taxonomy.gen.ts if the backend dropped it.`,
+    );
+  }
+}
+
+// 2. Every subcategory listed here is one the backend actually classifies into.
+for (const category of CATEGORIES) {
+  const allowed: readonly SubcategorySlug[] = SUBCATEGORIES_BY_CATEGORY[category.slug];
+  for (const sub of category.subcategories) {
+    if (!allowed.includes(sub.slug)) {
+      throw new Error(
+        `taxonomy.ts: "${sub.slug}" is not a subcategory of "${category.slug}" in ` +
+          `backend/app/taxonomy.py. Regenerate taxonomy.gen.ts or fix the label.`,
+      );
+    }
+  }
+}
 
 export function getCategory(slug: string): CategoryDef {
   return CATEGORY_BY_SLUG[slug] ?? CATEGORY_BY_SLUG.general;
@@ -166,7 +204,7 @@ export function getCategory(slug: string): CategoryDef {
  * filtered out of the Gazete's article list via the API's
  * `exclude_categories` param, so they don't leak in under Genel either.
  * Reverting the simplification is deleting this list's use, nothing more. */
-export const NEWSPAPER_CATEGORY_SLUGS = [
+export const NEWSPAPER_CATEGORY_SLUGS: readonly CategorySlug[] = [
   "revenue_management",
   "events",
   "fleet",
@@ -183,7 +221,7 @@ export const NEWSPAPER_CATEGORIES: CategoryDef[] = NEWSPAPER_CATEGORY_SLUGS.map(
  * the API as `exclude_categories` so these stories never appear in the paper's
  * list or its tab badges. `network` is NOT here: it stays out of the tab row
  * but its articles are still legitimate reading. */
-export const NEWSPAPER_EXCLUDED_CATEGORY_SLUGS = [
+export const NEWSPAPER_EXCLUDED_CATEGORY_SLUGS: readonly CategorySlug[] = [
   "safety",
   "regulatory",
   "sustainability",
