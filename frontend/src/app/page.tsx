@@ -1,4 +1,8 @@
 import { KpiCard } from "@/components/kpi-card";
+import { FxBoard } from "@/components/kokpit/fx-board";
+import { FxForecastTable } from "@/components/kokpit/fx-forecast-table";
+import { IataIndicatorTable } from "@/components/kokpit/iata-indicator-table";
+import { MarketPulseCard } from "@/components/kokpit/market-pulse-card";
 import { MarketTicker } from "@/components/market-ticker";
 import { MotionItem, MotionList, MotionRail } from "@/components/motion/motion-list";
 // Lazily loaded, so echarts stays out of the landing page's initial bundle --
@@ -81,11 +85,10 @@ export default async function DashboardPage() {
         <div className="flex flex-col gap-3">
           <div className="flex flex-col gap-1">
             <h1 className="text-2xl font-semibold tracking-tight">
-              Havacılık{" "}
-              <span className="gradient-text">Kontrol Paneli</span>
+              <span className="gradient-text">Kokpit</span>
             </h1>
             <p className="text-sm leading-relaxed text-muted-foreground">
-              Dünya genelinde operasyonel ve piyasa KPI&apos;ları · {asOf} UTC itibarıyla
+              Kur tablosu, küratörlü tahminler, Market Pulse · {asOf} UTC itibarıyla
             </p>
           </div>
           <MarketTicker items={marketKpis} />
@@ -98,6 +101,47 @@ export default async function DashboardPage() {
         </p>
       )}
 
+      <div className="flex flex-col gap-5">
+        <div className="flex flex-col gap-2">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+            Döviz Kuru Kokpiti
+          </h2>
+          <MotionRail style={{ "--glow-color": "var(--primary)" } as React.CSSProperties} />
+        </div>
+        <FxBoard />
+      </div>
+
+      <div className="grid grid-cols-1 gap-8 lg:grid-cols-[3fr_2fr]">
+        <div className="flex flex-col gap-5">
+          <div className="flex flex-col gap-2">
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+              Banka Tahminleri
+            </h2>
+            <MotionRail style={{ "--glow-color": "var(--chart-2)" } as React.CSSProperties} />
+          </div>
+          <FxForecastTable />
+        </div>
+        <div className="flex flex-col gap-5">
+          <div className="flex flex-col gap-2">
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+              IATA Göstergeleri
+            </h2>
+            <MotionRail style={{ "--glow-color": "var(--chart-3)" } as React.CSSProperties} />
+          </div>
+          <IataIndicatorTable />
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-5">
+        <div className="flex flex-col gap-2">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+            Market Pulse
+          </h2>
+          <MotionRail style={{ "--glow-color": "var(--signal)" } as React.CSSProperties} />
+        </div>
+        <MarketPulseCard />
+      </div>
+
       {!error && kpis.length === 0 && (
         <p className="rounded-lg border border-dashed border-border p-6 text-sm text-muted-foreground">
           Henüz KPI kaydı yok. İlk ölçümü almak için{" "}
@@ -106,67 +150,86 @@ export default async function DashboardPage() {
         </p>
       )}
 
-      {/* Gelir Yönetimi leads: it is the portal's focus, and the chart carries
-          the section rather than sitting under a wall of tiles. */}
-      {revenueManagementKpis.length > 0 && (
-        <div className="flex flex-col gap-5">
-          <div className="flex flex-col gap-2">
-            <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-              Gelir Yönetimi
-            </h2>
-            <MotionRail style={{ "--glow-color": "var(--signal)" } as React.CSSProperties} />
-          </div>
+      {/* Kokpit leads with FX/forecasts/Pulse (see the plan's own "KPI
+          kalabalığı yok" line for Faz 8) -- the wider revenue/operational KPI
+          set that used to be this page's whole content is still real and
+          still here, just collapsed by default so it frames the page instead
+          of crowding it. */}
+      {(revenueManagementKpis.length > 0 || operationalKpis.length > 0) && (
+        <details className="group rounded-xl border border-border">
+          <summary className="cursor-pointer list-none px-5 py-3 text-sm font-semibold text-muted-foreground marker:content-none">
+            <span className="inline-flex items-center gap-1.5">
+              Detaylı Göstergeler
+              <span className="text-xs font-normal text-muted-foreground/70 group-open:hidden">
+                (gelir yönetimi, operasyonel KPI&apos;lar — göster)
+              </span>
+            </span>
+          </summary>
+          <div className="flex flex-col gap-10 border-t border-border p-5">
+            {/* Gelir Yönetimi leads: it is the portal's focus, and the chart
+                carries the section rather than sitting under a wall of tiles. */}
+            {revenueManagementKpis.length > 0 && (
+              <div className="flex flex-col gap-5">
+                <div className="flex flex-col gap-2">
+                  <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+                    Gelir Yönetimi
+                  </h2>
+                  <MotionRail style={{ "--glow-color": "var(--signal)" } as React.CSSProperties} />
+                </div>
 
-          <MotionList className="grid grid-cols-1 gap-5 lg:grid-cols-4">
-            <MotionItem className="lg:col-span-2">
-              {/* No bg-card here on purpose: border-gradient paints the card
-                  fill itself (padding-box) so the gradient border stays
-                  visible -- a background-color would cover it. */}
-              <div
-                style={{ "--glow-color": "var(--signal)" } as React.CSSProperties}
-                className="flex h-full flex-col gap-2 rounded-xl border-gradient p-5 shadow-elev-1"
-              >
-                <h3 className="text-sm font-semibold">
-                  Gelir tabanı{" "}
-                  <span className="font-normal text-muted-foreground">
-                    (2026 vs 2025, yıllık değişim)
-                  </span>
-                </h3>
-                <RevenueOverviewChart kpis={revenueManagementKpis} />
+                <MotionList className="grid grid-cols-1 gap-5 lg:grid-cols-4">
+                  <MotionItem className="lg:col-span-2">
+                    {/* No bg-card here on purpose: border-gradient paints the card
+                        fill itself (padding-box) so the gradient border stays
+                        visible -- a background-color would cover it. */}
+                    <div
+                      style={{ "--glow-color": "var(--signal)" } as React.CSSProperties}
+                      className="flex h-full flex-col gap-2 rounded-xl border-gradient p-5 shadow-elev-1"
+                    >
+                      <h3 className="text-sm font-semibold">
+                        Gelir tabanı{" "}
+                        <span className="font-normal text-muted-foreground">
+                          (2026 vs 2025, yıllık değişim)
+                        </span>
+                      </h3>
+                      <RevenueOverviewChart kpis={revenueManagementKpis} />
+                    </div>
+                  </MotionItem>
+                  {chartCompanions.slice(0, 2).map((kpi) => (
+                    <MotionItem key={kpi.metric_key} variant="scalePop">
+                      <KpiCard
+                        metricKey={kpi.metric_key}
+                        label={kpi.label}
+                        value={kpi.value}
+                        unit={kpi.unit || undefined}
+                        deltaPct={kpi.delta_pct ?? undefined}
+                        upIsGood={kpi.up_is_good}
+                        trend={kpi.trend}
+                        isEstimate={kpi.is_estimate}
+                        lyDeltaPct={kpi.ly_delta_pct ?? undefined}
+                        lyComparisonLabel={kpi.comparison_label}
+                      />
+                    </MotionItem>
+                  ))}
+                </MotionList>
+
+                {remainingRevenueKpis.length > 0 && <KpiGrid kpis={remainingRevenueKpis} />}
               </div>
-            </MotionItem>
-            {chartCompanions.slice(0, 2).map((kpi) => (
-              <MotionItem key={kpi.metric_key} variant="scalePop">
-                <KpiCard
-                  metricKey={kpi.metric_key}
-                  label={kpi.label}
-                  value={kpi.value}
-                  unit={kpi.unit || undefined}
-                  deltaPct={kpi.delta_pct ?? undefined}
-                  upIsGood={kpi.up_is_good}
-                  trend={kpi.trend}
-                  isEstimate={kpi.is_estimate}
-                  lyDeltaPct={kpi.ly_delta_pct ?? undefined}
-                  lyComparisonLabel={kpi.comparison_label}
-                />
-              </MotionItem>
-            ))}
-          </MotionList>
+            )}
 
-          {remainingRevenueKpis.length > 0 && <KpiGrid kpis={remainingRevenueKpis} />}
-        </div>
-      )}
-
-      {operationalKpis.length > 0 && (
-        <div className="flex flex-col gap-5">
-          <div className="flex flex-col gap-2">
-            <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-              Operasyonel
-            </h2>
-            <MotionRail style={{ "--glow-color": "var(--primary)" } as React.CSSProperties} />
+            {operationalKpis.length > 0 && (
+              <div className="flex flex-col gap-5">
+                <div className="flex flex-col gap-2">
+                  <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+                    Operasyonel
+                  </h2>
+                  <MotionRail style={{ "--glow-color": "var(--primary)" } as React.CSSProperties} />
+                </div>
+                <KpiGrid kpis={operationalKpis} />
+              </div>
+            )}
           </div>
-          <KpiGrid kpis={operationalKpis} />
-        </div>
+        </details>
       )}
     </div>
   );

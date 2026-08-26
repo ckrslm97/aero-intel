@@ -1,6 +1,7 @@
 "use client";
 
-import { Menu } from "lucide-react";
+import { GraduationCap, Menu } from "lucide-react";
+import Link from "next/link";
 import { useSyncExternalStore } from "react";
 
 import { QuickSearch } from "@/components/layout/quick-search";
@@ -69,6 +70,16 @@ export function Topbar({ onMenuClick }: { onMenuClick: () => void }) {
 
       <div className="ml-auto flex items-center gap-4 text-xs text-muted-foreground">
         <LiveClock />
+        {/* Know How stays a real route (Faz 11: six-page nav) -- just off the
+            primary sidebar, reached from here instead. */}
+        <Link
+          href="/know-how"
+          title="Know How"
+          aria-label="Know How"
+          className="rounded-md p-1.5 text-foreground/70 transition-colors hover:bg-accent hover:text-foreground"
+        >
+          <GraduationCap className="size-4" />
+        </Link>
         <ThemeToggle />
       </div>
     </header>

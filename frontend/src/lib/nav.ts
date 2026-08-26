@@ -1,11 +1,8 @@
 import type { LucideIcon } from "lucide-react";
 
 import {
-  Archive,
   Globe2,
-  GraduationCap,
   LayoutDashboard,
-  Lightbulb,
   Megaphone,
   Newspaper,
   Radar,
@@ -20,29 +17,28 @@ export interface NavItem {
   icon: LucideIcon;
 }
 
-// Nine destinations, one per question the product answers -- deliberately
-// fewer than the pages behind them. Gazete, Kampanyalar and Risk Radarı say
-// what happened (and what is about to); İçgörüler says what the data means
-// across all of it, and carries Öneriler as its second tab
-// (they answered the same question from two sidebar slots, so they are one
-// destination now, /oneriler redirecting into the tab). The old Takvim page
-// folded into Gazete's Etkinlik category; the former scaffold sections, the
-// admin/login surface and the Analiz pivot table are gone. Ara has no entry
-// either: the topbar's search box is on every page already, so a nav slot for
-// it would buy nothing -- /search is still a real route, just reached from
-// there.
+// Exactly six destinations (Faz 11 of the Faz 7 rebuild plan): Kokpit,
+// Gazete, Kampanya, Risk Radarı, Hub, Biz -- the owner's own menu line. Down
+// from nine: İçgörüler's two pieces of real content each found a home with
+// its own audience (new-route signals -> Hub's Ağ Sinyalleri tab, Öneriler ->
+// Biz's ticari sinyaller section), and Know How and Arşiv are still real
+// routes -- reachable from the topbar help menu and the Gazete masthead
+// respectively -- just not one of the six primary destinations. /insights and
+// /oneriler are left exactly as they are (nothing 404s), simply off this
+// list. The old Takvim page folded into Gazete's Etkinlik category earlier;
+// the former scaffold sections, the admin/login surface and the Analiz pivot
+// table are gone. Ara has no entry either: the topbar's search box is on
+// every page already, so a nav slot for it would buy nothing -- /search is
+// still a real route, just reached from there.
 export const primaryNav: NavItem[] = [
-  { href: "/", label: "Kontrol Paneli", icon: LayoutDashboard },
+  { href: "/", label: "Kokpit", icon: LayoutDashboard },
   { href: "/newspaper", label: "Gazete", icon: Newspaper },
   // Directly after Gazete because a campaign is the same kind of thing as a
   // news story -- something a rival just did -- only with a window attached.
-  { href: "/kampanyalar", label: "Kampanyalar", icon: Megaphone },
+  { href: "/kampanyalar", label: "Kampanya", icon: Megaphone },
   { href: "/risk-radari", label: "Risk Radarı", icon: Radar },
-  { href: "/insights", label: "İçgörüler", icon: Lightbulb },
-  { href: "/hublar", label: "Hub'lar", icon: Globe2 },
-  { href: "/biz", label: "BİZ", icon: Star },
-  { href: "/know-how", label: "Know How", icon: GraduationCap },
-  { href: "/archive", label: "Arşiv", icon: Archive },
+  { href: "/hublar", label: "Hub", icon: Globe2 },
+  { href: "/biz", label: "Biz", icon: Star },
 ];
 
 export const airlineTabs = [
