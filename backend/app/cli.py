@@ -85,6 +85,31 @@ async def _reclassify() -> None:
         )
 
 
+async def _pipeline_v2(limit: int | None) -> None:
+    """The Faz 7 gate -> cluster -> classify -> confidence -> news_events run.
+
+    Gated on the flag here, not inside run_pipeline_v2 itself, so the function
+    stays directly testable without monkeypatching settings -- this command is
+    the one place that has an opinion about whether it should run at all.
+    """
+    from app.agents.runner import DEFAULT_BATCH_SIZE, run_pipeline_v2
+    from app.core.config import get_settings
+
+    settings = get_settings()
+    if not settings.pipeline_v2:
+        print("PIPELINE_V2 is not enabled -- nothing to do. Set PIPELINE_V2=true to run it.")
+        return
+
+    async with AsyncSessionLocal() as db:
+        stats = await run_pipeline_v2(db, limit=limit or DEFAULT_BATCH_SIZE)
+        print(
+            f"Kaydedildi {stats['events']} olay ({stats['published']} yayınlanabilir) "
+            f"— {stats['candidates']} aday işlendi: "
+            f"{stats['rejected_language']} dil reddi, {stats['rejected_gate']} kapı reddi, "
+            f"{stats['not_relevant']} ilgisiz, {stats['failed']} başarısız sınıflandırma."
+        )
+
+
 async def _backfill_regions(limit: int | None) -> None:
     from app.pipeline.enrich import backfill_regions
 
@@ -338,6 +363,7 @@ def main() -> None:
             "refresh-pdf",
             "send-newsletter",
             "daily-if-due",
+            "pipeline-v2",
         ],
     )
     parser.add_argument(
@@ -358,6 +384,7 @@ def main() -> None:
             "extract-promotions: campaign articles to scan (default: all). "
             "backfill-regions: articles to walk (default: all). "
             "backfill-risks: articles to reclassify (default: all)"
+            "pipeline-v2: articles to process this run (default: 40)"
         ),
     )
     args = parser.parse_args()
@@ -414,6 +441,8 @@ def main() -> None:
         asyncio.run(_send_newsletter())
     elif args.command == "daily-if-due":
         asyncio.run(_daily_if_due())
+    elif args.command == "pipeline-v2":
+        asyncio.run(_pipeline_v2(args.limit))
 
 
 if __name__ == "__main__":

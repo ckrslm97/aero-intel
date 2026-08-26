@@ -182,6 +182,35 @@ def _clean_entities(value: object, *, code_key: str = "code") -> list[dict]:
     return cleaned
 
 
+async def classify_article(
+    title: str, content: str, *, topic_fragment: str = ""
+) -> ClassificationResult:
+    """Run the consolidated call against the configured live model and parse it.
+
+    No live model configured (local dev, no key) is not an error -- it is the
+    normal state the heuristic used to paper over. Every outcome comes back
+    FAILED with a reason that says so, which means "retried later, never
+    published" rather than a silent fall-through to a keyword guess.
+    """
+    from app.llm.classify_prompt import build_prompt
+    from app.llm.factory import get_raw_generator
+
+    generate = get_raw_generator()
+    if generate is None:
+        failure = Outcome.failed("no_llm_configured")
+        return ClassificationResult(failure, failure, failure)
+
+    prompt = build_prompt(title, content, topic_fragment=topic_fragment)
+    try:
+        raw = await generate(prompt)
+    except Exception as exc:  # noqa: BLE001 -- any provider/network failure is a FAILED outcome, not a crash
+        logger.warning("classify_call_failed", error=str(exc))
+        failure = Outcome.failed("llm_call_error")
+        return ClassificationResult(failure, failure, failure)
+
+    return parse(raw)
+
+
 def parse(raw: str) -> ClassificationResult:
     """Turn one model response into three outcomes.
 

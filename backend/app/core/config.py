@@ -64,6 +64,18 @@ class Settings(BaseSettings):
     # and is honestly labelled untranslated. 0 disables the gate.
     llm_relevance_threshold: int = 6
 
+    # --- Pipeline v2 (Phase 7 rebuild) ---
+    # Off by default. When true, `python -m app.cli pipeline-v2` runs the new
+    # gate -> cluster -> classify -> confidence -> news_events pipeline. It only
+    # ever reads status=='enriched' articles and only ever writes event_id,
+    # language and news_events -- it never touches `status` or
+    # `article_enrichment`, so v1 (still the only thing the site reads) keeps
+    # running exactly as before regardless of this flag. The flag exists so the
+    # new pipeline can be exercised in a workflow run and compared against v1
+    # for days before anything in the product switches over to reading it. See
+    # docs/ARCHITECTURE.md.
+    pipeline_v2: bool = False
+
     # --- Email (optional; falls back to writing to ./outbox instead of sending) ---
     smtp_host: str | None = None
     smtp_port: int = 587
