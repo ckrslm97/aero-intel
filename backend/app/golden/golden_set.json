@@ -1,0 +1,2303 @@
+{
+  "risk": [
+    {
+      "idx": 1,
+      "title": "Russian drone guided entirely by AI kills civilians in Ukraine",
+      "system_label": "attack (high) · Ukraine",
+      "verdict": "ok",
+      "reason": "gerçek, güncel savaş/saldırı olayı; ülke doğru; havacılık ilgisi (İHA/drone saldırısı) net.",
+      "source": "AeroTime",
+      "url": "https://www.aerotime.aero/articles/russian-drone-guided-entirely-by-ai-kills-civilians-in-ukraine"
+    },
+    {
+      "idx": 2,
+      "title": "Ukrayna Rus hava üssünü vurdu",
+      "system_label": "war (medium) · Ukraine",
+      "verdict": "ok",
+      "reason": "güncel savaş olayı, hava üssü vurulması doğrudan havacılıkla ilgili, ülke doğru.",
+      "source": "AirTürkHaber",
+      "url": "https://www.airturkhaber.com/haberler/ukrayna-rus-hava-ussunu-vurdu/"
+    },
+    {
+      "idx": 3,
+      "title": "THY hangi ülkelere neden uçmuyor? Ne devlet ne de yatırımcı yanaşmıyor KKTC'de 'yerli / milli havayolu' olmaz",
+      "system_label": "earthquake (high) · Aruba",
+      "verdict": "bad",
+      "reason": "haber THY'nin uçmadığı ülkeler ve KKTC'de milli havayolu kurulamaması hakkında bir politika/iş yazısı; ne deprem var ne de Aruba ile herhangi bir ilgisi. Hem risk tipi hem ülke tamamen hatalı.",
+      "source": "AirlineHaber",
+      "url": null
+    },
+    {
+      "idx": 4,
+      "title": "Air India Seeks $1.5 Billion From Tata Sons and Singapore Airlines—Why?",
+      "system_label": "war (high) · India · Mumbai",
+      "verdict": "bad",
+      "reason": "bu bir finansal/ortaklık anlaşmazlığı haberi (Air India'nın Tata Sons ve Singapore Airlines'tan talep ettiği fon), savaşla hiçbir ilgisi yok. Risk tipi tamamen hatalı etiketlenmiş.",
+      "source": "Aviation Analysis",
+      "url": "https://www.aviationanalysis.net/air-india-seeks-1-5-billion-from-tata-sons-and-singapore-airlines-why/"
+    },
+    {
+      "idx": 5,
+      "title": "Dubai Havalimanı'nda İHA Saldırılarına Karşı Dev Kafes",
+      "system_label": "attack (high) · Iran",
+      "verdict": "bad",
+      "reason": "olay Dubai'de (Birleşik Arap Emirlikleri) geçiyor, İran ile ilgisi yok. Risk tipi (saldırı/İHA) makul ama ülke ataması hatalı.",
+      "source": "AirlineHaber",
+      "url": "https://www.airlinehaber.com/dubai-havalimaninda-iha-saldirilarina-karsi-dev-kafes/"
+    },
+    {
+      "idx": 6,
+      "title": "The $4.9 Billion Rebuild Turning A Hurricane-Ravaged Air Force Base Into A Major F-35 Hub",
+      "system_label": "storm (high) · Philippines",
+      "verdict": "bad",
+      "reason": "Tyndall Hava Kuvvetleri Üssü Florida, ABD'de bulunuyor (2018'de Michael Kasırgası'ndan zarar görmüştü), Filipinler ile hiçbir ilgisi yok. Ayrıca güncel bir fırtına değil, geçmişteki kasırganın yeniden inşa haberi — güncel bir risk olayı değil.",
+      "source": "Simple Flying",
+      "url": "https://simpleflying.com/tyndall-air-force-base-f35-rebuild/"
+    },
+    {
+      "idx": 7,
+      "title": "Aynı Havalimanında İki Günde İki Askeri Uçak Pistten Çıktı",
+      "system_label": "war (high) · Syria",
+      "verdict": "bad",
+      "reason": "başlık pist dışına çıkma (runway excursion) kazalarından bahsediyor, bu bir savaş eylemi değil, bir kaza/operasyonel olay. Risk tipi \"war\" içerikle uyuşmuyor; ayrıca başlıkta Suriye'ye dair hiçbir işaret yok, ülke ataması doğrulanamıyor.",
+      "source": "AirlineHaber",
+      "url": "https://www.airlinehaber.com/ayni-havalimaninda-iki-gunde-iki-askeri-ucak-pistten-cikti/"
+    },
+    {
+      "idx": 8,
+      "title": "Lockerbie bombing trial delayed over 'newly discovered evidence'",
+      "system_label": "attack (high) · Tunisia",
+      "verdict": "bad",
+      "reason": "bu 1988'deki Lockerbie/Pan Am 103 bombalama davasıyla ilgili bir mahkeme süreci haberi, yani geçmiş bir olayın duruşma/dava haberi, güncel bir risk değil (reddetme kriterlerinden biri tam olarak bu). Ayrıca olay Libya/Şam/İskoçya bağlamıyla ilişkili, Tunus ile ilgisi yok — ülke de hatalı.",
+      "source": "AeroTime",
+      "url": "https://www.aerotime.aero/articles/lockerbie-pan-am-bombing-trial-delayed-over-newly-discovered-evidence"
+    },
+    {
+      "idx": 9,
+      "title": "Nemrut Kalderası Milli Park İlan Edildi: Bitlis Turizminde Yeni Dönem",
+      "system_label": "volcano (high) · Turkey",
+      "verdict": "bad",
+      "reason": "haber Nemrut Kalderası'nın milli park ilan edilmesiyle ilgili bir turizm/pazarlama haberi, aktif bir volkanik olay ya da patlama söz konusu değil. \"Kaldera\" kelimesi volkan anahtar kelimesini tetiklemiş ama gerçek bir risk yok.",
+      "source": "Turizm Günlüğü",
+      "url": "https://www.turizmgunlugu.com/2026/08/19/nemrut-kalderasi-milli-park-ilan-edildi-bitlis-turizminde-yeni-donem/"
+    },
+    {
+      "idx": 10,
+      "title": "Avianca resumes flights to Pereira from Bogotá and Medellín",
+      "system_label": "earthquake (low) · Colombia",
+      "verdict": "ok",
+      "reason": "Pereira'daki depremin ardından uçuşların normale dönmesini bildiriyor; ülke doğru, olay güncel ve havacılık etkisi (uçuşların yeniden başlaması) doğrudan ilgili. Düşük önem derecesi de duruma uygun (risk geçmiş/azalmış).",
+      "source": "Aviacionline",
+      "url": "https://www.aviacionline.com/english/commercial-aviation/latin-america-and-caribbean/colombia/avianca-resumes-flights-to-pereira-from-bogota-and-medellin_a6a8d9fc4e913f1a23b94d6a2"
+    },
+    {
+      "idx": 11,
+      "title": "LATAM Airlines resumes flights to Pereira after earthquake",
+      "system_label": "earthquake (low) · Colombia",
+      "verdict": "ok",
+      "reason": "aynı Pereira depremi sonrası uçuşların normalleşmesi haberi (10. kayıtla aynı olayın farklı havayolu versiyonu), ülke doğru, havacılık ilgisi net.",
+      "source": "Aviacionline",
+      "url": "https://www.aviacionline.com/english/commercial-aviation/latin-america-and-caribbean/colombia/latam-airlines-resumes-flights-to-pereira-after-earthquake_a6a8c39419c4b360191cf6159"
+    },
+    {
+      "idx": 12,
+      "title": "6 Months Ago Britain Was Upgrading 40 Typhoons, Now It Is Upgrading All 107",
+      "system_label": "storm (low) · United Kingdom",
+      "verdict": "bad",
+      "reason": "\"Typhoon\" burada bir hava durumu değil, Eurofighter Typhoon savaş uçağı modeli. Fırtına/storm risk tipiyle hiçbir ilgisi yok, klasik anahtar kelime yanlış eşleşmesi.",
+      "source": "Simple Flying",
+      "url": "https://simpleflying.com/britain-upgrading-40-typhoons-now-upgrading-all-107/"
+    },
+    {
+      "idx": 13,
+      "title": "Film Notları: The Bombing of Pan Am 103",
+      "system_label": "attack (low) · United Kingdom",
+      "verdict": "bad",
+      "reason": "başlıkta açıkça \"Film Notları\" yazıyor, bu bir film incelemesi/yazısı, gerçek bir saldırı olayı değil.",
+      "source": "Havayolu 101",
+      "url": "https://www.havayolu101.com/2026/08/21/film-notlari-the-bombing-of-pan-am-103/"
+    },
+    {
+      "idx": 14,
+      "title": "US withdraws KC-135 refueling tankers from Bulgaria base amid Iran tensions",
+      "system_label": "war (medium) · Bulgaria",
+      "verdict": "ok",
+      "reason": "güncel jeopolitik/askeri gelişme, ülke doğru, hava üssü ve tanker uçakları üzerinden havacılıkla doğrudan ilişkili.",
+      "source": "AeroTime",
+      "url": "https://www.aerotime.aero/articles/us-withdraws-kc-135-refueling-tankers-from-bulgaria-base-amid-iran-tensions"
+    },
+    {
+      "idx": 15,
+      "title": "Ukrayna: Vityazevo Üssü'nde Su-33 ve MiG-29 Vuruldu",
+      "system_label": "war (medium) · China",
+      "verdict": "bad",
+      "reason": "Vityazevo, Anapa/Rusya yakınlarında bir hava üssüdür, Çin ile ilgisi yok. Olay muhtemelen Rusya'ya atanmalıydı.",
+      "source": "AirlineHaber",
+      "url": "https://www.airlinehaber.com/ukrayna-vityazevo-ussunde-su-33-ve-mig-29-vuruldu/"
+    },
+    {
+      "idx": 16,
+      "title": "Third drone and more explosives found at location near Leipzig Airport: reports",
+      "system_label": "attack (medium) · Germany",
+      "verdict": "ok",
+      "reason": "Leipzig havalimanı yakınında güncel drone/patlayıcı olayı, ülke doğru (Almanya), havalimanı güvenliğiyle doğrudan ilgili.",
+      "source": "AeroTime",
+      "url": "https://www.aerotime.aero/articles/third-drone-explosives-found-leipzig-airport"
+    },
+    {
+      "idx": 17,
+      "title": "TAP Air Portugal maintains flights to Valencia, Venezuela",
+      "system_label": "earthquake (medium) · Portugal · Lisbon",
+      "verdict": "bad",
+      "reason": "haberin konusu TAP'ın Venezuela'daki Valencia şehrine uçuşlarını sürdürmesi; asıl risk/durum Venezuela ile ilgili olmalı, Portekiz sadece havayolunun menşei. Ayrıca \"earthquake\" etiketi başlıktan doğrulanamıyor — muhtemelen Venezuela'daki siyasi/güvenlik durumuyla ilgili bir haber, deprem değil.",
+      "source": "Aviacionline",
+      "url": "https://www.aviacionline.com/english/commercial-aviation/latin-america-and-caribbean/venezuela/tap-air-portugal-maintains-flights-to-valencia-venezuela_a6a8c88e39c4b360191e3c1cb"
+    },
+    {
+      "idx": 18,
+      "title": "AA J or UA J HND-US?",
+      "system_label": "storm (low) · Japan",
+      "verdict": "bad",
+      "reason": "bu bir Reddit gönderisi, American Airlines ile United Airlines business class (J) arasında Haneda-ABD rotasında hangisinin seçileceğini soran bir mil/ödül seyahati sorusu. Herhangi bir risk/fırtına ile ilgisi yok, havacılık riski açısından tamamen alakasız.",
+      "source": "Reddit r/awardtravel",
+      "url": "https://www.reddit.com/r/awardtravel/comments/1vwxjzb/aa_j_or_ua_j_hndus/"
+    },
+    {
+      "idx": 19,
+      "title": "Romania records 25 drone incursions in 2026, nearly triple 2025 total",
+      "system_label": "attack (low) · Romania",
+      "verdict": "ok",
+      "reason": "güncel, devam eden bir jeopolitik risk (hava sahası ihlalleri), ülke doğru, havacılık ilgisi net.",
+      "source": "AeroTime",
+      "url": "https://www.aerotime.aero/articles/romania-25-drone-incursions-2026-nearly-triple-2025"
+    },
+    {
+      "idx": 20,
+      "title": "Wildfire Map Spotlight: Colwash Fire, Washington",
+      "system_label": "wildfire (low) · United States",
+      "verdict": "warn",
+      "reason": "Washington eyaletinde güncel bir orman yangını, ülke doğru; orman yangınları TFR/havaalanı kapanışı gibi etkilerle havacılıkla ilişkili olabilir ama başlıkta havacılığa dair somut bir referans yok, genel bir yangın izleme haberi gibi duruyor. İçerik görülmeden havacılık ilgisi netleştirilemiyor.",
+      "source": "Google News · Ana Rakipler",
+      "url": "https://news.google.com/rss/articles/CBMihwFBVV95cUxQV25SU3o0MEtfTHpTNjcyYlhpeHluZFV5UVFHUFdod0hBVDdpQWhiQUUwVGc1Q1JtSWlpOGo0SC0xei10bXNWbENoQ0d3aWdLQllYMGlPUzRVeDEzVzN5Ulh2NUdpaGZwNGFiT3lZa3diMWlmLVBZQ0pVV1F3T3JmdXRpSkhtQk0?oc=5"
+    },
+    {
+      "idx": 21,
+      "title": "250 MT of emergency aid delivered to Venezuela",
+      "system_label": "earthquake (low) · Venezuela",
+      "verdict": "ok",
+      "reason": "Venezuela'ya acil yardım kargosu güncel bir olay, ülke doğru, kaynak zaten bir hava kargo yayını olduğundan havacılık ilgisi doğrudan.",
+      "source": "STAT Times Air Cargo",
+      "url": "https://www.stattimes.com/air-cargo/250-mt-of-emergency-aid-delivered-to-venezuela-1360403"
+    },
+    {
+      "idx": 22,
+      "title": "Macaristan'da Gripen düştü",
+      "system_label": "war (medium) · Belirtilmemiş",
+      "verdict": "bad",
+      "reason": "başlıkta açıkça \"Macaristan\" (Hungary) yazılı olmasına rağmen sistem ülkeyi boş bırakmış; ülke çıkarımı başarısız. Ayrıca bir savaş uçağının düşmesi otomatik olarak \"war\" (savaş) anlamına gelmez, muhtemelen bir eğitim kazası — risk tipi de şüpheli.",
+      "source": "AirTürkHaber",
+      "url": null
+    },
+    {
+      "idx": 23,
+      "title": "İTALYA'DA FIRTINA DEHŞETİ",
+      "system_label": "storm (medium) · Belirtilmemiş",
+      "verdict": "bad",
+      "reason": "başlıkta açıkça \"İTALYA\" yazıyor ama sistem ülke alanını boş bırakmış, ülke çıkarımı başarısız oldu.",
+      "source": "Airkule",
+      "url": "http://www.airkule.com/haber/ITALYA-DA-FIRTINA-DEHSETI/46332"
+    },
+    {
+      "idx": 24,
+      "title": "Kuzey İtalya'da Şiddetli Fırtına: Uçaklar Savruldu",
+      "system_label": "storm (medium) · Belirtilmemiş",
+      "verdict": "bad",
+      "reason": "başlıkta \"Kuzey İtalya\" açıkça belirtilmesine rağmen ülke alanı boş bırakılmış; ayrıca 23. kayıtla aynı olayın (İtalya'daki fırtına) muhtemel bir tekrarı.",
+      "source": "AirlineHaber",
+      "url": "https://www.airlinehaber.com/kuzey-italyada-siddetli-firtina-ucaklar-savruldu/"
+    }
+  ],
+  "news": [
+    {
+      "idx": 1,
+      "title": "KÖŞE | Teknoloji Gelişiyor... Peki Kokpite Kim Oturacak?",
+      "system_label": "general",
+      "verdict": "ok",
+      "reason": "Kabin/kokpit teknolojisi üzerine köşe yazısı, havacılık ilgisi net, kategori (general) uygun.",
+      "source": "AirportHaber",
+      "url": null
+    },
+    {
+      "idx": 2,
+      "title": "Malazgirt’te jandarma helikopterlerinin gösterisi nefes kesti",
+      "system_label": "general",
+      "verdict": "ok",
+      "reason": "Jandarma helikopter gösterisi, havacılık içerikli, general kategorisi uygun.",
+      "source": "AirportHaber",
+      "url": null
+    },
+    {
+      "idx": 3,
+      "title": "Discover to operate Lufthansa Belgrade flights in winter - EX-YU Aviation News",
+      "system_label": "general",
+      "verdict": "ok",
+      "reason": "Lufthansa/Discover'ın Belgrad uçuşları haberi, havacılık ilgisi net.",
+      "source": "Google News · Ana Rakipler",
+      "url": null
+    },
+    {
+      "idx": 4,
+      "title": "My Freighter expands strategic partnership with Baltic Ground Services across Europe",
+      "system_label": "airport",
+      "verdict": "ok",
+      "reason": "Kargo havayolu ile yer hizmetleri şirketi arasındaki ortaklık, 'airport' kategorisi makul (yer hizmetleri).",
+      "source": "Air Cargo Week",
+      "url": null
+    },
+    {
+      "idx": 5,
+      "title": "Airbus A330, Boeing 737 und ATR 72: Air Algérie sucht ausländische Partner für schwere Wartung",
+      "system_label": "fleet",
+      "verdict": "ok",
+      "reason": "Air Algérie'nin ağır bakım için yabancı ortak araması, uçak tipleri anılıyor, 'fleet' kategorisi uygun.",
+      "source": "aeroTELEGRAPH",
+      "url": null
+    },
+    {
+      "idx": 6,
+      "title": "SHGM’de Belge Güvenliği Alarmı: Resmi Evraklar Sosyal Medyaya Nasıl Sızıyor?",
+      "system_label": "regulatory",
+      "verdict": "ok",
+      "reason": "SHGM'deki belge güvenliği zafiyeti, düzenleyici kurumla ilgili, 'regulatory' kategorisi uygun.",
+      "source": "AirportHaber",
+      "url": null
+    },
+    {
+      "idx": 7,
+      "title": "Türkiye'deki yabancı araç kazalarına \"yeşil kart\"tan 200 milyon lirayı aşkın tazminat ödendi",
+      "system_label": "general",
+      "verdict": "bad",
+      "reason": "Yeşil kart sigortası kapsamında yabancı araç kazası tazminatları — havacılıkla hiçbir ilgisi yok.",
+      "source": "Anadolu Ajansı · Ekonomi",
+      "url": null
+    },
+    {
+      "idx": 8,
+      "title": "French bee Airbus A350 Hits Montreal Airport Worker During Pushback",
+      "system_label": "safety",
+      "verdict": "ok",
+      "reason": "Havalimanında pushback sırasında uçağın yer personeline çarpması, gerçek bir güvenlik olayı, 'safety' kategorisi uygun.",
+      "source": "Aviation Analysis",
+      "url": null
+    },
+    {
+      "idx": 9,
+      "title": "Orange Panels on the F15EX?",
+      "system_label": "general",
+      "verdict": "warn",
+      "reason": "F-15EX boya şeması hakkında bir Reddit forum sorusu; havacılıkla ilgili ama gerçek bir haber/sektörel içerik yok, RM masası için değeri belirsiz.",
+      "source": "Reddit r/aviation",
+      "url": null
+    },
+    {
+      "idx": 10,
+      "title": "Korean Air übernimmt Asiana-Flüge nach Frankfurt",
+      "system_label": "fleet",
+      "verdict": "bad",
+      "reason": "Korean Air'ın Asiana'nın Frankfurt uçuşlarını devralması saf bir rota/ağ konsolidasyonu haberi; uçak tipi/filo içeriği yok, 'fleet' kategorisi yanlış (network olmalıydı).",
+      "source": "aeroTELEGRAPH",
+      "url": null
+    },
+    {
+      "idx": 11,
+      "title": "Air India Seeks $1.5 Billion From Tata Sons and Singapore Airlines—Why?",
+      "system_label": "finance / results",
+      "verdict": "ok",
+      "reason": "Air India'nın finansman talebi, 'finance/results' kategorisiyle örtüşüyor.",
+      "source": "Aviation Analysis",
+      "url": null
+    },
+    {
+      "idx": 12,
+      "title": "Austrian Airlines erneuert europäische Umweltvalidierung",
+      "system_label": "fleet",
+      "verdict": "bad",
+      "reason": "Austrian Airlines'ın 'Avrupa çevre validasyonu' yenilemesi bir düzenleyici/sürdürülebilirlik konusu; filo (uçak tipi/teslimat) ile ilgisi yok, 'fleet' kategorisi yanlış.",
+      "source": "aeroTELEGRAPH",
+      "url": null
+    },
+    {
+      "idx": 13,
+      "title": "Piyasalar, Fed Başkanı Warsh'un Jackson Hole'da yapacağı konuşmayı bekliyor",
+      "system_label": "general",
+      "verdict": "bad",
+      "reason": "Fed Başkanı'nın Jackson Hole konuşması bekleniyor — makro ekonomi haberi, havacılıkla ilgisi yok.",
+      "source": "Anadolu Ajansı · Ekonomi",
+      "url": null
+    },
+    {
+      "idx": 14,
+      "title": "Boeing C-17A Globemaster III der US Air Force zurück aus Moskau",
+      "system_label": "fleet",
+      "verdict": "ok",
+      "reason": "Boeing C-17A'nın Moskova'dan dönüşü, spesifik askeri uçak haberi, 'fleet' kategorisi uygun.",
+      "source": "aeroTELEGRAPH",
+      "url": null
+    },
+    {
+      "idx": 15,
+      "title": "FedEx to Invest $150 Million in Cargo Hub at India’s Busiest Airport",
+      "system_label": "airport",
+      "verdict": "ok",
+      "reason": "FedEx'in Hindistan'ın en yoğun havalimanında kargo hub yatırımı, 'airport' kategorisi tam uyumlu.",
+      "source": "Aviation Analysis",
+      "url": null
+    },
+    {
+      "idx": 16,
+      "title": "Aynı Havalimanında İki Günde İki Askeri Uçak Pistten Çıktı",
+      "system_label": "general",
+      "verdict": "ok",
+      "reason": "Aynı havalimanında iki askeri uçağın pistten çıkması, havacılık güvenliği olayı, 'general' kategorisi kabul edilebilir.",
+      "source": "AirlineHaber",
+      "url": null
+    },
+    {
+      "idx": 17,
+      "title": "United Airlines Expands Luxury Boeing 787-9 Service at London Heathrow",
+      "system_label": "fleet / order_delivery",
+      "verdict": "warn",
+      "reason": "United'in Heathrow'da 787-9 lüks servis genişletmesi filo/rota karışımı bir haber; 'order_delivery' alt kategorisi tam oturmuyor (yeni sipariş/teslimat değil, mevcut uçağın rota ataması).",
+      "source": "Aviation Analysis",
+      "url": null
+    },
+    {
+      "idx": 18,
+      "title": "Saudia signs agreement with French bank to finance new Airbus aircraft",
+      "system_label": "fleet / order_delivery",
+      "verdict": "ok",
+      "reason": "Saudia'nın yeni Airbus uçaklarını finanse etmesi, 'fleet/order_delivery' ile doğrudan örtüşüyor.",
+      "source": "AeroTime",
+      "url": null
+    },
+    {
+      "idx": 19,
+      "title": "Türk limanlarına uğrayan gemi sayısı 7 ayda 34 bini aştı",
+      "system_label": "general",
+      "verdict": "bad",
+      "reason": "Türk limanlarına uğrayan gemi sayısı — denizcilik haberi, havacılıkla ilgisi yok.",
+      "source": "Anadolu Ajansı · Ekonomi",
+      "url": null
+    },
+    {
+      "idx": 20,
+      "title": "Vuelta a España Tour.. Emirates Cycling wins the fourth stage - صوت الإمارات",
+      "system_label": "general",
+      "verdict": "bad",
+      "reason": "'Emirates Cycling' bisiklet takımının Vuelta a España'daki etabı kazanması — Emirates kelimesi bir bisiklet takımı adı, havayolu ile ilgisi yok, klasik anahtar kelime yanlış eşleşmesi.",
+      "source": "Google News · Ana Rakipler",
+      "url": null
+    },
+    {
+      "idx": 21,
+      "title": "Topraktaki nem hububat ve tarla bitkilerinin sağlıklı gelişmesini sağladı",
+      "system_label": "general",
+      "verdict": "bad",
+      "reason": "Topraktaki nem ve tarım bitkileri haberi — tarım konusu, havacılıkla ilgisi yok.",
+      "source": "Anadolu Ajansı · Ekonomi",
+      "url": null
+    },
+    {
+      "idx": 22,
+      "title": "Skyhawks being delivered to the New Zealand airforce on USS Okinawa and towed through the streets to Whenuapai airbase, 1970",
+      "system_label": "general",
+      "verdict": "warn",
+      "reason": "1970'den Yeni Zelanda hava kuvvetlerine Skyhawk teslimatı gösteren tarihi bir fotoğraf paylaşımı (Reddit); havacılık içerikli ama güncel sektörel haber değeri yok.",
+      "source": "Reddit r/aviation",
+      "url": null
+    },
+    {
+      "idx": 23,
+      "title": "İran'a karşı \"ekonomik dışlama\" operasyonu gözleri ABD ile Çin arasındaki ticari ilişkilere çevirdi",
+      "system_label": "general",
+      "verdict": "bad",
+      "reason": "İran'a karşı ekonomik dışlama ve ABD-Çin ticari ilişkileri — genel jeopolitik/ekonomi haberi, başlıkta havacılığa özgü bir unsur yok.",
+      "source": "Anadolu Ajansı · Ekonomi",
+      "url": null
+    },
+    {
+      "idx": 24,
+      "title": "Şanlıurfa'da yatırım fırsatı: Gözler ihale detaylarında - Şanlıurfa Gazetesi",
+      "system_label": "general",
+      "verdict": "bad",
+      "reason": "Şanlıurfa'da yatırım fırsatı/ihale haberi — kaynak etiketi 'İstanbul Havalimanları' olsa da başlıkta havacılığa dair somut bir bağlantı yok.",
+      "source": "Google News · İstanbul Havalimanları",
+      "url": null
+    },
+    {
+      "idx": 25,
+      "title": "Havalimanı’nda Feci Kaza: Yer Hizmetleri Görevlisi Hayatını Kaybetti",
+      "system_label": "general",
+      "verdict": "warn",
+      "reason": "Havalimanında yer hizmetleri görevlisinin ölümüyle sonuçlanan kaza; 8. kayıttaki 'French bee A350 Montreal'de pushback sırasında yer personeline çarptı' haberiyle aynı olay olma ihtimali var (olası çift kayıt), başlıktan kesin teyit edilemiyor.",
+      "source": "AirportHaber",
+      "url": null
+    },
+    {
+      "idx": 26,
+      "title": "ABD/İsrail-İran savaşında 6 ayın ardından petrol fiyatlarındaki yön arayışı sürüyor",
+      "system_label": "general",
+      "verdict": "bad",
+      "reason": "ABD/İsrail-İran savaşı sonrası petrol fiyatları yönü — makro emtia haberi, havacılığa özgü bir içerik yok.",
+      "source": "Anadolu Ajansı · Ekonomi",
+      "url": null
+    },
+    {
+      "idx": 27,
+      "title": "Why The B-52 Modernization Program Is $3 Billion Over Budget",
+      "system_label": "finance",
+      "verdict": "ok",
+      "reason": "B-52 modernizasyon programının bütçe aşımı, askeri havacılık/finans haberi, 'finance' kategorisi uygun.",
+      "source": "Simple Flying",
+      "url": null
+    },
+    {
+      "idx": 28,
+      "title": "French flight attendant wins landmark breast cancer ruling - France 24",
+      "system_label": "labor",
+      "verdict": "ok",
+      "reason": "Fransız kabin memurunun meme kanseri davasını kazanması, havayolu çalışanıyla ilgili bir emsal karar, 'labor' kategorisi uygun.",
+      "source": "Google News · Ana Rakipler",
+      "url": null
+    },
+    {
+      "idx": 29,
+      "title": "Myanmar Has Everything Tourism Needs — Except the One Thing Travelers Cannot Do Without",
+      "system_label": "general",
+      "verdict": "warn",
+      "reason": "Myanmar turizmi hakkında genel bir yazı; başlıktan hava bağlantısı eksikliğine değinip değinmediği anlaşılamıyor, havacılık ilgisi belirsiz.",
+      "source": "eTurboNews",
+      "url": null
+    },
+    {
+      "idx": 30,
+      "title": "Black Hawk ormana acil indi",
+      "system_label": "safety",
+      "verdict": "ok",
+      "reason": "Black Hawk helikopterin ormana acil inişi, gerçek bir güvenlik olayı, 'safety' kategorisi uygun.",
+      "source": "AirTürkHaber",
+      "url": null
+    },
+    {
+      "idx": 31,
+      "title": "ABD göçmen vizesi başvurularını durdurdu",
+      "system_label": "general",
+      "verdict": "bad",
+      "reason": "ABD'nin göçmen vizesi başvurularını durdurması — göçmenlik politikası haberi, havacılığa özgü bir bağlantı yok.",
+      "source": "AirTürkHaber",
+      "url": null
+    },
+    {
+      "idx": 32,
+      "title": "Endonezya’da C-212 pistten çıktı",
+      "system_label": "general",
+      "verdict": "ok",
+      "reason": "Endonezya'da C-212 uçağının pistten çıkması, somut bir uçak kazası haberi, 'general' kategorisi kabul edilebilir.",
+      "source": "AirTürkHaber",
+      "url": null
+    },
+    {
+      "idx": 33,
+      "title": "Rwandair baut mit viertem Airbus A330 aus - weitere sollen folgen",
+      "system_label": "fleet",
+      "verdict": "ok",
+      "reason": "Rwandair'in dördüncü A330'u filoya katması, doğrudan 'fleet' haberi.",
+      "source": "aeroTELEGRAPH",
+      "url": null
+    },
+    {
+      "idx": 34,
+      "title": "Orta Doğu'daki diplomatik temaslarla Avrupa'da gaz fiyatları yüzde 5'e yakın geriledi",
+      "system_label": "general",
+      "verdict": "bad",
+      "reason": "Orta Doğu diplomasisi sonrası Avrupa gaz fiyatları — enerji/emtia haberi, havacılıkla ilgisi yok.",
+      "source": "Anadolu Ajansı · Ekonomi",
+      "url": null
+    },
+    {
+      "idx": 35,
+      "title": "How NDC, AI, and Automation Are Redefining the Future of Air Travel - TimesTech",
+      "system_label": "revenue_management / distribution",
+      "verdict": "ok",
+      "reason": "NDC, yapay zeka ve otomasyonun hava seyahatini şekillendirmesi, 'revenue_management/distribution' ile tam örtüşüyor.",
+      "source": "Google News · NDC & Dağıtım",
+      "url": null
+    },
+    {
+      "idx": 36,
+      "title": "Dalaman Havalimanı'nda rakamlar belli oldu",
+      "system_label": "general",
+      "verdict": "ok",
+      "reason": "Dalaman Havalimanı yolcu/trafik rakamları, havacılık ilgisi net, 'general' kabul edilebilir.",
+      "source": "AirportHaber",
+      "url": null
+    },
+    {
+      "idx": 37,
+      "title": "Yavuz Sultan Selim Köprüsü 10 yılda sağladığı tasarrufla öne çıktı",
+      "system_label": "general",
+      "verdict": "bad",
+      "reason": "Yavuz Sultan Selim Köprüsü'nün 10 yıllık tasarrufu — kara altyapısı haberi, havacılıkla ilgisi yok.",
+      "source": "Anadolu Ajansı · Ekonomi",
+      "url": null
+    },
+    {
+      "idx": 38,
+      "title": "GÖKTEKİ YEL DEĞİRMENİ",
+      "system_label": "general",
+      "verdict": "warn",
+      "reason": "'Gökteki Yel Değirmeni' başlığından içerik net anlaşılamıyor, havacılıkla ilgisi teyit edilemiyor.",
+      "source": "Airkule",
+      "url": null
+    },
+    {
+      "idx": 39,
+      "title": "SpaceX’ten 100 milyon dolarlık yatırım",
+      "system_label": "general",
+      "verdict": "warn",
+      "reason": "SpaceX'e yapılan 100 milyon dolarlık yatırım — uzay/roket şirketi ile ilgili, ticari havayolu sektörüyle doğrudan ilgisi tartışmalı.",
+      "source": "AirTürkHaber",
+      "url": null
+    },
+    {
+      "idx": 40,
+      "title": "Borsa güne yükselişle başladı",
+      "system_label": "general",
+      "verdict": "bad",
+      "reason": "Borsanın yükselişle açılması — genel piyasa haberi, havacılıkla ilgisi yok.",
+      "source": "Anadolu Ajansı · Ekonomi",
+      "url": null
+    },
+    {
+      "idx": 41,
+      "title": "China Southern Increases Guangzhou – Vancouver Service in NW26",
+      "system_label": "network",
+      "verdict": "ok",
+      "reason": "China Southern'ın Guangzhou-Vancouver seferlerini artırması, 'network' kategorisiyle tam örtüşüyor.",
+      "source": "AeroRoutes",
+      "url": null
+    },
+    {
+      "idx": 42,
+      "title": "ABD’nin Uçak Gemisi USS Abraham Lincoln Tayland’a Gidiyor",
+      "system_label": "general",
+      "verdict": "warn",
+      "reason": "USS Abraham Lincoln uçak gemisinin Tayland'a gitmesi — deniz kuvvetleri hareketliliği, havacılık/jeopolitik risk ile dolaylı ilişkili olabilir ama ticari havacılık ilgisi zayıf.",
+      "source": "AirportHaber",
+      "url": null
+    },
+    {
+      "idx": 43,
+      "title": "Pegasus’tan Balkanlar İçin Yeni Kampanya: 12 Hatta İndirim",
+      "system_label": "airport",
+      "verdict": "bad",
+      "reason": "Pegasus'un Balkanlar için 12 hatta indirim kampanyası — bu bir satış/indirim kampanyası haberi, 'airport' kategorisiyle hiçbir ilgisi yok; revenue_management/kampanya olmalıydı.",
+      "source": "AirlineHaber",
+      "url": null
+    },
+    {
+      "idx": 44,
+      "title": "Lufthansa invests $2.8 billion in hard-door suites - insideflyer.com",
+      "system_label": "finance",
+      "verdict": "ok",
+      "reason": "Lufthansa'nın kapalı kapılı suitlere 2.8 milyar dolar yatırımı, 'finance' kategorisiyle uyumlu.",
+      "source": "Google News · Ana Rakipler",
+      "url": null
+    },
+    {
+      "idx": 45,
+      "title": "Philippine Airlines readies for oneworld entry - insideflyer.com",
+      "system_label": "general",
+      "verdict": "ok",
+      "reason": "Philippine Airlines'ın oneworld ittifakına girişi, havacılık ittifak haberi, 'general' kabul edilebilir.",
+      "source": "Google News · İttifak & Ortak Uçuş",
+      "url": null
+    },
+    {
+      "idx": 46,
+      "title": "HKIA and Qatar Airways Cargo strengthen global connectivity",
+      "system_label": "network",
+      "verdict": "ok",
+      "reason": "HKIA ve Qatar Airways Cargo'nun bağlantısını güçlendirmesi, 'network' kategorisiyle örtüşüyor.",
+      "source": "STAT Times Air Cargo",
+      "url": null
+    },
+    {
+      "idx": 47,
+      "title": "Qatar Airways adds F1 tickets to stopover packages - insideflyer.com",
+      "system_label": "general",
+      "verdict": "ok",
+      "reason": "Qatar Airways'in stopover paketlerine F1 bileti eklemesi, havayolu ürün/pazarlama haberi, 'general' kabul edilebilir.",
+      "source": "Google News · Ana Rakipler",
+      "url": null
+    },
+    {
+      "idx": 48,
+      "title": "Air Algérie verbindet Berlin im Winter über Frankfurt mit Algier",
+      "system_label": "fleet",
+      "verdict": "bad",
+      "reason": "Air Algérie'nin Berlin-Cezayir kış bağlantısı — saf bir rota/ağ haberi, filo (uçak tipi) içeriği yok, 'fleet' kategorisi yanlış.",
+      "source": "aeroTELEGRAPH",
+      "url": null
+    },
+    {
+      "idx": 49,
+      "title": "Ukrayna İHA üretim kapasitesini artırıyor",
+      "system_label": "general",
+      "verdict": "ok",
+      "reason": "Ukrayna'nın İHA üretim kapasitesini artırması, havacılık/savunma sanayii haberi, 'general' kabul edilebilir.",
+      "source": "AirTürkHaber",
+      "url": null
+    },
+    {
+      "idx": 50,
+      "title": "TCMB Başkanı Karahan: Bilgiye ulaşmanın kolaylaştığı bir dünyada farkı ne kadar hızlı öğrenebildiğiniz belirleyecek",
+      "system_label": "general",
+      "verdict": "bad",
+      "reason": "TCMB Başkanı'nın bilgiye erişim üzerine genel konuşması — havacılıkla ilgisi yok.",
+      "source": "Anadolu Ajansı · Ekonomi",
+      "url": null
+    },
+    {
+      "idx": 51,
+      "title": "GÖKBEY’in İlk Uçuş Ekibi Eğitimleri Tamamlandı",
+      "system_label": "general",
+      "verdict": "ok",
+      "reason": "GÖKBEY helikopterinin ilk uçuş ekibi eğitimlerinin tamamlanması, doğrudan havacılık sanayii haberi.",
+      "source": "AirlineHaber",
+      "url": null
+    },
+    {
+      "idx": 52,
+      "title": "Malaysia Air Fares Guide: Strategic Booking Tips for Cheaper Flights to Kuala Lumpur and Beyond - Nomad Lawyer",
+      "system_label": "revenue_management / pricing",
+      "verdict": "bad",
+      "reason": "Kuala Lumpur'a ucuz bilet bulma ipuçları veren bir tüketici blog yazısı; sektörel bir fiyatlandırma/revenue management analizi değil, 'revenue_management/pricing' etiketi yanlış.",
+      "source": "Google News · Revenue Management",
+      "url": null
+    },
+    {
+      "idx": 53,
+      "title": "Sabiha Gökçen Havalimanı 'nda 18 yıldır görev yapan İnşaat Mühendisi Şahin belgeselin yeni konuğu oldu - Herdem Aviation",
+      "system_label": "general",
+      "verdict": "warn",
+      "reason": "Sabiha Gökçen'de çalışan bir inşaat mühendisinin belgesele konu olması — havalimanı çalışanıyla ilgili insan hikayesi, sektörel haber değeri zayıf, ilgi düzeyi belirsiz.",
+      "source": "Google News · İstanbul Havalimanları",
+      "url": null
+    },
+    {
+      "idx": 54,
+      "title": "TSA Scraps Its Secretive Gold+ Program, But Airport Security Is Going Private Anyway",
+      "system_label": "airport",
+      "verdict": "ok",
+      "reason": "TSA'nın Gold+ programını kaldırması ve havalimanı güvenliğinin özelleşmesi, 'airport' kategorisiyle tam örtüşüyor.",
+      "source": "Simple Flying",
+      "url": null
+    },
+    {
+      "idx": 55,
+      "title": "SFO sunset spotting",
+      "system_label": "general",
+      "verdict": "warn",
+      "reason": "SFO'da gün batımı manzarası fotoğrafı (Reddit) — havacılık görseli ama haber değeri yok, sektörel ilgi belirsiz.",
+      "source": "Reddit r/aviation",
+      "url": null
+    },
+    {
+      "idx": 56,
+      "title": "TCMB  iki ödeme hizmeti şirketinin faaliyet izninin iptal edilmesine karar verdi",
+      "system_label": "general",
+      "verdict": "bad",
+      "reason": "TCMB'nin iki ödeme hizmeti şirketinin faaliyet iznini iptal etmesi — havacılıkla ilgisi yok.",
+      "source": "Anadolu Ajansı · Ekonomi",
+      "url": null
+    },
+    {
+      "idx": 57,
+      "title": "Küresel piyasalar ABD'deki yoğun veri gündemi ve Nvidia bilançosuna odaklandı",
+      "system_label": "general",
+      "verdict": "bad",
+      "reason": "Küresel piyasaların ABD veri gündemi ve Nvidia bilançosuna odaklanması — havacılıkla ilgisi yok.",
+      "source": "Anadolu Ajansı · Ekonomi",
+      "url": null
+    },
+    {
+      "idx": 58,
+      "title": "How does Qatar Airways prepare 2 lakh fresh meals from scratch daily, serve it fresh 30,000 feet in air? Watch video | Travel - Hindustan Times",
+      "system_label": "general",
+      "verdict": "ok",
+      "reason": "Qatar Airways'in günde 2 lakh taze yemek hazırlaması, havayolu operasyon/catering haberi, 'general' kabul edilebilir.",
+      "source": "Google News · Ana Rakipler",
+      "url": null
+    },
+    {
+      "idx": 59,
+      "title": "Wreckage of aircraft F-117 82-0806 'Something Wicked'",
+      "system_label": "general",
+      "verdict": "warn",
+      "reason": "F-117 enkazı fotoğrafı (Reddit) — tarihi/meraklı içeriği, güncel sektörel haber değeri yok.",
+      "source": "Reddit r/aviation",
+      "url": null
+    },
+    {
+      "idx": 60,
+      "title": "Türkiye'nin 5 yıllık kredi risk primi 18 Şubat'tan bu yana en düşük seviyede",
+      "system_label": "general",
+      "verdict": "bad",
+      "reason": "Türkiye'nin 5 yıllık kredi risk primi seviyesi — makro finans haberi, havacılıkla ilgisi yok.",
+      "source": "Anadolu Ajansı · Ekonomi",
+      "url": null
+    },
+    {
+      "idx": 61,
+      "title": "In the Left Seat: Two Emirates Captains on Leadership and Learning at 35,000 Feet - GE Aerospace",
+      "system_label": "general",
+      "verdict": "ok",
+      "reason": "Emirates kaptanlarının liderlik üzerine röportajı, havayolu personeli odaklı gerçek bir içerik, 'general' kabul edilebilir.",
+      "source": "Google News · Ana Rakipler",
+      "url": null
+    },
+    {
+      "idx": 62,
+      "title": "Özlem Öktem, The Peninsula London’ın Yeni Satış ve Pazarlamadan Sorumlu Genel Müdürü Oldu",
+      "system_label": "general",
+      "verdict": "bad",
+      "reason": "The Peninsula London otelinin yeni satış/pazarlama direktörü ataması — otel sektörü personel haberi, havacılıkla ilgisi yok.",
+      "source": "Turizm Günlüğü",
+      "url": null
+    },
+    {
+      "idx": 63,
+      "title": "Ezri Konsa es presentado en el Emirates Stadium - OneFootball",
+      "system_label": "general",
+      "verdict": "bad",
+      "reason": "Bir futbolcunun 'Emirates Stadium'da tanıtılması — Emirates burada bir stadyum/sponsorluk adı, futbol haberi, havayolu ile ilgisi yok, klasik anahtar kelime yanlış eşleşmesi.",
+      "source": "Google News · Ana Rakipler",
+      "url": null
+    },
+    {
+      "idx": 64,
+      "title": "Leipzig Havalimanı’ndaki Drone Saldırısı Girişiminde Yeni Gelişme",
+      "system_label": "general",
+      "verdict": "ok",
+      "reason": "Leipzig Havalimanı'ndaki drone saldırısı girişimindeki yeni gelişme, güncel havalimanı güvenliği haberi.",
+      "source": "Havayolu 101",
+      "url": null
+    },
+    {
+      "idx": 65,
+      "title": "Russland und Belarus streiten um Mehrkosten für LMS-192 Osvey",
+      "system_label": "general",
+      "verdict": "warn",
+      "reason": "Rusya ve Belarus arasında 'LMS-192 Osvey' için ek maliyet anlaşmazlığı — muhtemelen bir radar/erken uyarı tesisiyle ilgili, havacılıkla doğrudan ilgisi teyit edilemiyor.",
+      "source": "aeroTELEGRAPH",
+      "url": null
+    },
+    {
+      "idx": 66,
+      "title": "Technical Malfunction Forces Lufthansa Jet to Land in Azerbaijan - Caspian Post",
+      "system_label": "safety",
+      "verdict": "ok",
+      "reason": "Lufthansa uçağının teknik arıza nedeniyle Bakü'ye acil inişi, gerçek bir güvenlik olayı, 'safety' kategorisi uygun.",
+      "source": "Google News · Ana Rakipler",
+      "url": null
+    },
+    {
+      "idx": 67,
+      "title": "Max Power & Chaos: Why Some Retired Pilots Say Go-Around Procedures Need Rethinking",
+      "system_label": "labor",
+      "verdict": "bad",
+      "reason": "Emekli pilotların 'go-around' prosedürleri üzerine görüşleri — uçuş operasyonu/prosedür konusu, sendika/işçi ilişkileriyle ilgisi yok, 'labor' kategorisi yanlış.",
+      "source": "Simple Flying",
+      "url": null
+    },
+    {
+      "idx": 68,
+      "title": "Jin Air, Air Busan und Air Seoul fusionieren 2027 - Marke Jin Air überlebt",
+      "system_label": "general",
+      "verdict": "ok",
+      "reason": "Jin Air, Air Busan ve Air Seoul'un 2027'de birleşmesi, havayolu M&A haberi, 'general' kabul edilebilir.",
+      "source": "aeroTELEGRAPH",
+      "url": null
+    },
+    {
+      "idx": 69,
+      "title": "Frankfurt-Delhi Lufthansa flight makes emergency landing in Baku - Qazinform",
+      "system_label": "safety",
+      "verdict": "bad",
+      "reason": "66. kayıtla aynı olay: Lufthansa'nın Frankfurt-Delhi uçuşunun teknik arıza nedeniyle Bakü'ye acil inişi, farklı kaynaktan (Qazinform) — muhtemel çift kayıt.",
+      "source": "Google News · Ana Rakipler",
+      "url": null
+    },
+    {
+      "idx": 70,
+      "title": "United Airlines hat Hunderte Business-Class-Sitze an Lager – und weiß nicht wohin damit",
+      "system_label": "fleet",
+      "verdict": "ok",
+      "reason": "United'in stokta bekleyen yüzlerce business class koltuğu, kabin/filo haberi, 'fleet' kategorisiyle uyumlu.",
+      "source": "aeroTELEGRAPH",
+      "url": null
+    },
+    {
+      "idx": 71,
+      "title": "Air Arabia lanza vuelos a Frankfurt, su segundo destino en Alemania",
+      "system_label": "fleet",
+      "verdict": "bad",
+      "reason": "Air Arabia'nın Frankfurt'a yeni uçuş başlatması — saf bir yeni rota haberi, filo içeriği yok, 'fleet' kategorisi yanlış.",
+      "source": "Aviacionline",
+      "url": null
+    },
+    {
+      "idx": 72,
+      "title": "Syrian’dan Avrupa’da yeni rotalar",
+      "system_label": "general",
+      "verdict": "ok",
+      "reason": "Suriye havayolunun Avrupa'da yeni rotaları, havacılık ağ haberi, 'general' kabul edilebilir.",
+      "source": "AirTürkHaber",
+      "url": null
+    },
+    {
+      "idx": 73,
+      "title": "Air Tahiti Nui investiert Millionen in neue Kabinen ihrer Boeing 787 - und Highspeed-Internet",
+      "system_label": "fleet",
+      "verdict": "ok",
+      "reason": "Air Tahiti Nui'nin 787 kabinlerine ve yüksek hızlı internete milyonlarca dolar yatırımı, 'fleet' kategorisiyle tam örtüşüyor.",
+      "source": "aeroTELEGRAPH",
+      "url": null
+    },
+    {
+      "idx": 74,
+      "title": "Air Baltic streicht Flüge - Flughafen Lüttich steht wieder ohne Passagierflüge da",
+      "system_label": "fleet",
+      "verdict": "bad",
+      "reason": "Air Baltic'in uçuşları iptal etmesiyle Liège Havalimanı'nın yeniden yolcu uçuşu olmadan kalması — saf bir rota/ağ haberi, filo içeriği yok, 'fleet' kategorisi yanlış.",
+      "source": "aeroTELEGRAPH",
+      "url": null
+    },
+    {
+      "idx": 75,
+      "title": "Bulgaria Air stockt Flüge für Eurovision Song Contest auf",
+      "system_label": "revenue_management",
+      "verdict": "ok",
+      "reason": "Bulgaria Air'in Eurovision için uçuşlarını artırması, talep/kapasite artışı, 'revenue_management' ile uyumlu.",
+      "source": "aeroTELEGRAPH",
+      "url": null
+    },
+    {
+      "idx": 76,
+      "title": "Air Canada NW26 Toronto – Martinique Service Changes",
+      "system_label": "network / seasonal",
+      "verdict": "ok",
+      "reason": "Air Canada'nın Toronto-Martinique servis değişiklikleri, 'network/seasonal' ile tam örtüşüyor.",
+      "source": "AeroRoutes",
+      "url": null
+    },
+    {
+      "idx": 77,
+      "title": "Air France Economy Bulkhead Seats",
+      "system_label": "general",
+      "verdict": "warn",
+      "reason": "Air France ekonomi bölme koltukları hakkında bir Reddit sorusu — tüketici sorusu, sektörel haber değeri yok, ilgi düzeyi belirsiz.",
+      "source": "Reddit r/awardtravel",
+      "url": null
+    },
+    {
+      "idx": 78,
+      "title": "Air Serbia verteilt jungen Fluggästen Urkunden für den ersten Flug",
+      "system_label": "general",
+      "verdict": "ok",
+      "reason": "Air Serbia'nın genç yolculara ilk uçuş sertifikası vermesi, havayolu müşteri programı haberi, 'general' kabul edilebilir.",
+      "source": "aeroTELEGRAPH",
+      "url": null
+    },
+    {
+      "idx": 79,
+      "title": "The 717 (MD-95)",
+      "system_label": "general",
+      "verdict": "warn",
+      "reason": "'The 717 (MD-95)' başlıklı bir Reddit gönderisi — muhtemelen bir forum tartışması/nostalji paylaşımı, güncel sektörel haber değeri belirsiz.",
+      "source": "Reddit r/aviation",
+      "url": null
+    },
+    {
+      "idx": 80,
+      "title": "Cirrus SR22 paraşütle yere indi",
+      "system_label": "safety",
+      "verdict": "ok",
+      "reason": "Cirrus SR22'nin paraşütle (CAPS) yere inmesi, somut bir güvenlik olayı, 'safety' kategorisi uygun.",
+      "source": "AirTürkHaber",
+      "url": null
+    },
+    {
+      "idx": 81,
+      "title": "Finnair streicht Dubai für den gesamten Winter",
+      "system_label": "general",
+      "verdict": "ok",
+      "reason": "Finnair'in tüm kış boyunca Dubai'yi iptal etmesi, havayolu ağ haberi, 'general' kabul edilebilir.",
+      "source": "aeroTELEGRAPH",
+      "url": null
+    },
+    {
+      "idx": 82,
+      "title": "BermudAir Adds Newark – South Caicos in NW26",
+      "system_label": "fleet",
+      "verdict": "bad",
+      "reason": "BermudAir'in Newark-South Caicos hattını eklemesi (AeroRoutes) — saf bir rota ekleme haberi; aynı kaynağın benzer haberleri (41, 76. kayıtlar) 'network' olarak etiketlenmişken bu 'fleet' olarak etiketlenmiş, tutarsız/yanlış kategori.",
+      "source": "AeroRoutes",
+      "url": null
+    },
+    {
+      "idx": 83,
+      "title": "SATENA reabre la llave aérea entre Cali y las comunidades aisladas de Chocó",
+      "system_label": "general",
+      "verdict": "ok",
+      "reason": "SATENA'nın Cali-Chocó arasındaki hava bağlantısını yeniden açması, havacılık/sosyal hizmet haberi, 'general' kabul edilebilir.",
+      "source": "Aviacionline",
+      "url": null
+    },
+    {
+      "idx": 84,
+      "title": "Qantas' CEO Wished He Had A 'Time Machine' To Undo This Boeing Decision",
+      "system_label": "fleet",
+      "verdict": "ok",
+      "reason": "Qantas CEO'sunun bir Boeing kararını geri almak istemesi, filo/uçak kararı haberi, 'fleet' kategorisiyle uyumlu.",
+      "source": "Simple Flying",
+      "url": null
+    },
+    {
+      "idx": 85,
+      "title": "Airnorth flog Team von Space X mit Embraer E190 zur Bergung von Rakete zur Weihnachtsinsel",
+      "system_label": "fleet",
+      "verdict": "ok",
+      "reason": "Airnorth'un SpaceX ekibini Embraer E190 ile taşıması, spesifik uçak tipi belirtilen bir charter operasyonu haberi, 'fleet' kabul edilebilir.",
+      "source": "aeroTELEGRAPH",
+      "url": null
+    },
+    {
+      "idx": 86,
+      "title": "I found the good year blimp in Atlanta today!!",
+      "system_label": "general",
+      "verdict": "warn",
+      "reason": "Atlanta'da Goodyear zeplini fotoğrafı (Reddit) — havacılık görseli ama haber değeri yok.",
+      "source": "Reddit r/aviation",
+      "url": null
+    },
+    {
+      "idx": 87,
+      "title": "Hunderte Jobs bei Bodenabfertiger AAS in Wien gefährdet",
+      "system_label": "general",
+      "verdict": "ok",
+      "reason": "Viyana'daki yer hizmetleri şirketi AAS'de yüzlerce işin risk altında olması, havacılık/istihdam haberi, 'general' kabul edilebilir.",
+      "source": "aeroTELEGRAPH",
+      "url": null
+    },
+    {
+      "idx": 88,
+      "title": "The $4.9 Billion Rebuild Turning A Hurricane-Ravaged Air Force Base Into A Major F-35 Hub",
+      "system_label": "finance",
+      "verdict": "ok",
+      "reason": "Kasırgadan zarar görmüş hava üssünün 4,9 milyar dolarlık yeniden inşası, bütçe rakamı öne çıkan bir haber, 'finance' kategorisi makul (not: Risk bölümünde bu haberin ülke ataması yanlış bulunmuştu, ama Gazete'deki kategori sorunu değil).",
+      "source": "Simple Flying",
+      "url": null
+    },
+    {
+      "idx": 89,
+      "title": "5 Things Passengers Don't Know About Booking Widebody Lie-Flat Seats On Domestic US Flights",
+      "system_label": "revenue_management / demand_capacity",
+      "verdict": "warn",
+      "reason": "ABD iç hat geniş gövde 'lie-flat' koltuk rezervasyonu hakkında tüketici odaklı bir liste yazısı; 'demand_capacity' ile kısmen örtüşüyor ama esasen bir tüketici tavsiye içeriği, sektörel analiz mi tüketici rehberi mi olduğu belirsiz.",
+      "source": "Simple Flying",
+      "url": null
+    },
+    {
+      "idx": 90,
+      "title": "Asiana Airlines NW26 Seattle Service Increases",
+      "system_label": "fleet",
+      "verdict": "bad",
+      "reason": "Asiana'nın Seattle servisini artırması (AeroRoutes) — saf bir frekans/rota artışı haberi; kaynağın benzer haberleri 'network' etiketliyken bu 'fleet' etiketlenmiş, kategori yanlış.",
+      "source": "AeroRoutes",
+      "url": null
+    },
+    {
+      "idx": 91,
+      "title": "Boeing erhält F-15-Rahmenvertrag über bis zu 113 Milliarden Euro",
+      "system_label": "fleet",
+      "verdict": "ok",
+      "reason": "Boeing'in F-15 için 113 milyar euroya varan çerçeve anlaşması, doğrudan filo/tedarik haberi, 'fleet' kategorisiyle uyumlu.",
+      "source": "aeroTELEGRAPH",
+      "url": null
+    },
+    {
+      "idx": 92,
+      "title": "Air Arabia fliegt neu von Sharjah auch nach Danzig",
+      "system_label": "airport",
+      "verdict": "bad",
+      "reason": "Air Arabia'nın Sharjah'tan Danzig'e yeni uçuşu — saf bir yeni rota haberi, 'airport' kategorisiyle ilgisi yok, network olmalıydı.",
+      "source": "aeroTELEGRAPH",
+      "url": null
+    },
+    {
+      "idx": 93,
+      "title": "JAL J 55K on AA ORD-NRT still available for September and October",
+      "system_label": "labor",
+      "verdict": "bad",
+      "reason": "JAL'ın AA ORD-NRT hattında business ödül bileti müsaitliği hakkında bir Reddit gönderisi — 'labor' (işçi/sendika) kategorisiyle hiçbir ilgisi yok, tamamen yanlış etiketlenmiş; ayrıca kişisel bir ödül bileti sorusu, sektörel haber değeri de yok.",
+      "source": "Reddit r/awardtravel",
+      "url": null
+    },
+    {
+      "idx": 94,
+      "title": "ANA investiert in Entwickler von Quantencomputern",
+      "system_label": "general",
+      "verdict": "ok",
+      "reason": "ANA'nın kuantum bilgisayar geliştiricisine yatırımı, havayolunun kendi stratejik yatırımı olduğu için ilgili, 'general' kabul edilebilir.",
+      "source": "aeroTELEGRAPH",
+      "url": null
+    },
+    {
+      "idx": 95,
+      "title": "Rolls-Royce y TCS logran el primer ciclo de vuelo completo con motor 100% a hidrógeno",
+      "system_label": "fleet",
+      "verdict": "ok",
+      "reason": "Rolls-Royce ve TCS'nin %100 hidrojenli motorla ilk tam uçuş döngüsünü tamamlaması, doğrudan havacılık teknolojisi haberi, 'fleet' kabul edilebilir.",
+      "source": "Aviacionline",
+      "url": null
+    },
+    {
+      "idx": 96,
+      "title": "Qantas doubles points, status ahead of credit card changes - SMH.com.au",
+      "system_label": "general",
+      "verdict": "ok",
+      "reason": "Qantas'ın kredi kartı değişiklikleri öncesi puan ve statüyü ikiye katlaması, havayolu sadakat programı haberi, 'general' kabul edilebilir.",
+      "source": "Google News · Sadakat Programları",
+      "url": null
+    },
+    {
+      "idx": 97,
+      "title": "Asiana Airlines Europe Aircraft Changes From Dec 2026",
+      "system_label": "fleet",
+      "verdict": "ok",
+      "reason": "Asiana'nın Avrupa'da Aralık 2026'dan itibaren uçak tipi değişiklikleri, gerçek bir filo haberi, 'fleet' kategorisiyle tam örtüşüyor.",
+      "source": "AeroRoutes",
+      "url": null
+    },
+    {
+      "idx": 98,
+      "title": "Japan Airlines wird Partner des japanischen Skiverbandes",
+      "system_label": "general",
+      "verdict": "ok",
+      "reason": "Japan Airlines'ın Japon kayak federasyonuyla ortaklığı, havayolunun sponsorluk/pazarlama haberi, 'general' kabul edilebilir.",
+      "source": "aeroTELEGRAPH",
+      "url": null
+    },
+    {
+      "idx": 99,
+      "title": "Got to work on the American Airlines Reno Air livery last week.",
+      "system_label": "general",
+      "verdict": "warn",
+      "reason": "American Airlines'ın Reno Air livery boyaması üzerine çalışma (Reddit) — model/hobi paylaşımı, sektörel haber değeri yok.",
+      "source": "Reddit r/aviation",
+      "url": null
+    },
+    {
+      "idx": 100,
+      "title": "SpaceX construirá el mayor puerto espacial del mundo en Louisiana",
+      "system_label": "general",
+      "verdict": "warn",
+      "reason": "SpaceX'in Louisiana'da dünyanın en büyük uzay limanını inşa etmesi — uzay sektörü haberi, ticari havayolu işiyle doğrudan ilgisi tartışmalı.",
+      "source": "Aviacionline",
+      "url": null
+    }
+  ],
+  "campaign": [
+    {
+      "idx": 1,
+      "title": "Balkanlar %50’ye Varan İndirimle!",
+      "system_label": "PC (Pegasus Airlines) · 50% · 2026-08-25→2026-08-27",
+      "verdict": "ok",
+      "reason": "Balkanlar için gerçek, makul süreli (3 gün) bir indirim kampanyası; havayolu doğru.",
+      "source": "",
+      "url": "https://www.flypgs.com/kampanyali-ucak-biletleri/ucuran-agustosa-ozel-balkanlar-50-varan-indirimli"
+    },
+    {
+      "idx": 2,
+      "title": "Pegasus BolBol & Zuppin İş Birliği",
+      "system_label": "PC (Pegasus Airlines) · — · 2026-08-01→2026-09-30",
+      "verdict": "bad",
+      "reason": "BolBol & Zuppin iş birliği bir sadakat/ortaklık duyurusu, gerçek bir bilet indirimi değil.",
+      "source": "",
+      "url": "https://www.flypgs.com/kampanyali-ucak-biletleri/pegasus-musterilerine-ozel-antalya-shuttle-kampanyasi"
+    },
+    {
+      "idx": 3,
+      "title": "BolBol Extralılara özel avantajlar: %50 Bagaj İndirimi, Ücretsiz İptal Hakkı ve 2 Kat BolPuan!",
+      "system_label": "PC (Pegasus Airlines) · 50% · 2026-07-29→2026-12-31",
+      "verdict": "bad",
+      "reason": "BolBol Extra üyelerine bagaj indirimi/BolPuan gibi sadakat katmanı avantajları anlatılıyor, bir uçak bileti fiyat kampanyası değil; ayrıca 5 aylık satış penceresi de şüpheli uzun.",
+      "source": "",
+      "url": "https://www.flypgs.com/kampanyali-ucak-biletleri/bolbol-extralilar-icin-50-indirimli-bagaj-ucretsiz-iptal-hakki-ve-2-kat-bolpuan-kazanma-imkani"
+    },
+    {
+      "idx": 4,
+      "title": "Pegasus BolBol & Borusan Next Servis İş Birliği",
+      "system_label": "PC (Pegasus Airlines) · 25% · 2026-07-29→2026-08-31",
+      "verdict": "bad",
+      "reason": "Borusan Next Servis ile iş birliği duyurusu, bilet indirim kampanyası değil.",
+      "source": "",
+      "url": "https://www.flypgs.com/kampanyali-ucak-biletleri/pegasus-bolbol-borusan-next-servis-is-birligi"
+    },
+    {
+      "idx": 5,
+      "title": "Pegasus BolBol & Arabam Tatilde İş Birliği",
+      "system_label": "PC (Pegasus Airlines) · — · 2026-05-02→2026-11-30",
+      "verdict": "bad",
+      "reason": "Arabam Tatilde ile iş birliği duyurusu, bilet indirim kampanyası değil; 6 aylık pencere de kampanya tipine göre fazla uzun.",
+      "source": "",
+      "url": "https://www.flypgs.com/kampanyali-ucak-biletleri/pegasus-bolbol-arabam-tatilde-is-birligi"
+    },
+    {
+      "idx": 6,
+      "title": "Pegasus BolBol & Polira İş Birliği",
+      "system_label": "PC (Pegasus Airlines) · — · 2024-10-15→2026-08-31",
+      "verdict": "bad",
+      "reason": "Polira ile iş birliği duyurusu, kampanya değil; ayrıca satış aralığı 2024-10-15→2026-08-31 gibi neredeyse 2 yıllık absürt bir pencere.",
+      "source": "",
+      "url": "https://www.flypgs.com/kampanyali-ucak-biletleri/pegasus-bolbol-polira-is-birligi"
+    },
+    {
+      "idx": 7,
+      "title": "Pegasus BolBol ve Teknevia İş Birliği",
+      "system_label": "PC (Pegasus Airlines) · — · 2024-06-25→2026-12-31",
+      "verdict": "bad",
+      "reason": "Teknevia ile iş birliği duyurusu, kampanya değil; satış aralığı 2024-06-25→2026-12-31 yaklaşık 2,5 yıl, tamamen absürt.",
+      "source": "",
+      "url": "https://www.flypgs.com/kampanyali-ucak-biletleri/pegasus-bolbol-ve-teknevia-is-birligi"
+    },
+    {
+      "idx": 8,
+      "title": "Buy JetBlue TrueBlue Points With Up To 120% Bonus (1.47 Cents Each): Worth It?",
+      "system_label": "QR (Qatar Airways) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "İçerik JetBlue TrueBlue puanlarının satın alınmasıyla ilgili, Qatar Airways ile ilgisi yok; ayrıca bir bilet indirim kampanyası değil, puan satın alma teklifi.",
+      "source": "",
+      "url": "https://onemileatatime.com/deals/buy-jetblue-trueblue-points/"
+    },
+    {
+      "idx": 9,
+      "title": "Act fast: Thrifty Traveler Premium is 30% off",
+      "system_label": "QR (Qatar Airways) · 30% · tarih yok",
+      "verdict": "bad",
+      "reason": "'Thrifty Traveler Premium' adlı üçüncü taraf bir abonelik hizmetinin indirimiyle ilgili, Qatar Airways ile hiçbir ilgisi yok.",
+      "source": "",
+      "url": "https://thepointsguy.com/deals/thrifty-traveler-premium/"
+    },
+    {
+      "idx": 10,
+      "title": "LAX to CDG Air France Business",
+      "system_label": "AF (Air France) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "LAX-CDG Air France Business hakkında kişisel bir deneyim/inceleme başlığı gibi görünüyor, indirim bilgisi veya kampanya içeriği yok.",
+      "source": "",
+      "url": "https://www.reddit.com/r/awardtravel/comments/1vtcgce/lax_to_cdg_air_france_business/"
+    },
+    {
+      "idx": 11,
+      "title": "Flying Blue is adding Light, Standard and Flex awards — here's what it means for using your miles",
+      "system_label": "KL (KLM) · 25% · tarih yok",
+      "verdict": "bad",
+      "reason": "Flying Blue'nun yeni ödül kademeleri (Light/Standard/Flex) tanıtımı esasen bir devalüasyon haberi; %25 etiketi gerçek bir indirim kampanyasını yansıtmıyor.",
+      "source": "",
+      "url": "https://thepointsguy.com/news/flying-blue-award-fare-changes/"
+    },
+    {
+      "idx": 12,
+      "title": "Flying Blue Award Pricing Changes: New Tiered Fares Amount To A Devaluation",
+      "system_label": "KL (KLM) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "'Flying Blue Award Pricing Changes... Devaluation' başlığı açıkça bir değer kaybı/fiyat artışı haberi, indirim değil.",
+      "source": "",
+      "url": "https://onemileatatime.com/news/flying-blue-award-pricing-changes-tiered-fares-devaluation/"
+    },
+    {
+      "idx": 13,
+      "title": "Air France-KLM’s Flying Blue Keeps Its Cheapest Awards, Strips Benefits Unless You Spend More Miles",
+      "system_label": "KL (KLM) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "Flying Blue'nun ödül yapısını değiştirmesiyle ilgili bir rehber/analiz yazısı, bilet indirim kampanyası değil.",
+      "source": "",
+      "url": "https://viewfromthewing.com/air-france-klms-flying-blue-keeps-its-cheapest-awards-strips-benefits-unless-you-spend-more-miles/"
+    },
+    {
+      "idx": 14,
+      "title": "Flying Blue Introduces “Light” Business Class Awards With No Lounge Access Or Flexibility",
+      "system_label": "LH (Lufthansa) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "İçerik Air France-KLM'in Flying Blue programıyla ilgili, Lufthansa ile ilgisi yok; ayrıca sadakat programı rehberi, kampanya değil.",
+      "source": "",
+      "url": "https://liveandletsfly.com/flying-blue-business-light-awards/"
+    },
+    {
+      "idx": 15,
+      "title": "Buy Qatar Airways Avios With 50% Bonus, 1.53 Cents Each: Worth It?",
+      "system_label": "BA (British Airways) · 50% · tarih yok",
+      "verdict": "bad",
+      "reason": "'Qatar Airways Avios satın alma' başlıklı bir puan satın alma teklifi, British Airways'in kendi bilet kampanyası değil.",
+      "source": "",
+      "url": "https://onemileatatime.com/deals/buy-qatar-airways-privilege-club-avios/"
+    },
+    {
+      "idx": 16,
+      "title": "Amex Membership Rewards transfer partners: Redeem your points with airlines and hotels",
+      "system_label": "EK (Emirates) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "Amex Membership Rewards transfer ortakları hakkında genel bir kredi kartı rehberi, Emirates'e özgü bir kampanya değil.",
+      "source": "",
+      "url": "https://thepointsguy.com/credit-cards/membership-rewards-partner-guide/"
+    },
+    {
+      "idx": 17,
+      "title": "British Airways Club: Guide to Avios, elite status and transfer partners",
+      "system_label": "BA (British Airways) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "British Airways Club/Avios rehberi, sadakat programı açıklaması; bilet indirim kampanyası değil.",
+      "source": "",
+      "url": "https://thepointsguy.com/loyalty-programs/ultimate-ba-avios-guide/"
+    },
+    {
+      "idx": 18,
+      "title": "Qatar Airways Avrupa'ya Uçuşlarda İndirim Yapıyor, Azami %12 İndirim",
+      "system_label": "QR (Qatar Airways) · 12% · tarih yok",
+      "verdict": "warn",
+      "reason": "Qatar Airways'in Avrupa uçuşlarında azami %12 indirim yaptığı gerçek bir kampanya gibi görünüyor ama satış tarihleri belirtilmemiş.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMiVEFVX3lxTE56MFhzSE84X0doLWFTb0lPNHJNNzRLQU1nRjFHSVpKekw5N3d4eUNGSmlVVVFqWmJWc21INXp2WEN0Q0U3YThOY3B3WHA2Njg5OXNxSA?oc=5"
+    },
+    {
+      "idx": 19,
+      "title": "Air France uçuş değişikliği için para teklif ediyor",
+      "system_label": "KL (KLM) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "İçerik Air France'in uçuş değişikliği için tazminat teklifiyle ilgili, KLM ile ilgisi yok; ayrıca bir indirim kampanyası değil, tazminat/telafi teklifi.",
+      "source": "",
+      "url": "https://www.reddit.com/r/awardtravel/comments/1vq4t12/air_france_offering_money_to_change_flight/"
+    },
+    {
+      "idx": 20,
+      "title": "British Airways ve Iberia Avios Mevciliği - Noel ve Yılbaşı... Çok Erken Mi? - Turning Left For Less -",
+      "system_label": "BA (British Airways) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "British Airways/Iberia Avios müsaitliği rehberi, sadakat/ödül bileti rehberi; bilet indirim kampanyası değil.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMiuwFBVV95cUxOcTJRRVV1US1ZSEVKcnIxT2llYnNaYU93a2hBNlBubU82NGVFalhuLWpPVHFGb1kyOHRPdW8zMThwa1dIcEtYcmRZQ3Y0QW1GMHVsRVIxODVJYVF2UVJWdVVFYXJDNTdwLWkwVW9jNGR2SHJmX01YcFhkSUlaSDY2cnRXSll5eTZPUlY3ZGQ1ekFsbTlXazNfTVY5YWd2Q2QzbHdEdWdpU1NlSDJNU0tpaTl2bFVDbXpkYUFR?oc=5"
+    },
+    {
+      "idx": 21,
+      "title": "Sadece 36.000 AMEX Puanı ile Air France'de Transatlantik Business Class'a Nasıl Ulaştım",
+      "system_label": "AF (Air France) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "36.000 Amex puanıyla business class'a ulaşma hakkında kişisel bir deneyim yazısı, kampanya değil.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMiZkFVX3lxTE1kS3VpaXJhT0JTQ3dPc2l2czZmUGQtYUo5YmQ3WVhiTUFWeld4Zk4xallDX1dOLUFBU2lFQXdpRW1fcHRSdkNubTJwTHNRejNmb1d0Ql92SEs5TFhadjVpSEJudEUwdw?oc=5"
+    },
+    {
+      "idx": 22,
+      "title": "British Airways iş sınıfı şimdi birinci sınıfın rakibi",
+      "system_label": "BA (British Airways) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "British Airways iş sınıfı ürün incelemesi/görüş yazısı, bir indirim kampanyası değil.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMiigFBVV95cUxOdXF2dk1PODJ3eXJldzBGNHdnemtPMmhLWGVrRndmNm9iQmZxM3RWX2NuQTBGVW96WEg3aWJlYk1xenVueDNpZDdUSWNkNDJFSVptU1BHTVhFcjBwSF9kMWI5Unhhc0tHZk9uMW5oOTFJTG1oUWNLZmh2N3FoMG12cnZyQ2VKZk9zQ3c?oc=5"
+    },
+    {
+      "idx": 23,
+      "title": "Neden Qatar Airways Qsuite hala dünyanın en iyi Business Class'ı olarak değerlendiriliyor",
+      "system_label": "QR (Qatar Airways) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "Qatar Airways Qsuite ürün incelemesi, indirim kampanyası değil.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMikgFBVV95cUxPcTFxNm9MMDJSaHdVcmxDVk85MWRUVWJnaFNwb2t5QWRyRzNXdEJGQzBudm5vZVkzN29uVTktQ0tQSHBWTXR6N3hSbnBEUE9qUGlGZjNHX09FUFIwV2s0WV9ReFRBZ2ZFVE9qQ01WWjZudTJwWC0yajhMSkg4RnZoQV84VEdUc2VvV05FQXlVV0lkUQ?oc=5"
+    },
+    {
+      "idx": 24,
+      "title": "Emirates Free Date Change 2026: Dubai Flight Rules",
+      "system_label": "EK (Emirates) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "Emirates'in ücretsiz tarih değişikliği kuralları hakkında bir politika yazısı, bilet fiyat indirimi değil.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMihwFBVV95cUxNaW81bVlIZzc1X3ZqTFpVcEZ3T0ozM0VtRGNYenp3cDEzcjhhcFpwYVc5M0RlMjZGNkFYREZRT1Z0blJnSzY0SURnMXlmTDFPZHNMcWthZHBxNHJsQmxkOUtzZi1HM3JzekxtSENmc3lfN3M1X1dvZHgwUmRHT3ZJZUpseHZBbkk?oc=5"
+    },
+    {
+      "idx": 25,
+      "title": "Neden British Airways'in Club Suite Kapısı $5.000'lik Bir First Class Biletini Haklı Çıkarmayı Zorlaştırıyor",
+      "system_label": "BA (British Airways) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "British Airways Club Suite ürün/fiyat değerlendirmesi, kampanya değil.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMiwAFBVV95cUxQNmlTNmFmZVZIQVJtYnNqeV9VVmNiY3FMaXhuTWYtVDRxcFFyaWtEV0xoQTFRN0R4WDdRbURpODdxM1Jpb0ExbDRMa2E0azVfLVp3eDgxSXRhWk4wTDdlWFBnVDBKMmZiZHk4WmtvalNLT21Od2pTVXFVMjFLXzFYMHVQaGluVmtqbGFPVVFGRXJvckN1aEhGam8tNUhFckF2Vm1kX3gyY25qSEs4dVVCd1FmSFE3amF1bEdyTV83cFI?oc=5"
+    },
+    {
+      "idx": 26,
+      "title": "Free Emirates Flights Rebooking and 24-hour Fare Hold (2026)",
+      "system_label": "EK (Emirates) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "Emirates'in ücretsiz yeniden rezervasyon ve 24 saatlik ücretsiz iptal politikası, bir fiyat indirimi kampanyası değil.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMigwFBVV95cUxQTWZqOFhyZUVmREdlN05QU2xpaWV4em1XanpEVWpaYy01Rm81d29vVDNJNGZpaWN0TkVmYlNBLVRzdjBieEI2MU5nV2pvUnh5NDBsMmtuSmJCbEdKb0hMVzV3NlAzN0QtZlhJcVg1R3Jybm45d1pPWlcxNlN3QmozMklFOA?oc=5"
+    },
+    {
+      "idx": 27,
+      "title": "Qatar Airways, Privilege Club üyelerine 10% indirim sunuyor",
+      "system_label": "QR (Qatar Airways) · 10% · tarih yok",
+      "verdict": "warn",
+      "reason": "Qatar Airways Privilege Club üyelerine %10 indirim sunduğu belirtiliyor, gerçek bir kampanya gibi ama tarihler eksik.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMimgFBVV95cUxONTl6cDhObFphTzlnT1BrWDlfUmpXWmJxU3pNS29Xd0NXVlJORDJTSElvcGJGZUZwV0p6SXg4elRGVnVmNlhmQnBobXJYcDVzeGV3UXM3QS1PcUlNYUoxT0JtN0Y1R211Z3FteEJWbDBMX240YktDLWtLNzJlN1VlcFZsZGRqYUxNcnBiekplUjYyWlN0MmtCTDNB?oc=5"
+    },
+    {
+      "idx": 28,
+      "title": "Qatar Kargo yarı iletken ekipman işleme kapasitesini artırıyor",
+      "system_label": "QR (Qatar Airways) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "Qatar Kargo'nun yarı iletken ekipman kapasitesini artırması operasyonel bir kargo haberi, bilet indirim kampanyasıyla ilgisi yok.",
+      "source": "",
+      "url": "https://www.stattimes.com/air-cargo/qatar-cargo-boosts-semiconductor-equipment-handling-1360230"
+    },
+    {
+      "idx": 29,
+      "title": "Emirates, Dubai'ye Yönlenen Uçuşlar için Ücretsiz Tarih Değişikliği ile Esneklik Sunuyor",
+      "system_label": "EK (Emirates) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "Emirates'in Dubai uçuşları için ücretsiz tarih değişikliği esnekliği, fiyat indirimi değil, bir politika/esneklik duyurusu.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMivgFBVV95cUxQQktkQW5vbXFjdmdBei1malFtZjg2Zjg0NXFvWGZJVmxqQjN6TmtaRnJ1ejJiUlJ4bVpzck1jcXhqSk16NWFNdzJiSGh5WkFiM3pzcllCTzJEVHFkRk5WUWw2SF9wZW5paXpEUlZ6WUZBR2ZubUpDUkI0c1dxbkpRMzRnTUpfSGdKTlIyUWdOYTBiN3h0SzV0MXpibVdmaW40QzhyY0xackx4U2NYejJ3RVRxQUNSXzJiZEl5djhB?oc=5"
+    },
+    {
+      "idx": 30,
+      "title": "Emirates biletleri için esnekliği daha da artırıyor",
+      "system_label": "EK (Emirates) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "Emirates biletlerinde esneklik artışı, bir fiyat indirimi değil, politika değişikliği.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMid0FVX3lxTE5Kc3RjR185ZTVSZmMtaEItNkVNRXRhWDJjOWlkWVd5RC1ySGI4dFJQblYtSDd0dlNpVFJ2MV94S1NJM3QxX3lDTi1jRFR1Y1dqRHhPWjBVZnVNTDBSVkp3bnh5Z0lKZFdOeW5qMjdueFdlUThMNnZF?oc=5"
+    },
+    {
+      "idx": 31,
+      "title": "Şükran Günü için Phoenix'ten Boston'a 30% bonus Avios kullanarak rezervasyon yaptım",
+      "system_label": "BA (British Airways) · 30% · tarih yok",
+      "verdict": "bad",
+      "reason": "Phoenix-Boston uçuşu için Avios bonusuyla rezervasyon yapan bir kişinin anlatısı, resmi bir havayolu kampanyası değil.",
+      "source": "",
+      "url": "https://www.reddit.com/r/awardtravel/comments/1vlq2fg/booked_phoenix_to_boston_using_30_bonus_to_avios/"
+    },
+    {
+      "idx": 32,
+      "title": "KLM, Ekim ayında ücretli uçak içi yemek servisi başlatıyor",
+      "system_label": "KL (KLM) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "KLM'in Ekim'de ücretli uçak içi yemek servisine geçmesi aslında ücretsiz hizmetin kaldırılması/fiyatlandırılması, bir indirim değil, tam tersi bir hizmet kısıtlaması.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMiiAFBVV95cUxOMjFCNDR1SWNvWkI4TVgydmJJOTZma0NJMEc3OC1ra1Z5OFNhWVZlSXkyRDlsd0VKeTlSeUd1WV9NUzh5bkRoOEhQX1U0RU03Z2NRYkFJcG5zanBSWkNwMEVheDRrZmE3NFhCOTRVRE5nYURtX2hxbERMMTlfbDJaRUtYWUlYdW9p?oc=5"
+    },
+    {
+      "idx": 33,
+      "title": "Emirates talebin canlandırıyor - Dubai uçuşları için sınırsız ücretsiz yeniden rezervasyon",
+      "system_label": "EK (Emirates) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "Emirates'in Dubai uçuşları için sınırsız ücretsiz yeniden rezervasyon esnekliği, bir bilet fiyat indirimi değil.",
+      "source": "",
+      "url": "https://www.aerotelegraph.com/ticker/emirates-kurbelt-nachfrage-an-unbegrenzt-kostenlose-umbuchungen-fuer-dubai-fluege/dp9lyh6"
+    },
+    {
+      "idx": 34,
+      "title": "KLM, Avrupa Ekonomi Sınıfında Ücretsiz Bira, Şarap ve Peynirli Sandviçleri Kaldırıyor",
+      "system_label": "KL (KLM) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "KLM'in Avrupa ekonomi sınıfında ücretsiz bira/şarap/sandviç servisini kaldırması bir hizmet kısıtlaması/maliyet düşürme haberi, indirim kampanyası değil.",
+      "source": "",
+      "url": "https://viewfromthewing.com/klm-cuts-free-beer-wine-and-cheese-sandwiches-in-european-economy-and-calls-it-hospitality/"
+    },
+    {
+      "idx": 35,
+      "title": "KLM, Bölgesel Ekonomi Sınıfında Buy On Board Hizmetini Sunuyor: Üzgünüm, Fakat Farklı Bir Nedenle",
+      "system_label": "LH (Lufthansa) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "İçerik KLM'in bölgesel ekonomi sınıfında ücretli yeme-içme hizmeti sunmasıyla ilgili, Lufthansa ile ilgisi yok; ayrıca bir indirim değil, ücretli hizmet başlatma haberi.",
+      "source": "",
+      "url": "https://onemileatatime.com/news/klm-buy-on-board-economy/"
+    },
+    {
+      "idx": 36,
+      "title": "Choice Privileges rehberi: Puanları nasıl kazanabilir ve kullanabilirsiniz, elit statü ve daha fazlası",
+      "system_label": "BA (British Airways) · 10% · tarih yok",
+      "verdict": "bad",
+      "reason": "'Choice Privileges' aslında Choice Hotels'in otel sadakat programı, British Airways ile hiçbir ilgisi yok; ayrıca kampanya değil, bir rehber.",
+      "source": "",
+      "url": "https://thepointsguy.com/loyalty-programs/choice-privileges/"
+    },
+    {
+      "idx": 37,
+      "title": "KLM ücretsiz sandviç servisi son buluyor",
+      "system_label": "LH (Lufthansa) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "İçerik KLM'in ücretsiz sandviç servisini sonlandırmasıyla ilgili, Lufthansa ile ilgisi yok; ayrıca bir hizmet kısıtlaması, indirim değil.",
+      "source": "",
+      "url": "https://www.aerotelegraph.com/flugerlebnis/klm-fuehrt-bezahl-essen-auf-europafluegen-ein/exf6qwe"
+    },
+    {
+      "idx": 38,
+      "title": "How I earned 24,500 points from $180 in hotel stays",
+      "system_label": "TK (Turkish Airlines) · 10% · tarih yok",
+      "verdict": "bad",
+      "reason": "Otel konaklamalarından puan kazanma hakkında bir inceleme, Turkish Airlines'ın bilet indirim kampanyasıyla ilgisi yok.",
+      "source": "",
+      "url": "https://thepointsguy.com/loyalty-programs/maximize-promotions/"
+    },
+    {
+      "idx": 39,
+      "title": "Lufthansa, Starlink Wi-Fi'yi katı yolcu kullanım kurallarıyla devreye alacak",
+      "system_label": "LH (Lufthansa) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "Lufthansa'nın Starlink Wi-Fi'yi katı kullanım kurallarıyla devreye alması bir ürün/hizmet haberi, indirim kampanyası değil.",
+      "source": "",
+      "url": "https://www.aerotime.aero/articles/lufthansa-roll-out-starlink-wi-fi-strict-passenger-usage-rules"
+    },
+    {
+      "idx": 40,
+      "title": "Dünyanın En İyi 10 İş Sınıfı Koltuğu: Hangi Ürünler Üstün?",
+      "system_label": "BA (British Airways) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "Dünyanın en iyi 10 iş sınıfı koltuğu listesi, çok havayollu genel bir karşılaştırma yazısı; British Airways'e özgü bir kampanya değil.",
+      "source": "",
+      "url": "https://onemileatatime.com/guides/best-business-class-seats/"
+    },
+    {
+      "idx": 41,
+      "title": "British Airways Eylül için Avrupa ücretlerini düşürdü",
+      "system_label": "BA (British Airways) · — · tarih yok",
+      "verdict": "warn",
+      "reason": "'British Airways Eylül için Avrupa ücretlerini düşürdü' başlığı gerçek bir fiyat indirimini anlatıyor gibi görünüyor ama indirim yüzdesi ve tarihler belirtilmemiş.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMijAFBVV95cUxQUzZXSkl4WjVUMEdub1BkZ3gtWkx6bWdITFpCT24xN2dUbjBUd2dmbHVhY3JBektxZ3M1bnB3QXEtMEJxc25RYVJ3N0xOdUNJNS1LY0k1N05mUjdwbEFPVE1SZmhFeUt1SWRQcDhFVVJSUUVYSGdSNWRBRXo1YnFTeFhOSEpuWnloWl9leQ?oc=5"
+    },
+    {
+      "idx": 42,
+      "title": "En Düşük Maliyetli Nokta Seçenekleri",
+      "system_label": "EY (Etihad Airways) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "'En düşük maliyetli nokta seçenekleri' genel bir mil/puan stratejisi rehberi, Etihad'a özgü bir kampanya değil.",
+      "source": "",
+      "url": "https://www.reddit.com/r/awardtravel/comments/1vj3df4/lowest_cost_points_options/"
+    },
+    {
+      "idx": 43,
+      "title": "En İyi İşletme Sınıfı Yatakçıları: Hangi Havayolları Uykuyu ve Konforu Önemsiyor?",
+      "system_label": "QR (Qatar Airways) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "Çeşitli havayollarının en iyi iş sınıfı yataklarını karşılaştıran genel bir liste yazısı, Qatar Airways'e özgü bir kampanya değil.",
+      "source": "",
+      "url": "https://onemileatatime.com/insights/best-business-class-bedding/"
+    },
+    {
+      "idx": 44,
+      "title": "KLM/AF Ödül Seyahatleri",
+      "system_label": "KL (KLM) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "KLM/AF ödül seyahatleri rehberi, bilet indirim kampanyası değil.",
+      "source": "",
+      "url": "https://www.reddit.com/r/awardtravel/comments/1vj29lt/klmaf_award_travel/"
+    },
+    {
+      "idx": 45,
+      "title": "Lufthansa, yenilenmiş A380 Business Class için ücretli pencere koltuğu seçimi sunuyor",
+      "system_label": "LH (Lufthansa) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "Lufthansa'nın yenilenmiş A380 business class'ta pencere koltuğu seçimini ücretli hale getirmesi yeni bir ücret, bir indirim değil.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMi3AFBVV95cUxNYmtqMG9sY0xMWmhLcVFaWDdVQWNGZXFnRmw0N0RUdlhfM3BDWV9aSENBZ282LU81MTdnOXlncUlBdUM0el9ZUHZNTzRXam9SaGExQ0hPeGhOVURYT3Bfa0pWcC1LdXU2aHk1dTR0RV9zbi0xb3R0SThRTWJpRm5EbVVUc3VSemlOZ3YwWjAtN1Z2RUhkczVCRElrX2lwYmQ5bV8xbEx2bWhHenVRZ2k2R2N4MURoY2xTRzlDTU1ZVkhDUHdwUDhkZXFteWl2RVhYNDdYaWpnc1k0YnhS?oc=5"
+    },
+    {
+      "idx": 46,
+      "title": "Qatar Airways aylık ödül indirimi tanıtıyor, ödüllerde %25 indirim",
+      "system_label": "QR (Qatar Airways) · 25% · tarih yok",
+      "verdict": "warn",
+      "reason": "Qatar Airways'in aylık ödül indirimi (ödüllerde %25 indirim) tanıtımı gerçek bir kampanya gibi görünüyor ama tarihler eksik; bir mil/ödül indirimi olduğu için nakit bilet kampanyasından farklı, sınırda bir durum.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMiqwFBVV95cUxNR2hNRUhCWjRzdVAxcENZWTNiUHplc1pYTmtYUV9NY0tESVV2LW41LXlmVjNodE9wbEVyZUEzcnI0VVJtOTVGT2Rzc0Q3Y2Z0Y2RlRzZiaEVqT3VqN0dBWnZnd082VThwY3NvT0otV0hpQkc2U1kxVEg5LTUwRU1VOWk1SlZyenJGeG1tTnI2UFg1TlZpcENYcGdCWkZlNU5fMDFqbmJTNjBRQTQ?oc=5"
+    },
+    {
+      "idx": 47,
+      "title": "Capital One Venture point use suggestions",
+      "system_label": "AF (Air France) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "Capital One Venture puanlarının kullanımına dair genel öneriler, Air France'e özgü bir kampanya değil.",
+      "source": "",
+      "url": "https://www.reddit.com/r/awardtravel/comments/1vhb54c/capital_one_venture_point_use_suggestions/"
+    },
+    {
+      "idx": 48,
+      "title": "Wells Fargo Travel portal: What to know before booking",
+      "system_label": "BA (British Airways) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "Wells Fargo seyahat portalı hakkında genel bilgi, British Airways'e özgü bir kampanya değil.",
+      "source": "",
+      "url": "https://thepointsguy.com/credit-cards/wells-fargo-travel-portal-guide/"
+    },
+    {
+      "idx": 49,
+      "title": "Book flights to Europe starting at 18,750 miles: Check out Flying Blue’s August Promo Rewards",
+      "system_label": "KL (KLM) · — · tarih yok",
+      "verdict": "warn",
+      "reason": "Flying Blue'nun Ağustos promosyon ödülleriyle Avrupa'ya 18.750 milden başlayan uçuşlar gerçek bir kampanya gibi görünüyor ama yapılandırılmış indirim yüzdesi/tarih alanları boş.",
+      "source": "",
+      "url": "https://thepointsguy.com/deals/flying-blue-special-promo-rewards/"
+    },
+    {
+      "idx": 50,
+      "title": "Starlux Ödülleri Şimdi Etihad Mil ile Rezerv Edilebilir … Fakat Buna Maliyeti Olacak",
+      "system_label": "EY (Etihad Airways) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "Starlux ödüllerinin artık Etihad miliyle rezerve edilebilmesi bir ortaklık/rezervasyon haberi, bir bilet indirim kampanyası değil.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMihgFBVV95cUxOc2hkUUk2eVNMY21kcWN1c1lpeWVQdmJ4SUpVMjA3WTRLd1poaGFjTlprMTNKZjlhM2tVUUgtR01GclEzeVRsU1RMSXFDTXo3aGxReE1iTVJVWEZuMmQ4Si1rN2JqSzZqVkNqY3E4ejFHa0lwWC1Ta0diVnVzbG9ZNDZ6OWFpdw?oc=5"
+    },
+    {
+      "idx": 51,
+      "title": "Qatar Airways aylık Avios indirimlerine başladı",
+      "system_label": "QR (Qatar Airways) · — · tarih yok",
+      "verdict": "warn",
+      "reason": "Qatar Airways'in aylık Avios indirimlerine başlaması gerçek bir kampanya gibi görünüyor ama indirim oranı ve tarihler belirtilmemiş.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMihgFBVV95cUxOMlV6Q1NQWG9iWXZvSEN4UWIyZVZVd1JhRE4xR2RSVHpINUxoUUZZRlJDdlNWc2RxbjlEM0JTVG5hdi1IUldWeVZHbHVFVlRDaTl5TVRDb1Bvb0tqNl8xTjAtYi0xZHFEVk5FeGJRaGRPem1hTDN6U0ZCY0JObVdXNk1SU21WZw?oc=5"
+    },
+    {
+      "idx": 52,
+      "title": "Qatar Airways ödül uçuş maliyetlerini %25 azalttı",
+      "system_label": "QR (Qatar Airways) · 25% · tarih yok",
+      "verdict": "warn",
+      "reason": "Qatar Airways'in ödül uçuş maliyetlerini %25 azalttığı belirtiliyor (mil bazlı indirim), tarihler eksik.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMihAFBVV95cUxNUE91dTVHYi1GYlJ4cXVDX25pMU1HMDNWekJuSHFxR18zNDU4MW1QSjR0bUNYUnlHU3RnSER1Z19obGVjc3ZLcHJQdUFuN0JrLXJNZEoyZ0kwT0N0cXVuaFJUb2JsNU5WdVhSb1JZWjVTWkd5NGdpSVlXU1VlQnpHTGx4dEs?oc=5"
+    },
+    {
+      "idx": 53,
+      "title": "Delta AI Bir Yolcuyla Konuşurken Döndürme Uçuşunun Rezerve Edildiğini Söyledi, Sonra Tüm Biletleri İptal Etti",
+      "system_label": "QR (Qatar Airways) · 5% · tarih yok",
+      "verdict": "bad",
+      "reason": "İçerik tamamen Delta'nın yapay zeka asistanının bir yolcunun biletlerini iptal etmesiyle ilgili, Qatar Airways ile hiçbir ilgisi yok; %5 indirim etiketi de içerikle uyuşmuyor.",
+      "source": "",
+      "url": "https://www.aviationanalysis.net/delta-ai-told-a-passenger-her-return-flight-was-booked-then-canceled-the-entire-ticket/"
+    },
+    {
+      "idx": 54,
+      "title": "United MileagePlus: Mil kazanımı ve kullanım rehberi, elit statü ve daha fazlası",
+      "system_label": "EK (Emirates) · 10% · tarih yok",
+      "verdict": "bad",
+      "reason": "İçerik United Airlines'ın MileagePlus programıyla ilgili, Emirates ile hiçbir ilgisi yok; ayrıca bir sadakat rehberi, kampanya değil.",
+      "source": "",
+      "url": "https://thepointsguy.com/loyalty-programs/know-united-mileageplus/"
+    },
+    {
+      "idx": 55,
+      "title": "AJet Türkiye'de İç Hat Uçuşlarında %30 İndirim Başlattı",
+      "system_label": "VF (AJet) · 30% · tarih yok",
+      "verdict": "warn",
+      "reason": "AJet'in Türkiye iç hat uçuşlarında %30 indirim başlattığı açık ve gerçek bir kampanya gibi görünüyor ama satış tarihleri belirtilmemiş.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMiqgFBVV95cUxOTjB6SS1Wc1J6QlZ3TmNfT1dGWEd2RXhUQ3hvZTZEZTBCcVhBTmlDM0Z5SkxlSVFqdXlkZmE1bE1NSGNwV0JFbUJZdVg0bHpkU1dDZUtIWUVId3k0UjZCN19wc25tS2piZ3NMUXVWUi00ZWVlSGl4dmlLbU44SWF4Y0FTMWszcERHaDhlNmRyTjB2NUttdkVKWkt4MEg1V1pWTHV6YV9xRktjUQ?oc=5"
+    },
+    {
+      "idx": 56,
+      "title": "Alaska Atmos Rewards Küresel Kaçış Ödül Satışı: %50'ye Varan İndirim Kazan",
+      "system_label": "KL (KLM) · 50% · 2026-08-04→2026-08-08",
+      "verdict": "bad",
+      "reason": "İçerik Alaska Airlines'ın 'Atmos Rewards' ödül satışıyla ilgili, KLM ile hiçbir ilgisi yok; havayolu ataması tamamen yanlış.",
+      "source": "",
+      "url": "https://onemileatatime.com/deals/alaska-atmos-rewards-global-getaways/"
+    },
+    {
+      "idx": 57,
+      "title": "Bir Yılı Beklediğim Amex Transfer Bonusu Geri Döndü: Aktarılan Avios'un %30'u Ücretsiz",
+      "system_label": "BA (British Airways) · 30% · tarih yok",
+      "verdict": "bad",
+      "reason": "Bir Amex transfer bonusu (Avios'a %30 ücretsiz transfer) hakkında kişisel bir blog yazısı; bu bir kredi kartı promosyonu, British Airways'in kendi bilet kampanyası değil.",
+      "source": "",
+      "url": "https://thepointsguy.com/deals/transfer-bonus-from-amex-to-avios/"
+    },
+    {
+      "idx": 58,
+      "title": "Award Help: SFO to DEL/HYD | Nov 2026 – Dec 2026 / Jan 2027 | 2 Adults",
+      "system_label": "BA (British Airways) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "SFO-DEL/HYD için ödül bileti yardımı isteyen bir forum sorusu, kampanya değil.",
+      "source": "",
+      "url": "https://www.reddit.com/r/awardtravel/comments/1vergqq/award_help_sfo_to_delhyd_nov_2026_dec_2026_jan/"
+    },
+    {
+      "idx": 59,
+      "title": "Air Tahiti Nui İş Sınıfı (CDG>LAX) 57,500 AA Mil Worth It?",
+      "system_label": "AF (Air France) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "İçerik Air Tahiti Nui'nin business class'ı ve American Airlines miliyle ilgili, Air France ile hiçbir ilgisi yok; ayrıca kişisel bir değer analizi, kampanya değil.",
+      "source": "",
+      "url": "https://www.reddit.com/r/awardtravel/comments/1vepuvc/air_tahiti_nui_business_class_cdglax_57500_aa/"
+    },
+    {
+      "idx": 60,
+      "title": "British Airways, Avios + nakit fiyatını ödeme aşamasına kadar gösterdi, ardından her yolcu için vergileri 200$'dan fazla artırdı. Başka biri bunu gördü mü?",
+      "system_label": "BA (British Airways) · 30% · tarih yok",
+      "verdict": "bad",
+      "reason": "Metin British Airways'in ödeme aşamasında yolcu başına 200 dolardan fazla vergi artışı yaptığını anlatıyor — bu bir fiyat artışı şikayeti, ama discount_pct %30 olarak etiketlenmiş; indirim olarak yanlış etiketlenmiş bir fiyat artışı.",
+      "source": "",
+      "url": "https://www.reddit.com/r/awardtravel/comments/1vep5ee/british_airways_showed_one_avios_cash_price_until/"
+    },
+    {
+      "idx": 61,
+      "title": "Citi ThankYou Puanlarınızı Turkish Miles&Smiles'a 40% Bonus İle Transfer Edin: Değer Mi?",
+      "system_label": "TK (Turkish Airlines) · 40% · 2026-08-01→2026-08-31",
+      "verdict": "bad",
+      "reason": "Citi ThankYou puanlarının Miles&Smiles'a %40 bonusla transferi hakkında bir kredi kartı rehberi, Turkish Airlines'ın kendi bilet kampanyası değil.",
+      "source": "",
+      "url": "https://onemileatatime.com/deals/citi-turkish-miles-smiles-transfer-bonus/"
+    },
+    {
+      "idx": 62,
+      "title": "Lufthansa mil satın almalarında %50 bonus sunuyor",
+      "system_label": "LH (Lufthansa) · 50% · tarih yok",
+      "verdict": "bad",
+      "reason": "Lufthansa'nın mil satın almalarında %50 bonus sunması bir sadakat programı/mil satın alma promosyonu, bilet fiyatı indirim kampanyası değil.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMihAFBVV95cUxNVHVHN1c1TWhyQlktbnZkbTRoMExzMUN2MHRaeTFWQXliMGxWbnp2X25xUWRkSVNuRHYyZzU0QnNVU2MyX2NRcG1OTGt5Vm54alQ5Mm1yVHd6ZnFOOVVrTmFSa1ZRU1d4dUIyc2ZHMWk4ZVJBR3pyemdKaE85RmF4VlF3OVk?oc=5"
+    },
+    {
+      "idx": 63,
+      "title": "Great Deal: Transfer Amex Points To British Airways Avios With 30% Bonus",
+      "system_label": "BA (British Airways) · 30% · tarih yok",
+      "verdict": "bad",
+      "reason": "Amex puanlarının British Airways Avios'a %30 bonusla transferi bir kredi kartı promosyonu, BA'nın kendi bilet kampanyası değil.",
+      "source": "",
+      "url": "https://onemileatatime.com/deals/amex-british-airways-avios-transfer-bonus/"
+    },
+    {
+      "idx": 64,
+      "title": "American Airlines A321XLR Bayrak Gemisi Suites iş sınıfı JFK-LAX",
+      "system_label": "BA (British Airways) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "İçerik American Airlines'ın yeni A321XLR Flagship Suites ürünüyle ilgili, British Airways ile hiçbir ilgisi yok.",
+      "source": "",
+      "url": "https://thepointsguy.com/airline/reviews/american-airlines-a321xlr-flagship-suites-business-class-review/"
+    },
+    {
+      "idx": 65,
+      "title": "Nasıl (ve neden) transfer edilebilir kredi kartı puanları kazanmalısınız",
+      "system_label": "BA (British Airways) · 4% · tarih yok",
+      "verdict": "bad",
+      "reason": "Transfer edilebilir kredi kartı puanları hakkında genel bir rehber, British Airways'e özgü değil, kampanya değil.",
+      "source": "",
+      "url": "https://thepointsguy.com/loyalty-programs/a-guide-to-earning-transferable-points/"
+    },
+    {
+      "idx": 66,
+      "title": "Türk Hava Yolları Ödül Biletlerini İptal Edip Yeniden Rezerve Etmek 16 Bin United Mil kazanmaya Değer mi?",
+      "system_label": "TK (Turkish Airlines) · 9% · tarih yok",
+      "verdict": "bad",
+      "reason": "THY ödül biletlerini iptal edip yeniden rezerve ederek United mili kazanmanın değerini tartışan kişisel bir analiz, gerçek bir indirim kampanyası değil.",
+      "source": "",
+      "url": "https://www.reddit.com/r/awardtravel/comments/1vcnuyk/is_it_worth_canceling_rebooking_turkish_airlines/"
+    },
+    {
+      "idx": 67,
+      "title": "Katar ve Emirates 2026'da Business Class'ı yükseltiyor",
+      "system_label": "EK (Emirates) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "Qatar ve Emirates'in 2026'da business class'ı yükseltmesi bir ürün geliştirme haberi, bilet indirim kampanyası değil.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMijAFBVV95cUxPVlF1SG5oVl9NQ2t6cDFpYkdwNWtLd25sdU9Gb2pHTmpLTGYxUzh2VkJrN0w1eDJNSmhMTmRVUVI5b1RLMGJTMy1zazhmcllBNkozV3pTNl9TSVZPQnFZS0RadUp4UHNhd1QwUHRHdXRLT1hVSE5rSDNGdVIwalNwLWs4ekRCX3Y5blVUbw?oc=5"
+    },
+    {
+      "idx": 68,
+      "title": "Etihad iş sınıfı fırsatları bugün sona eriyor",
+      "system_label": "EY (Etihad Airways) · — · tarih yok",
+      "verdict": "warn",
+      "reason": "'Etihad iş sınıfı fırsatları bugün sona eriyor' aciliyet vurgusuyla gerçek bir kampanyayı andırıyor ama indirim oranı ve tarihler belirtilmemiş.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMigAFBVV95cUxQd0J5eTIzNVBrOWZvbVUySzZpQUdWaHRMemoxS09KeXp1eFVuX2ZKWUxQYXdrX2hWMXB4R00zX1YyZklvWVFmZm8wM0p5UUtjMG43VE9fTlZwNEg4RXJGeTRDbi1vZWpZS2wwbnFFR0ktS2FWSHBRcUR3VHVyVGNjcw?oc=5"
+    },
+    {
+      "idx": 69,
+      "title": "Air France-KLM Flying Blue Promo Ödülleri: Seçilen Ödüllerde %25 Tasarruf Edin",
+      "system_label": "KL (KLM) · 25% · tarih yok",
+      "verdict": "warn",
+      "reason": "Flying Blue'nun seçili ödüllerde %25 tasarruf sağlayan promosyon ödülleri gerçek bir kampanya gibi görünüyor ama tarihler eksik.",
+      "source": "",
+      "url": "https://onemileatatime.com/deals/flying-blue-promo-rewards/"
+    },
+    {
+      "idx": 70,
+      "title": "Her seyahatseverin bilmesi gereken 9 uçuş ödülü rezervasyon hilesi",
+      "system_label": "KL (KLM) · 15% · tarih yok",
+      "verdict": "bad",
+      "reason": "'9 uçuş ödülü rezervasyon hilesi' genel bir ipuçları listesi, gerçek bir indirim kampanyası değil; %15 etiketi içerikle örtüşmüyor.",
+      "source": "",
+      "url": "https://thepointsguy.com/loyalty-programs/flight-award-booking-hacks/"
+    },
+    {
+      "idx": 71,
+      "title": "IAG Cargo'nun ilk yarı yıl geliri kapasite kesintileri nedeniyle %9,4 düşüş gösterdi",
+      "system_label": "QR (Qatar Airways) · 9% · tarih yok",
+      "verdict": "bad",
+      "reason": "İçerik IAG Cargo'nun kapasite kesintileri nedeniyle gelirinin %9,4 düşmesiyle ilgili — bu Qatar Airways değil IAG Cargo'ya ait bir haber, ayrıca gelir düşüşü %9 'indirim' olarak yanlış etiketlenmiş.",
+      "source": "",
+      "url": "https://www.stattimes.com/air-cargo/iag-cargo-h1-revenue-falls-94-amid-capacity-disruptions-1360107"
+    },
+    {
+      "idx": 72,
+      "title": "Emirates Uçak Biletleri için Ödeme Yönteminde Şaşırtıcı Bir Değişiklik Yaptı, Bu Kararı Genç Seyyahların Aldığını Söyledi",
+      "system_label": "EK (Emirates) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "Emirates biletleri için ödeme yönteminde değişiklik, bir fiyat indirimi değil, ödeme politikası haberi.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMipwFBVV95cUxOY3RySllMRFVUU3NvQzFvRkRrSTEzaGp1TUN0U3RvcjF1TW1KaWxkbmlaemR6eDZSc1B0MkFvd3FYTGlZZWhSQ0xROVcxcnpMNzR2U3A4SldtakFuTU1ucHR2RWhuMkQ0LVhIbUo1VFE0WE5QMGFlSHowczZSb3lLRTJWdUlmNTZTdHp0bUE1LUxFUkxsemlDWnZPN0xoalVtbDRxNEVCZw?oc=5"
+    },
+    {
+      "idx": 73,
+      "title": "İlk Eurostar Premier Uçuşum Düzgündü, Sessizdi ve Uçmadan Daha İyi",
+      "system_label": "KL (KLM) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "İçerik Eurostar (tren) Premier hizmetiyle ilgili kişisel bir deneyim yazısı, KLM ile hiçbir ilgisi yok; tren/rail içeriği olduğu için kampanya kriterlerine de girmiyor.",
+      "source": "",
+      "url": "https://liveandletsfly.com/eurostar-premier-brussels-amsterdam-first-impressions/"
+    },
+    {
+      "idx": 74,
+      "title": "Buy Alaska Atmos Rewards Points With 100% Bonus (1.88 Cents Each): Worth It?",
+      "system_label": "BA (British Airways) · 100% · tarih yok",
+      "verdict": "bad",
+      "reason": "İçerik Alaska Airlines'ın 'Atmos Rewards' puanlarının satın alınmasıyla ilgili, British Airways ile hiçbir ilgisi yok.",
+      "source": "",
+      "url": "https://onemileatatime.com/deals/buy-alaska-atmos-rewards-points/"
+    },
+    {
+      "idx": 75,
+      "title": "Air Canada daha ucuz Premium tarifeleri kısıtlamalarla sunmaya başlıyor",
+      "system_label": "LH (Lufthansa) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "İçerik Air Canada'nın kısıtlamalı ucuz Premium tarifeler sunmasıyla ilgili, Lufthansa ile hiçbir ilgisi yok.",
+      "source": "",
+      "url": "https://www.aerotelegraph.com/ticker/air-canada-fuehrt-guenstigere-premium-tarife-mit-einschraenkungen-ein/rsltj2v"
+    },
+    {
+      "idx": 76,
+      "title": "Emirates, bazı yolcular için hava yolu ücretlerinde öğrenci indirimi ve ek bagaj sunuyor",
+      "system_label": "EK (Emirates) · — · tarih yok",
+      "verdict": "warn",
+      "reason": "Emirates'in bazı yolcular için öğrenci indirimi ve ek bagaj sunması gerçek bir kampanya gibi görünüyor ama indirim oranı ve tarihler belirtilmemiş.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMirwFBVV95cUxNT21oSjhJUjNoVGZ3cWZ1UU9iUHdOWW4ydTVobEhiSzFuSXJqc0FoZ0xYWUFvQWZ4SkZvSzNPdnVSanAzdTdldzJjaGE5eHRPeWszWEhacjRPVDUtZ1Y0czg2ZE1CSjBZSWZ0bVg2Qi1RZHhkWENIeWFvV05JUG9NSEh4ZW1IZEZoUFhBZnJXMmV5d3ZodFU4ZTc0azVVTDhzM3VXcENXMEFieEgwalFN0gG3AUFVX3lxTE94NVBVWGxKaTRxcVhTc1hXeGdweHVOeXVqVWY1ei10SlNTS25nZmVHSEZ5TjB4NnBJY2tjSnJwTzZFcHBLOW1YSlpTaDNBeXRWZTR0OXI0R2pNbWxyYjU4cXZfMXhNRUdyZldPa1p6MUV6d3dkYTU3QjBza3BxUDZlTlNkd0I4UDVhYmllcEhjeU5oSk1VejhLWURXMTNGcC01QTh"
+    },
+    {
+      "idx": 77,
+      "title": "Qatar business-class award from South America to Asia for 63k Avios + £100. Normal or pricing glitch?",
+      "system_label": "QR (Qatar Airways) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "Qatar business class ödül biletinin fiyatlama hatası olup olmadığını soran bir forum gönderisi, resmi bir kampanya değil.",
+      "source": "",
+      "url": "https://www.reddit.com/r/awardtravel/comments/1vaoxt5/qatar_businessclass_award_from_south_america_to/"
+    },
+    {
+      "idx": 78,
+      "title": "British Airways 2000 yılında yatar koltuklu Business Class'ı başlattı",
+      "system_label": "BA (British Airways) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "British Airways'in 2000 yılında yatar koltuklu business class başlatması tarihi bir bilgi, güncel bir kampanya değil.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMilwFBVV95cUxOTF9DbG5ITVJVbnFXcjB2QjkzTkk1ZkJJTzhEc2VqYXJQbml6ZGpLSXlXenVya0x0LTVucHhraFdqSEsxdEFKX2JGSXRPS01EamZTRU5HOGp4UWQxOTZMTmtLQm90MmR5eVpvTlZEbHc0MzhkbS1waUtBN1c1bF9paUJESm1LNml3RzNIcVZ4SXBQelZDUkpj?oc=5"
+    },
+    {
+      "idx": 79,
+      "title": "Hangi Havayolu Dünyaya Yatay İş Koltuklarını Tanıttı?",
+      "system_label": "BA (British Airways) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "'Hangi havayolu yatay iş koltuklarını tanıttı?' genel bir trivia sorusu, British Airways'e özgü bir kampanya değil.",
+      "source": "",
+      "url": "https://simpleflying.com/which-airline-introduced-lie-flat-business-class-seats-world/"
+    },
+    {
+      "idx": 80,
+      "title": "Kredi Kartı Puanlarınızı Cathay Pacific'e 10% Bonus İle Transfer Edin: Değer Mi?",
+      "system_label": "BA (British Airways) · 10% · 2026-07-27→2026-08-28",
+      "verdict": "bad",
+      "reason": "İçerik kredi kartı puanlarının Cathay Pacific'e %10 bonusla transferiyle ilgili, British Airways ile hiçbir ilgisi yok.",
+      "source": "",
+      "url": "https://onemileatatime.com/deals/cathay-pacific-asia-miles-transfer-bonus/"
+    },
+    {
+      "idx": 81,
+      "title": "Emirates öğrencilere daha ucuz biletler ve daha fazla bagaj sunuyor",
+      "system_label": "EK (Emirates) · — · tarih yok",
+      "verdict": "warn",
+      "reason": "Emirates'in öğrencilere daha ucuz bilet ve ek bagaj sunması (76. kayıtla aynı kampanyanın olası bir tekrarı) gerçek görünüyor ama indirim oranı ve tarihler belirtilmemiş.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMisAFBVV95cUxNODZsV1BSdXhTd3RIY3dKTnV5SXZhVzBjdEVEOVRSTnZCekJXQ2N3RXdRZGwxdTFDQ185UEplbVJNZ2xnVUxyX0FiYW5US3ZIUHVfMG1sRWo3UkNhUC15XzZUSldEbUI0Q092b3FwVEwzZlNBLTQ2ejdmSDFRMlo2NmtWRUR4SzJzRlhrb3pWOW9fendfSGFSVzdSR2daM2RiNFNaM294QzVIUDQ2Q010VNIBwwFBVV95cUxOV0dHV3lHUEdoTjVCRDJBaVhUUlNIN3FlVnp4OGpPRUtDbnhfTmFQUWY4VVkzMlR4RkJZWnZHN190VXdNUHQ0bEUtN3Z1akdxWFZiN3VoYmpnQjdIa1FkNVF1QUFURXFFQjQxVC1TLTdCZ2JIMkZqbnVJUG1RejRPT3hMaGhGQTlHdjRxcGhLaV9aLVotMHpXZml6TWV3WWtDWjh"
+    },
+    {
+      "idx": 82,
+      "title": "Air Canada \"Temel\" İş Sınıfını Tanıttı: Ücretli Koltuk Seçimi ve Değişim Ücretleri",
+      "system_label": "EK (Emirates) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "İçerik Air Canada'nın 'Temel' iş sınıfı ve yeni ücretleriyle ilgili, Emirates ile hiçbir ilgisi yok; ayrıca yeni ücretler tanıtılıyor, indirim değil.",
+      "source": "",
+      "url": "https://liveandletsfly.com/air-canada-basic-business-class-fares/"
+    },
+    {
+      "idx": 83,
+      "title": "Emirates Skywards, ortak ödül uçuşlarında %25 indirim sunuyor",
+      "system_label": "EK (Emirates) · 25% · tarih yok",
+      "verdict": "warn",
+      "reason": "Emirates Skywards'ın ortak ödül uçuşlarında %25 indirim sunması gerçek bir kampanya gibi görünüyor ama tarihler eksik.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMikgFBVV95cUxOMUtpZUpHaGF6cU5hbHV1TjhUdHRqUmNZR0w3WExrWGJKUF9SSExUS1hRbC02bkFfS1pPSkpXZ0Q5LXNSRjkxNUZDcXZRYWNqQWF1UHBsWVB6Q0pwaHM5ckhJNi1GVHF5UlJRWE11RURMdktwekFoUmRjbUEtVVpCQXhjLUo0ZlB1UVplbktWekVJZw?oc=5"
+    },
+    {
+      "idx": 84,
+      "title": "2026'da Premium Ekonomi Yemeği Hakkında Yolcuların Bilmediği 5 Şey",
+      "system_label": "EK (Emirates) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "Premium ekonomi yemeği hakkında genel bir liste yazısı, belirli bir havayolu kampanyasıyla ilgisi yok.",
+      "source": "",
+      "url": "https://simpleflying.com/5-things-passengers-dont-know-premium-economy-dining-2026/"
+    },
+    {
+      "idx": 85,
+      "title": "Award Flight Help for Iceland Trip",
+      "system_label": "LH (Lufthansa) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "İzlanda gezisi için ödül bileti yardımı isteyen bir forum sorusu, Lufthansa'ya özgü bir kampanya değil.",
+      "source": "",
+      "url": "https://www.reddit.com/r/awardtravel/comments/1v8e91k/award_flight_help_for_iceland_trip/"
+    },
+    {
+      "idx": 86,
+      "title": "Marriott Bonvoy: Puanlara, elit statüye ve daha fazlasına ilişkin kapsamlı rehber",
+      "system_label": "EK (Emirates) · 10% · tarih yok",
+      "verdict": "bad",
+      "reason": "İçerik Marriott Bonvoy otel sadakat programıyla ilgili, Emirates ile hiçbir ilgisi yok.",
+      "source": "",
+      "url": "https://thepointsguy.com/loyalty-programs/award-travelers-guide-to-marriott-bonvoy/"
+    },
+    {
+      "idx": 87,
+      "title": "Bilt Kiralama Günü (1 Ağustos): Otel durum eşleştirmesi, futbol severler için özel bir deneyim ve daha fazlası",
+      "system_label": "EK (Emirates) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "'Bilt Kiralama Günü' kira ödeme programı ve otel statü eşleştirmesiyle ilgili, Emirates ile hiçbir ilgisi yok.",
+      "source": "",
+      "url": "https://thepointsguy.com/news/bilt-rent-day-promo/"
+    },
+    {
+      "idx": 88,
+      "title": "Qatar Airways bu hafta rezervasyon yaptırırseniz büyük indirimler duyurdu",
+      "system_label": "QR (Qatar Airways) · — · tarih yok",
+      "verdict": "warn",
+      "reason": "Qatar Airways'in bu hafta rezervasyon yapanlara büyük indirimler duyurduğu belirtiliyor ama indirim oranı ve tarihler verilmemiş, genel/belirsiz bir ifade.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMif0FVX3lxTE1wZXNQckZnTUhlOHByNGhEei10NjIxVm1xek9nUXhFMTZpbHlXalk5VkpZcWQ5cG9QUllmZ2ZDckt1S1pCTHVpX0lwTUh0dXV6YXdQb0pUenZCY3dwaXZtVEVEdlE5cHQ2NDdxNmlkcmNhYmJHUTNJSHRudkVsc0U?oc=5"
+    },
+    {
+      "idx": 89,
+      "title": "Lufthansa Grubu, check-in'de ücretsiz uzun mesafe koltuk değişikliklerini sonlandırıyor",
+      "system_label": "LH (Lufthansa) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "Lufthansa Grubu'nun check-in'de ücretsiz uzun mesafe koltuk değişikliğini sonlandırması bir hizmet kısıtlaması/yeni ücret, indirim kampanyası değil.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMieEFVX3lxTE1kejZRb2pEYUVYX3g1SGV2YVlPZlV6SUJOd0dMemR3aVZBbHg2bEdXa0lOaUJxUTBfMm90aktJaWkweXcwSVo5TGFrd2JrVzY5c2xWVTlKY0VnZFhwNEY4WGNoeTNmQTJQS25ERS1kOWw1UHhGdE5mbQ?oc=5"
+    },
+    {
+      "idx": 90,
+      "title": "Flying Blue sadakat programı - Air France-KLM dönen yolculara bahis yapıyor",
+      "system_label": "KL (KLM) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "Flying Blue sadakat programı stratejisi hakkında genel bir yazı, bilet indirim kampanyası değil.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMivAFBVV95cUxQOFIxUXZnMFliOU1Qc2UxZmJjXzhDT0ozeTZBeHgxOVl5b2lSNHRlbTctV0xWak5HY2VwXzhhWWZnSGRfSTlLRUZoVXppaHVqeDdtbVNwLURIaS1BVFI1bWloUTZSZ2UxN1dPQVFFZk93WXh2UExlQllrSzhRbmFzLUNLRVBSeGhGYmVCYXlvWGJGSkhVTUtqU0tFcW1saG9ZQld4OFZTalFKVG9EcWc5SWFKdS1VUGdqSDVTUA?oc=5"
+    },
+    {
+      "idx": 91,
+      "title": "Lufthansa Allegris İş Sınıfı Koltuk Ücretleri Açıklanıyor: Karmaşık Bir Sistem",
+      "system_label": "EK (Emirates) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "İçerik Lufthansa'nın Allegris business class koltuk ücretleriyle ilgili, Emirates ile hiçbir ilgisi yok; ayrıca yeni ücretlerden bahsediyor, indirim değil.",
+      "source": "",
+      "url": "https://onemileatatime.com/insights/lufthansa-allegris-business-class-seat-fees/"
+    },
+    {
+      "idx": 92,
+      "title": "75k Avios için Katar İş + First Bangkok - değer mi?",
+      "system_label": "QR (Qatar Airways) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "75k Avios ile Katar business+first Bangkok biletinin değip değmediğini soran kişisel bir soru, resmi kampanya değil.",
+      "source": "",
+      "url": "https://www.reddit.com/r/awardtravel/comments/1v6knsz/75k_avios_for_qatar_business_first_to_bangkok/"
+    },
+    {
+      "idx": 93,
+      "title": "Öğrenci misin? Turkish Airlines ile daha ucuza uçabilirsiniz. İndirimler, avantajlar: bilmemiz gereken her şey",
+      "system_label": "TK (Turkish Airlines) · — · tarih yok",
+      "verdict": "warn",
+      "reason": "Turkish Airlines'ın öğrenci indirimleri ve avantajları hakkında gerçek bir kampanya gibi görünüyor ama indirim oranı ve tarihler belirtilmemiş.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMi4wFBVV95cUxPTHRDeUU4M3N2OFdfNm5rekg1VE9TNnVaUERmMGZFUHR2TFlsOXhIZzZYQjFmU2o1SVc4SEhHYzQ2VWsxWmRoNXplcnBLSWRlLXpvV01PUmc5S25MX091TzlxWVF0TEZlZGk3N0JINlRTd05CQktIRVdUXzlWc01oTVNiMkVWTk9VR3phaFhHano3M0JLWHFzcmFxeGVRaDhfU05JbUhGQURwX3dKcmVtcURIYmQyV0RqaDJWYm9ZRUdVc2s1SU9jMENaYjBJc21sazhrU3dXLUl0Zl9yOFE1Ri1yRQ?oc=5"
+    },
+    {
+      "idx": 94,
+      "title": "Katar Havayolları - Avios ile bir bacak ve nakit ile diğer bacak için gidiş dönüş uçuş rezervasyonu yapabilir miyim?",
+      "system_label": "QR (Qatar Airways) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "Avios ve nakit karışık gidiş-dönüş rezervasyonu yapılıp yapılamayacağını soran bir forum sorusu, kampanya değil.",
+      "source": "",
+      "url": "https://www.reddit.com/r/awardtravel/comments/1v6902a/qatar_airways_can_i_book_a_return_flight_with/"
+    },
+    {
+      "idx": 95,
+      "title": "Temmuz 2026 için puan ve mil seyahat fırsatları",
+      "system_label": "EK (Emirates) · 25% · tarih yok",
+      "verdict": "bad",
+      "reason": "'Temmuz 2026 için puan ve mil seyahat fırsatları' başlığı Emirates'e özgü görünmüyor, muhtemelen çoklu program/havayolu kapsayan genel bir derleme yazısı; havayolu ataması belirsiz/yanlış.",
+      "source": "",
+      "url": "https://thepointsguy.com/deals/points-and-miles-travel-deals/"
+    },
+    {
+      "idx": 96,
+      "title": "Wyndham Rewards Earner Kartı İncelemesi: Yıllık Ücret Olmadan Katı Fırsatlar",
+      "system_label": "TK (Turkish Airlines) · 10% · tarih yok",
+      "verdict": "bad",
+      "reason": "İçerik Wyndham Rewards otel kredi kartıyla ilgili, Turkish Airlines ile hiçbir ilgisi yok.",
+      "source": "",
+      "url": "https://thepointsguy.com/credit-cards/reviews/wyndham-rewards-earner-card-review/"
+    },
+    {
+      "idx": 97,
+      "title": "Özel indirim için son şans: Roame.travel ödül uçuşlarını bulmak için harika bir yol",
+      "system_label": "LH (Lufthansa) · 25% · tarih yok",
+      "verdict": "bad",
+      "reason": "İçerik üçüncü taraf bir araç olan Roame.travel'ın kendi indirimiyle ilgili görünüyor, Lufthansa'ya özgü bir kampanya olduğu net değil/yanlış atanmış.",
+      "source": "",
+      "url": "https://thepointsguy.com/news/roame-travel-for-award-bookings/"
+    },
+    {
+      "idx": 98,
+      "title": "10 ways you can get at least $2,050 in value from 100,000 Chase points",
+      "system_label": "LH (Lufthansa) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "100.000 Chase puanından değer elde etme yolları hakkında genel bir rehber, Lufthansa'ya özgü bir kampanya değil.",
+      "source": "",
+      "url": "https://thepointsguy.com/loyalty-programs/2050-from-100000-chase-ultimate-rewards-points/"
+    },
+    {
+      "idx": 99,
+      "title": "Air France, Paris'te Ara Durağına Kısa Tatil Yapma İmkanı Sunuyor",
+      "system_label": "AF (Air France) · — · tarih yok",
+      "verdict": "warn",
+      "reason": "Air France'in Paris'te ara durak (stopover) imkanı sunması gerçek bir ürün/program duyurusu ama net bir bilet indirimi olduğu belirsiz, tarihler de yok.",
+      "source": "",
+      "url": "https://www.aerotelegraph.com/ticker/air-france-macht-zwischenstopp-in-paris-zum-kurzurlaub/n2bd0cg"
+    },
+    {
+      "idx": 100,
+      "title": "Etihad'ın AED730 İndirimli Uçak Bileti Satışından Riyad'ın Dev MBS Muralline, 5 KİK Güncellemesi",
+      "system_label": "EY (Etihad Airways) · — · tarih yok",
+      "verdict": "warn",
+      "reason": "Etihad'ın AED730 indirimli bilet satışı bir GCC haberleri derlemesinin (5 haberden biri) içinde geçiyor; gerçek bir kampanya unsuru var ama net şekilde ayrıştırılmamış, tarihler yok.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMirwFBVV95cUxNTm9EQk1mUVd6UWwyTUdhRkJMUGlTcmF2bUViSmRWemhZQk9KVHd2Q2I4N3l2TE9jWjdKa3lsb3dMbkFxZjVPaE1aM2Vjam93ZHE1WTJxMkZ4X0pZak5DMWR5ek9XRDREc01tMkpSZFBoTFAwVVBpTl9GRHdzREltdlZpMVVBRW9BeHJlQjZWeE1kY2F2eTZXc1d3WmR2c3ZKSEFrRUxrdGZ0SmJhMVM40gG0AUFVX3lxTE1Wbmx4WmdOd29HWG5hRTZSZU5Ka2FfNEF5SVJ2VjNVR1NkcGVpSmV0YTJaNDBnNHRLdWl6TUhsWmJxMGM5NzZ5TEhTQ2xiQnVENlVlOTlVZWg4ci1ydE1CR2pHSF81UE5tWDdpbDJDbkp6azAtS1RhOEVXaTdqdEdDY1dvNGdSV2NfMWMycUQ2a1pLdFJBZ2RkSmV0aWFZTkh5a19"
+    },
+    {
+      "idx": 101,
+      "title": "Katar Havayolları'nın \"Comfort+\" Gerçekten Ne & Neden Gerçek Premium Ekonomi Değil",
+      "system_label": "QR (Qatar Airways) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "Qatar Airways'in 'Comfort+' ürününün gerçek premium ekonomi olmadığını tartışan bir eleştiri yazısı, indirim kampanyası değil.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMingFBVV95cUxPck9wam52aFE2RHUxc1FrM1QweW9vRGJmelJielFtQnRnNlRYQ3JpdTByR0pEVmZkMkVDTEkxVlNkQjBRMWs1VFowZmFjYmVxckdObXcwZng3SlJYNXZHTjU2bS0wa1l3bWtRcGRCV3lnamsxMWpnMmJhY0RqMGxYY21fdFNUOTAwN2poOEFqcWRJTUVuT29fa1U5R0FqQQ?oc=5"
+    },
+    {
+      "idx": 102,
+      "title": "120.000 + ~500$'lık iş sınıfı, Premium Economy'nin bulunmaması durumunda 3 kişilik bir aile için uygun mu?",
+      "system_label": "KL (KLM) · 30% · tarih yok",
+      "verdict": "bad",
+      "reason": "3 kişilik bir aile için business class ödül biletinin değip değmediğini soran kişisel bir forum sorusu, kampanya değil; %30 etiketi içerikle örtüşmüyor.",
+      "source": "",
+      "url": "https://www.reddit.com/r/awardtravel/comments/1v4eagm/is_120k_500pp_business_worth_it_for_a_family_of_3/"
+    },
+    {
+      "idx": 103,
+      "title": "Emirates, Ekonomi Koltuklarına 'Oyun Değiştiren' Özellik Kurdu",
+      "system_label": "EK (Emirates) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "Emirates'in ekonomi koltuklarına yeni bir özellik eklemesi bir ürün haberi, bilet indirim kampanyası değil.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMinAFBVV95cUxNRkQ2WVBxMXdxSmFPRW9RLUlEZUluV053S1h3MzFKZnVjTkVlazJIMW5rQlRfdFlJMkZzVE1KWXJBMm5mSlhPbzU1bHpsMWtUNTZpMjEzV3NxLWphVnkyeXFIcnVLQ2hjdm1KWW1MV1JMQzJYVXFlaS1wd0V1SkVpTjA1V3FWR2NQd1pxLUtjNTNtcVVndEtGYXZXeDk?oc=5"
+    },
+    {
+      "idx": 104,
+      "title": "Lufthansa, Austrian, Swiss gibi havayollarında en ön koltuklarda oturmak isteyenler artık ekstra ücret ödeyecek",
+      "system_label": "LH (Lufthansa) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "Lufthansa, Austrian, Swiss gibi havayollarının ön sıra koltuklar için ekstra ücret almaya başlaması yeni bir ücret, indirim değil.",
+      "source": "",
+      "url": "https://www.aerotelegraph.com/ticker/wer-bei-lufthansa-austrian-swiss-und-co-ganz-vorne-sitzen-will-muss-kuenftig-extra/x2eb6f8"
+    },
+    {
+      "idx": 105,
+      "title": "Etihad 30'dan fazla varış noktasına yüzde 20 indirim sunuyor",
+      "system_label": "EY (Etihad Airways) · 20% · tarih yok",
+      "verdict": "warn",
+      "reason": "Etihad'ın 30'dan fazla varış noktasına %20 indirim sunması gerçek bir kampanya gibi görünüyor ama tarihler belirtilmemiş.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMihgFBVV95cUxPbWQtdTE2eUQwbi0zRHM5TVpEQldpYmVWUzlXRm5ScmYyTlNxRk5Ia1duX3p4dURmd3NOUDlDckRDRXlKUDFBVWYyRVAwREE3emtiUTVZX1VES25qMFRYWFhnR2tTaXRIOVJFNjRTNWR4Znl1TW5Qa3RTOUE0djZCUGZ1YTlsUQ?oc=5"
+    },
+    {
+      "idx": 106,
+      "title": "Etihad benimden nakit ücretin VE milin yanında DAHA FAZLA nakit ödememi mi istiyor?",
+      "system_label": "EY (Etihad Airways) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "Etihad'ın nakit ücretin yanında daha fazla mil talep ettiğine dair kişisel bir şikayet/soru, bir fiyat artışı algısını yansıtıyor, indirim kampanyası değil.",
+      "source": "",
+      "url": "https://www.reddit.com/r/awardtravel/comments/1v3hup6/etihad_wants_me_to_pay_more_cash_and_miles_than/"
+    },
+    {
+      "idx": 107,
+      "title": "Yeni LNG Belirsizliğini Fiyatlama - Petrol, Gaz ve Elektrik - Birleşik Arap Emirlikleri",
+      "system_label": "EK (Emirates) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "İçerik BAE'deki LNG/petrol/gaz/elektrik fiyatlama belirsizliğiyle ilgili bir enerji piyasası haberi; 'Emirates' burada muhtemelen ülke (BAE) referansı, havayolu ile ilgisi yok.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMiigFBVV95cUxPb3N1NU1RVEcyVHYzY2R5anlWQVpFQ3Y0TTNYTUdjY2tmWEFwMURCVlB5eWFBRFVHWVJZWmhBbHVGWVZVOUtVR0wxd1NzN2trZnhqZDZ4MnhOMmNFcWlhdHk4MHJ2WFNsZWhVMngxSlRORU1xQjNPQUpmeTBNUmhSbkN1RFpremxPVGc?oc=5"
+    },
+    {
+      "idx": 108,
+      "title": "Etihad Airways 45'ten Fazla Varış Noktasına İndirimli Tarifelerde Artışa Gidiyor; 5 KİK Güncellemesi",
+      "system_label": "EY (Etihad Airways) · — · tarih yok",
+      "verdict": "warn",
+      "reason": "Etihad'ın 45'ten fazla varış noktasına indirimli tarife artışı bir GCC haberleri derlemesinin içinde geçiyor; gerçek kampanya unsuru var ama tarihler/oran net değil, ayrıca 109. kayıtla aynı kampanya olabilir.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMi2gFBVV95cUxQNUsyemNVNllUTkxUQU8wYndvQjlLanB3WHZjbTVLbzdwYWdmU3hWam9YVkxQM3NZWlR0Z1ZwVGl1eEtEYy05cDFFZFMzdFo3WjVrMWJ6MUlQV0FubkhzTThNWGtjTkFCQko1MXdwVXhUOHd6TV93VE5MbUZ5RFd5cHc0S2o1SWNFanlEc240a1BvT1RRdWVRMDJqd0sxMi1teEZMUm42TF9QY2FDenpFOWU5VFRaeXdGRUdDWmdCY3dJbEIzZ2FPWTRiZ2YwOGQ5VnBPbjQzV1Rmd9IB3wFBVV95cUxPVjJ1MXVJTW1SYXcwc1h2Q3hRMWhaUFMzbWpXYTJyMXJRX200STVOeE5lbEw0MmNkeWFQZ1dlS1lKN29nSXkzUzhTRVkzSWtFOS1CaGV6QzNrZnYweUEzZ0hXcUF1dUExTjhEZ2hvdy11NnZNU0JHZFk"
+    },
+    {
+      "idx": 109,
+      "title": "Etihad 45'ten fazla varış noktasında %20 oranında indirimli bilet kampanyası başlattı: UAE seyahatseverleri nasıl tasarruf edebilecek",
+      "system_label": "EY (Etihad Airways) · 20% · tarih yok",
+      "verdict": "warn",
+      "reason": "Etihad'ın 45'ten fazla varış noktasında %20 indirimli bilet kampanyası başlattığı net şekilde anlatılıyor (muhtemelen 100/108. kayıtlarla aynı kampanya), ama satış tarihleri belirtilmemiş.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMixgFBVV95cUxPdVhxbVBUNXRTUjU0WGtwbHJQMGNpVXN0bjlsTEJUOGZlal9jUVZQWm9yQWxfbEoyRDhBbjkyR3ByQmhZS1dJRk5Ldk1PalhwUkctenpUb01iYUNjVmlOeHphdWdrc01LdE80OEUxWTRUejF5Ym5iMk1kX3R6VzdPSkhMREhBSk16LVFPcVZBT19Mc3RvMlNSMk5oREo5a2I4LUxzamJPc3IwUTJDdHUyZ2lkajNUVEdFSWdGNlZNc2s3bFlWOWfSAdgBQVVfeXFMUGx2MGNpV1dyVk5wU0d4X3gtVndMMzJ1Q202RWVqN0djRzIzT21QTDcxM21adXVLSDZORk5tRnRvZmJXcy1Xc3Y0ZHVYU0xTNWdLT2gwZ0hlUUlnbHplbnAxMk5sdzhpZmFnQVVHbGk1THhUQTFWTnVGMEZaLWxMVnctaUJyTEV4MkgybkZ"
+    },
+    {
+      "idx": 110,
+      "title": "Transfer Citi Points To Air France-KLM Flying Blue With 20% Bonus: Worth It?",
+      "system_label": "KL (KLM) · 20% · tarih yok",
+      "verdict": "bad",
+      "reason": "Citi puanlarının Air France-KLM Flying Blue'ya %20 bonusla transferi bir kredi kartı promosyonu, KLM'in kendi bilet kampanyası değil.",
+      "source": "",
+      "url": "https://onemileatatime.com/deals/citi-flying-blue-transfer-bonus/"
+    },
+    {
+      "idx": 111,
+      "title": "Pegasus: Genç BolBol üyelerine yurt dışı uçuşlarda %50 indirim",
+      "system_label": "PC (Pegasus Airlines) · 50% · tarih yok",
+      "verdict": "warn",
+      "reason": "Pegasus'un genç BolBol üyelerine yurt dışı uçuşlarda %50 indirimi gerçek bir kampanya gibi görünüyor ama tarihler belirtilmemiş.",
+      "source": "",
+      "url": "https://www.flypgs.com/kampanyali-ucak-biletleri/genc-bolbollulara-yurt-disi-ucuslari-50-indirimli"
+    },
+    {
+      "idx": 112,
+      "title": "Pegasus: yurt içi uçuşlarda mobil uygulamaya özel %30 indirim",
+      "system_label": "PC (Pegasus Airlines) · 30% · tarih yok",
+      "verdict": "warn",
+      "reason": "Pegasus'un mobil uygulamaya özel yurt içi %30 indirimi gerçek bir kampanya gibi görünüyor ama tarihler belirtilmemiş.",
+      "source": "",
+      "url": "https://www.flypgs.com/kampanyali-ucak-biletleri/bolbollulara-yurt-ici-ucuslari-mobil-uygulamaya-ozel-30-indirimli"
+    },
+    {
+      "idx": 113,
+      "title": "Pegasus: 2026 yaz sezonu yurt dışı biletleri BolBol üyelerine 9 Euro + vergi",
+      "system_label": "PC (Pegasus Airlines) · — · tarih yok",
+      "verdict": "warn",
+      "reason": "Pegasus'un 2026 yaz sezonu BolBol üyelerine 9 Euro + vergi yurt dışı bileti gerçek bir kampanya gibi görünüyor; sezon belirtilse de kesin tarih aralığı yok.",
+      "source": "",
+      "url": "https://www.flypgs.com/kampanyali-ucak-biletleri/2026-yaz-sezonu-yurt-disi-biletlerim-bolbollura-9-euro-vergilerden-baslayan-fiyatlarla"
+    },
+    {
+      "idx": 114,
+      "title": "Qatar Airways: birlikte seyahatte %25'e varan indirim, öğrencilere %20",
+      "system_label": "QR (Qatar Airways) · 25% · tarih yok",
+      "verdict": "warn",
+      "reason": "Qatar Airways'in birlikte seyahatte %25'e varan, öğrencilere %20 indirimi gerçek bir kampanya gibi görünüyor ama tarihler belirtilmemiş.",
+      "source": "",
+      "url": "https://www.travelandtourworld.com/news/article/nx1x6rzjiftn/"
+    },
+    {
+      "idx": 115,
+      "title": "Kuzey Kıbrıs Uçuşları Salı'dan Perşembe'ye %40 indirimli!",
+      "system_label": "PC (Pegasus Airlines) · 40% · 2026-08-21→2026-08-23",
+      "verdict": "ok",
+      "reason": "Kuzey Kıbrıs uçuşlarında Salı-Perşembe %40 indirim; makul, kısa süreli ve net tarihli gerçek bir kampanya.",
+      "source": "",
+      "url": "https://www.flypgs.com/kampanyali-ucak-biletleri/kuzey-kibris-ucuslari-salidan-persembeye-40-indirimli-2026"
+    },
+    {
+      "idx": 116,
+      "title": "Türk Hava Yolları Temmuz Havayolu Satış Kampanyalarını Liderlik Ediyor: Philippine, Singapore ve Virgin Atlantic Sınırlı Süreli Küresel Tarifeli Tekliflerini Sunuyor: Bilmen Gereken Her Şey Burada",
+      "system_label": "TK (Turkish Airlines) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "Başlığın asıl içeriği Philippine, Singapore ve Virgin Atlantic'in kendi kampanyalarıyla ilgili; Turkish Airlines yalnızca 'lider' olarak anılıyor, THY'ye özgü somut bir kampanya değil — havayolu ataması yanıltıcı.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMibkFVX3lxTE9Sd0JZM1pJejE0cXhsTjhOZm5KQVRQbzh1NXZzMm5lTkZYc005R1VGMDlaMUJQTlVwLTc2Z3RoMFhWNmJ6V1AxN21WQ3Y0bERSUi1zYU1nSk9pblI4VFQzMVhjeDNPLU9SQ3h4bGJR?oc=5"
+    },
+    {
+      "idx": 117,
+      "title": "Aerolíneas Argentinas Arjantinli ihracatçılar için indirimli uluslararası ücretler sunuyor",
+      "system_label": "EK (Emirates) · 80% · tarih yok",
+      "verdict": "bad",
+      "reason": "İçerik Aerolíneas Argentinas'ın Arjantinli ihracatçılara sunduğu indirimli ücretlerle ilgili, Emirates ile hiçbir ilgisi yok; ayrıca %80 gibi aşırı yüksek bir indirim oranı da şüpheli.",
+      "source": "",
+      "url": "https://www.aviacionline.com/english/commercial-aviation/latin-america-and-caribbean/argentina/aerolineas-argentinas-offers-discounted-international-fares-for-argentine-exporters_a6a5a399a2ce7e14c8ca2ac2d"
+    },
+    {
+      "idx": 118,
+      "title": "Etihad Guest, Premium Üyeler için İndirimli Fiyatlandırma Başlattı",
+      "system_label": "EY (Etihad Airways) · — · tarih yok",
+      "verdict": "warn",
+      "reason": "Etihad Guest'in premium üyeler için indirimli fiyatlandırma başlatması gerçek bir kampanya gibi görünüyor ama oran/tarih belirtilmemiş; 130. kayıtla aynı haber olabilir.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMicEFVX3lxTE9vQXFDOXdnb2hnRmVCR3RGTmhMV1hsMjk1Y0NkMkhjQ3ZwOExSNGRkOWpjNFYtUkFsMHFKeU55d1NvMkw2eG1fZjcwSlF5VGRKeTFEN0E4czZKZExuY2NqaGNhc1dTM1NCTXpVcjNfZGo?oc=5"
+    },
+    {
+      "idx": 119,
+      "title": "Turkish Airlines expands fare categories for Aussies flying beyond Türkiye",
+      "system_label": "TK (Turkish Airlines) · — · tarih yok",
+      "verdict": "warn",
+      "reason": "Turkish Airlines'ın Türkiye ötesine uçan Avustralyalılar için ücret kategorilerini genişletmesi gerçek bir THY haberi ama net bir indirim yüzdesi/tarih yok, fiyatlandırma yapısı değişikliği daha çok.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMigAFBVV95cUxOdWlhMmxkcG5IdEVfYkk0SEJ2dFU3UWxkQ1BOOE5UeXpqUnY1VU9PTEt3eVh0UWFyTjNSY0ItUC1oSG1qdVZ1NkFCcFR1c0xUNlFNd2xkMVJXc1NxTUstbDloS0FCeVJnenJfRHlzb3JtTDU2UXpGSkxDWVI1QlhIZw?oc=5"
+    },
+    {
+      "idx": 120,
+      "title": "Planning your first Etihad Rail trip? Here’s every ticket price to know",
+      "system_label": "EY (Etihad Airways) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "İçerik açıkça Etihad Rail (tren) ile ilgili, Etihad Airways (havayolu) değil — tren/rail içeriği olduğu için kampanya sayılmaz.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMickFVX3lxTE9pVWpURXdReDJobnQ1R3pKNEVlU3l6WjEwb21MZVo0VjViUmNWbFNmclgyYkJHTjkwZ2U1YUtWcmlpR3U1LU9QZzhyWTJ3MVlTU0hvWjlCYm5tRVVEdV84ZFBUM3BEdDQxQy1zTVJuMEpDZw?oc=5"
+    },
+    {
+      "idx": 121,
+      "title": "Etihad Airways Unveils Exclusive India-Origin Business Class Promotion Offering Discounted Premium Long-Haul Travel Across 45+ International Destinations Including Europe, USA, Africa and Central Asia Through Abu Dhabi Global Transit Gateway",
+      "system_label": "EY (Etihad Airways) · — · tarih yok",
+      "verdict": "warn",
+      "reason": "Etihad'ın Hindistan kaynaklı business class'ta 45'ten fazla varış noktasına indirim sunan detaylı bir kampanya duyurusu; içerik güvenilir görünüyor ama oran/tarih alanları boş.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMibkFVX3lxTE9tSGJtTk1kalJtWm0zWGNqcXhBV1hOelVoS0RBNWdyRE9hdzFrMFp2VWtScGNJMC1FY2Z5LU1GMjdNS1VlTUNCcDlhVVg5NFdYN3MwQ05NWlMtZWNZTTZ4MGxhbVhtUWQ2ckstY3pB?oc=5"
+    },
+    {
+      "idx": 122,
+      "title": "Etihad Rail passenger tickets: How to book, 50% discount on fares, ticket types and routes",
+      "system_label": "EY (Etihad Airways) · 50% · tarih yok",
+      "verdict": "bad",
+      "reason": "İçerik açıkça Etihad Rail (tren) yolcu biletleriyle ilgili, Etihad Airways değil — tren/rail içeriği.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMikgFBVV95cUxQa0p5RW1GNnhCYkstN0JpRXBmY2p0eXNxamVzYUVJUGtRb2JFdnZSZTN3MnRycExHclMwWFdJVXRZQ2lSSVYwekp1WVZkX01rNDhBcDlOZXNfamU3VHNkcy1ZUmZGa3NHV3dQcERGUldNSmh5WWhCazJTSmRJTzBSU0xYeDRqUzVLMnlWN3hnVU9qUQ?oc=5"
+    },
+    {
+      "idx": 123,
+      "title": "Etihad Rail passenger trains: Ticket booking opens with 50% discount; fares from Dh55",
+      "system_label": "EY (Etihad Airways) · 50% · tarih yok",
+      "verdict": "bad",
+      "reason": "İçerik açıkça Etihad Rail (tren) yolcu trenleriyle ilgili, Etihad Airways değil — tren/rail içeriği; ayrıca 122. kayıtla neredeyse aynı haber (olası çift kayıt).",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMitgFBVV95cUxNZHNGNGFwUC1sc3E3RmFuOWZCVWVZLWtxUTFLZjdHRUJRRVBYRDZzR3dFRG9XNkhYNlFacEU2T0JreG85OVJzUGtoZkt2allNZXdXeW5GMDBDZGZyS1RKQ0IzSzNKUEprZGYxQnY3SlNvOC1VQ3ZKbHF0Nk5hNkx6WHpxemZWMmh5SGtkUE5uOTFEZlJsd2pOUnpIVENydnUtODZQVWlzV054Z1h5TTBpSjFHaDhrUdIBvgFBVV95cUxQbkhjU3h6YjhtazZKUmc2YXhzVkU1d1BCMFBvUk5qeVdqQ3JBUFZNQ29ja0VScml4WWdxRWRnMWxzQkZrRGJhWjUzN2paWjRzSWJSV0NtTTBlNnR5RWVneHFmSmVJUUh1VUtrSFNFcTZBOVFKS21UcVk1cy14cUF1WC1zS3RaSS01OEFxSS1ySG1RQW5rYVhHSUJkNTF"
+    },
+    {
+      "idx": 124,
+      "title": "Sigorta sonrası şimdi ücretsiz otel: böyle devam ederse, Emirates yolcularına Dubai üzerinden tekrar uçurmaları için para ödeyecek",
+      "system_label": "EK (Emirates) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "Emirates'in sigorta sonrası ücretsiz otel/yeniden uçurma politikasıyla ilgili karmaşık bir haber, net bir bilet fiyatı indirim kampanyası değil.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMihwJBVV95cUxOWmZMdUwtVVZzNzFxdnQyWF9fcEs1Skg4b0YwdDVmVkFLNGdCRDVtTHJUV1VUanBReTFBVk9EaG01YzR4aENkbmFCMmR4ZnNBSVZhYWphWUNqZWpfY2lrSTB1LVJxUV9jLVFvTFhuYzFfS0FwenZaeWdhYXNuSnZUNVVQRWNUXzdlZzlJM2NMb0VJSVBmdVlXYmlicU1rTHExT25zY3pWbmVHMWd6amoycXJ2eWJmck9GWk9nNjJJLUJ4dHRzVjRXd2VXeGZpdXdVSlowbXFPa0wycU45UGNjblY5cjUwODR4dUNaZjRxcV9fSDk1NHR1MDhmMzBUYWNNVHI5Vmg2MA?oc=5"
+    },
+    {
+      "idx": 125,
+      "title": "[Expired] [Deal Alert] Save up to 30% on Economy and Business Fares With Etihad’s Latest Promotion",
+      "system_label": "EY (Etihad Airways) · 30% · tarih yok",
+      "verdict": "bad",
+      "reason": "Başlıkta açıkça '[Expired]' ibaresi var, süresi dolmuş bir teklif.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMiZkFVX3lxTE14NG5yMW82bGRIQUFVZjJhYWN5SmpBVDRyNDljblVlQmVUVVVuZlpHbkJlVUM3M0owN3RtSkUzeVZJUXhCbFZhalUzYnJ2ZlYwck9pMnFyZExEZ3ZWYmxZYkdGdWwwdw?oc=5"
+    },
+    {
+      "idx": 126,
+      "title": "[Expired] British Airways Offering 25% Avios Discount When Booking Vacation Packages",
+      "system_label": "BA (British Airways) · 25% · tarih yok",
+      "verdict": "bad",
+      "reason": "Başlıkta açıkça '[Expired]' ibaresi var, süresi dolmuş bir teklif.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMifkFVX3lxTE9uQzFOTE5kUVJKQ1Rnb3oyT1Q1a3VfR3ZvZkNpaXpPdzBZNHg5YVIxZzByaFg4MGNrOFFCQXlMd3hwcnBWc0ZOeW1yVTNjTXdGMGJpYjhNRDYtV0xZN2tEd243cExfVGxmWExCNk5Zb2M2U0NTZjBfa3dvM1ZHZw?oc=5"
+    },
+    {
+      "idx": 127,
+      "title": "Etihad Airways Introduces Special Global Promotion with Reduced Economy Fares, Connecting Indian Travelers to Top Destinations Across Europe and the Americas",
+      "system_label": "EY (Etihad Airways) · — · tarih yok",
+      "verdict": "warn",
+      "reason": "Etihad'ın Hindistan kaynaklı yolcular için Avrupa ve Amerika'ya düşürülmüş ekonomi ücretleri sunan detaylı bir kampanya duyurusu; içerik güvenilir ama oran/tarih alanları boş, muhtemelen 121. kayıtla ilişkili.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMirgJBVV95cUxOUlhjdFVTMzJfRzByWkZ5c3djRjEwN2RMNlpJSHpEc0tuOU83aXNSaDhkWVE2YUpIczY4QVVSTFFIQXFOTFkwOWM5MF9mZExyWWFwRER6V1ZQX0YtX25wc2RodVZuUjBkaGN0Z25fSzR4RFZFcDZGUXpjdUlqc0R2N0Z5bFhZa0FKS0FKdFB3eDc2QlIzWTFlWWVPQVVHREs0QkluQ0ktSW9QR1lfeVBURlFaSk5kdW9ONEN6R0RaY2VwR3pmdEFIdlRuMG5wbTRPaWZXOHhHa2E3SkRrbkFESm52bGhpdXF0bE5wZUtZZm9jQ0NJWGJ3bWZuUkg2TzI1czJqMUtRNG4yZkdWWGJaRVBZSkZtQVJSUmhtMGRIWFV4ZGdoLWdvX05QMG0zZw?oc=5"
+    },
+    {
+      "idx": 128,
+      "title": "Etihad Airways Küresel Yaz İndirimiyle Avrupa ve Ötesine Yüzde 30 İndirimli Bilet Fıyatları Sunuyor",
+      "system_label": "EY (Etihad Airways) · 30% · tarih yok",
+      "verdict": "warn",
+      "reason": "Etihad'ın 'Küresel Yaz İndirimi' ile Avrupa ve ötesine %30 indirimli bilet fiyatları sunması gerçek bir kampanya gibi görünüyor ama kesin tarihler belirtilmemiş.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMiekFVX3lxTE5wRHFOWTZENC14U3NaV0ZsbFBWQ2FQOTc2VFdoT1Uzcjd2SG90cE9uOVZBRklVQWw2NXFEdklPekdmVWlhRHI5TGRaR2NNNUxleVZ3SUxSdW0wSXlrakYwM2gtbVJpXy0zZVZGMEwzbjZRQW1sT2pDTllB?oc=5"
+    },
+    {
+      "idx": 129,
+      "title": "Lufthansa Allegris'in Birinci Sınıf Çift Yatağından Para Kazanma Girişiminde Yenilgiyi Kabul Ediyor",
+      "system_label": "LH (Lufthansa) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "Lufthansa'nın Allegris birinci sınıf çift yatağını parayla sunma girişiminden vazgeçtiğini anlatan bir haber, bir indirim kampanyası değil.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMiowFBVV95cUxQWFhFdktNSFcxZDZUZlNWZ19KQjN2VENzRnVlYldzUmZNdHpuOUd6RmNUX2RYVDlDMHcxb3hoZXQwTHVDT1NiNU5OYThrcEZHYVhjbnVwZ19xVXR4a0Z1c1RvellzUFZIem5nRHVaZFR1ZHZnNm12TENwRDc4NDRFcVpmaTNwckVmR19Id0NpTFJvaFlGbmtJMDNIa2JnNnpRSEJj?oc=5"
+    },
+    {
+      "idx": 130,
+      "title": "Etihad Guest introduces Discount Pricing",
+      "system_label": "EY (Etihad Airways) · — · tarih yok",
+      "verdict": "warn",
+      "reason": "Etihad Guest'in indirimli fiyatlandırma başlatması (118. kayıtla aynı haberin olası bir tekrarı) gerçek görünüyor ama oran/tarih belirtilmemiş.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMinwFBVV95cUxNNFlVZEl6Ul9pUTBTRVJ1THNWNTgweUxld3p0S0lDSEFMa01fZUFYaE5LTU9yNENPWlVwTmtYNGdsUE5qX2RfX2V3U0hjZFBGLVpRS0ozYjhpVTVMY3E5RFlRWDdMclAzV3JsTUJ0Nnl3RWczTVc5bXJFMFZqcUR3WWNnYmtCZkFOQzcwdHA2SGhGRGNWdXQyUUx1MGlpTDg?oc=5"
+    },
+    {
+      "idx": 131,
+      "title": "[Expired] Use This Amex Promotion To Fly Etihad First Class From $1,265, Business Class From $321",
+      "system_label": "EY (Etihad Airways) · — · tarih yok",
+      "verdict": "bad",
+      "reason": "Başlıkta açıkça '[Expired]' ibaresi var; ayrıca içerik bir Amex promosyonuyla ilgili, doğrudan Etihad'ın kendi kampanyası değil.",
+      "source": "",
+      "url": "https://news.google.com/rss/articles/CBMie0FVX3lxTE55UVVtdkFRdFRSMXczVkoteGxfQnJ3cnBSbDV1dlgzUVA4NHdMMFE4TE5pRzA3MURWTGlhbjMtdGpFZXBfd1FVSUROZmRYY3JUX21aR2s5Ym55R1htMkRCaFB3SXpJZ3hLV1RHSTAwbXUyQ18yYm4tMW9Idw?oc=5"
+    }
+  ]
+}
