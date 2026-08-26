@@ -1,10 +1,12 @@
 "use client";
 
 import { ExternalLink } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 
+import { DataSourceError, LastUpdatedStamp, StaleDataBanner } from "@/components/data-source-error";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useDataSource } from "@/hooks/use-data-source";
 import { apiFetch } from "@/lib/api";
 import type { IataIndicatorOut } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -31,34 +33,13 @@ const tab = (active: boolean) =>
  * separate -- see backend/app/models/curated.py's INDICATOR_KINDS. */
 export function IataIndicatorTable() {
   const [kind, setKind] = useState<IataIndicatorOut["kind"]>("forecast");
-  const [rows, setRows] = useState<IataIndicatorOut[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    const controller = new AbortController();
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch driven by kind change; must flip synchronously so switching tabs shows a skeleton instead of stale rows from the other kind
-    setRows(null);
-    apiFetch<IataIndicatorOut[]>(`/kokpit/iata?kind=${kind}`, {
-      cache: "default",
-      signal: controller.signal,
-    })
-      .then((data) => {
-        if (!cancelled) setRows(data);
-      })
-      .catch((err: unknown) => {
-        if (cancelled || (err as Error)?.name === "AbortError") return;
-        setError("IATA göstergeleri yüklenemedi.");
-      });
-    return () => {
-      cancelled = true;
-      controller.abort();
-    };
-  }, [kind]);
-
-  if (error) {
-    return <p className="text-sm text-muted-foreground">{error}</p>;
-  }
+  const fetcher = useCallback(
+    (signal: AbortSignal) =>
+      apiFetch<IataIndicatorOut[]>(`/kokpit/iata?kind=${kind}`, { cache: "default", signal }),
+    [kind],
+  );
+  const { data: rows, error, loaded, lastUpdated, stale, retry } = useDataSource(fetcher, [kind]);
 
   return (
     <div className="flex flex-col gap-3">
@@ -70,9 +51,13 @@ export function IataIndicatorTable() {
         ))}
       </div>
 
-      {!rows ? (
+      {stale && <StaleDataBanner onRetry={retry} lastUpdated={lastUpdated} />}
+
+      {!loaded ? (
         <Skeleton className="h-48 w-full rounded-xl" />
-      ) : rows.length === 0 ? (
+      ) : error && !rows ? (
+        <DataSourceError onRetry={retry} lastUpdated={lastUpdated} />
+      ) : !rows || rows.length === 0 ? (
         <p className="rounded-xl border border-dashed border-border p-6 text-sm text-muted-foreground">
           Bu tür için henüz küratörlü bir IATA göstergesi yok.
         </p>
@@ -110,6 +95,7 @@ export function IataIndicatorTable() {
           ))}
         </div>
       )}
+      <LastUpdatedStamp date={lastUpdated} />
     </div>
   );
 }

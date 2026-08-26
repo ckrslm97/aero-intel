@@ -11,10 +11,12 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useCallback } from "react";
 
 import { AirlineLogo } from "@/components/airline-logo";
+import { DataSourceError, LastUpdatedStamp, StaleDataBanner } from "@/components/data-source-error";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useDataSource } from "@/hooks/use-data-source";
 import { apiFetch } from "@/lib/api";
 import { worldRegions } from "@/lib/nav";
 import type { BizOverviewOut } from "@/lib/types";
@@ -182,27 +184,13 @@ function StrategicDevelopments({ section }: { section: BizOverviewOut["strategic
  * backend/app/services/biz_service.py. No v1-style generated narrative text
  * here; every line is a counting statement over real rows. */
 export function BizSignals() {
-  const [data, setData] = useState<BizOverviewOut | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const fetcher = useCallback(
+    (signal: AbortSignal) => apiFetch<BizOverviewOut>("/biz?days=30", { cache: "default", signal }),
+    [],
+  );
+  const { data, error, loaded, lastUpdated, stale, retry } = useDataSource(fetcher, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    apiFetch<BizOverviewOut>("/biz?days=30", { cache: "default" })
-      .then((d) => {
-        if (!cancelled) setData(d);
-      })
-      .catch(() => {
-        if (!cancelled) setError("Sinyaller yüklenemedi. Sunucu çalışıyor mu?");
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  if (error) {
-    return <p className="text-sm text-muted-foreground">{error}</p>;
-  }
-  if (!data) {
+  if (!loaded) {
     return (
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         {Array.from({ length: 4 }).map((_, i) => (
@@ -212,12 +200,22 @@ export function BizSignals() {
     );
   }
 
+  if (error && !data) {
+    return <DataSourceError onRetry={retry} lastUpdated={lastUpdated} />;
+  }
+
+  if (!data) return null;
+
   return (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-      <CompetitorSignals section={data.competitor_signals} />
-      <NetworkSignals section={data.network_signals} />
-      <CommercialSignals section={data.commercial_signals} />
-      <StrategicDevelopments section={data.strategic_developments} />
+    <div className="flex flex-col gap-3">
+      {stale && <StaleDataBanner onRetry={retry} lastUpdated={lastUpdated} />}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <CompetitorSignals section={data.competitor_signals} />
+        <NetworkSignals section={data.network_signals} />
+        <CommercialSignals section={data.commercial_signals} />
+        <StrategicDevelopments section={data.strategic_developments} />
+      </div>
+      <LastUpdatedStamp date={lastUpdated} />
     </div>
   );
 }
