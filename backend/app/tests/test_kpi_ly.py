@@ -21,7 +21,7 @@ LY_DATE = datetime(2025, 12, 31, tzinfo=timezone.utc)
 @pytest.fixture
 def kpi_app(db_session):
     """The real kpis router mounted at the real prefix, with the DB dependency
-    pointed at the test session (same pattern as test_auth.py)."""
+    pointed at the test session."""
     app = FastAPI()
     app.include_router(kpis_api.router, prefix="/api/v1")
 
