@@ -30,8 +30,8 @@ from __future__ import annotations
 
 from app.taxonomy import (
     CATEGORY_SLUGS,
+    RISK_CATEGORY_SLUGS,
     RISK_SEVERITIES,
-    RISK_TYPE_SLUGS,
     SUBCATEGORY_KEYWORDS,
 )
 
@@ -76,11 +76,13 @@ JSON şeması:
   "is_risk": true|false,
   "not_risk_reason": null | "kısa gerekçe",
   "risk": null | {{
-    "type": {" | ".join(f'"{r}"' for r in RISK_TYPE_SLUGS)},
+    "category": {" | ".join(f'"{r}"' for r in RISK_CATEGORY_SLUGS)},
     "severity": {" | ".join(f'"{s}"' for s in RISK_SEVERITIES)},
+    "probability": 0.0-1.0,
+    "aviation_impact_score": 0.0-1.0,
     "country": "ülke adı",
     "city": null | "şehir adı",
-    "aviation_impact": "havacılığa etkisi tek cümle"
+    "aviation_impact_note": "havacılığa etkisi tek cümle"
   }},
   "is_campaign": true|false,
   "not_campaign_reason": null | "kısa gerekçe",
@@ -127,18 +129,34 @@ KURALLAR
      haberin konusu olması gerekir.
    Risk değilse is_risk=false ve not_risk_reason doldur.
 
-6. risk.country: Olayın GERÇEKTEN olduğu ülke. Metinde ilk geçen ülke değil.
+6. risk.category: Sekiz ailenin altındaki 16 tipten biri olmalı --
+   jeopolitik: conflict/sanctions; operasyonel: accident_incident/disruption;
+   düzenleyici: restriction/policy_change; ekonomik: currency_crisis/macro_shock;
+   yakıt-maliyet: fuel_price_spike/fuel_shortage; pazar-rekabet:
+   capacity_shift/price_war; talep: demand_shock/demand_surge; altyapı:
+   airport_disruption/atc_disruption. Hiçbiri uymuyorsa is_risk=false.
+
+7. risk.country: Olayın GERÇEKTEN olduğu ülke. Metinde ilk geçen ülke değil.
    Emin değilsen null bırak.
 
-7. is_campaign: SADECE bir havayolunun bilet satışına yönelik indirim, promosyon
-   veya kampanyası için true.
+8. risk.probability: Bu olayın gerçekten olduğuna/olmakta olduğuna ne kadar
+   eminsin (0.0-1.0). Bir söylenti veya doğrulanmamış rapor düşük, resmî bir
+   açıklama yüksek olmalı.
+
+9. risk.aviation_impact_score: Bu olay ticari havacılığı ne kadar doğrudan
+   etkiliyor (0.0-1.0). Bir havalimanı kapanışı veya hava sahası yasağı yüksek
+   (0.8+); bir ülkedeki genel ekonomik haber ama havacılığa özel bir etkisi
+   belirtilmemişse düşük (0.2 civarı).
+
+10. is_campaign: SADECE bir havayolunun bilet satışına yönelik indirim,
+   promosyon veya kampanyası için true.
    - Otel, tren, kredi kartı ve sadakat programı kampanyaları DEĞİLDİR.
    - Ücret ARTIŞI, hizmet kesintisi veya gelir DÜŞÜŞÜ kampanya değildir.
    - Başlığında "expired", "süresi doldu" yazan kampanya artık geçerli değildir.
    - discount_pct: yalnızca metinde açıkça yazan indirim oranı. Gelir düşüş
      yüzdesi indirim değildir.
 
-8. confidence: Kendi kararına ne kadar güvendiğin. Haber kısa, belirsiz veya
+11. confidence: Kendi kararına ne kadar güvendiğin. Haber kısa, belirsiz veya
    çelişkiliyse düşük ver. Bu değer düşükse kayıt kullanıcıya gösterilmez, bu
    yüzden dürüst ol.{extra}
 

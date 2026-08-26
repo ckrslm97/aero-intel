@@ -57,7 +57,9 @@ from app.pipeline.clustering import EventCandidate, cluster, pick_primary
 from app.pipeline.confidence import ConfidenceInput, is_publishable, score
 from app.pipeline.language import resolve as resolve_language
 from app.pipeline.outcomes import OutcomeState
-from app.taxonomy import COUNTRY_TO_REGION, RISK_SEVERITY_WEIGHT, risk_family_of
+from app.llm.gazetteer import COUNTRY_ALIASES, fold_for_match
+from app.pipeline.risk_scoring import score as score_risk
+from app.taxonomy import COUNTRY_TO_REGION, risk_category_family_of
 
 logger = get_logger(__name__)
 
@@ -183,20 +185,24 @@ def _confidence_for(classification, certainty: float | None, tier: str, source_c
     )
 
 
-def _risk_score(severity: str | None, confidence_score: float) -> float | None:
-    """Placeholder pending the dedicated risk-scoring pass (severity x
-    probability x aviation impact x recency x source tier, per the Risk Radar
-    phase). Severity-weighted by confidence is honest enough to sort and
-    filter by today without pretending to be the final formula."""
-    if severity not in RISK_SEVERITY_WEIGHT:
+def _canonical_country(country: str | None) -> str | None:
+    """The model answers in whichever language it was writing the rest of the
+    response in -- "Russia" and "Rusya" both happen. Route through the same
+    gazetteer alias table entity extraction uses (which now carries the
+    Turkish country names, see llm/gazetteer.py) rather than a bare lowercase
+    match against COUNTRY_TO_REGION's English-only keys, which would silently
+    fail on every Turkish answer.
+    """
+    if not country:
         return None
-    return round(RISK_SEVERITY_WEIGHT[severity] * confidence_score, 3)
+    return COUNTRY_ALIASES.get(fold_for_match(country))
 
 
 def _region_for(country: str | None) -> str | None:
-    if not country:
+    canonical = _canonical_country(country)
+    if not canonical:
         return None
-    return COUNTRY_TO_REGION.get(country.lower())
+    return COUNTRY_TO_REGION.get(canonical)
 
 
 async def run_pipeline_v2(db: AsyncSession, *, limit: int = DEFAULT_BATCH_SIZE) -> dict:
@@ -274,12 +280,19 @@ async def run_pipeline_v2(db: AsyncSession, *, limit: int = DEFAULT_BATCH_SIZE) 
             risk_assessed_at = now
             if result.risk.state is OutcomeState.CLASSIFIED:
                 risk = result.risk.payload
-                risk_type = risk.type
-                risk_family = risk_family_of(risk.type)
+                risk_type = risk.category
+                risk_family = risk_category_family_of(risk.category)
                 risk_severity = risk.severity
-                risk_country = risk.country
+                risk_country = _canonical_country(risk.country) or risk.country
                 risk_city = risk.city
-                risk_score_value = _risk_score(risk.severity, confidence.score)
+                risk_score_value = score_risk(
+                    severity=risk.severity,
+                    probability=risk.probability,
+                    aviation_impact_score=risk.aviation_impact_score,
+                    source_tier=primary_candidate.tier,
+                    event_time=primary.published_at or primary.fetched_at,
+                    now=now,
+                ).score
             else:
                 not_applicable["risk"] = result.risk.reason
         if result.campaign.state is OutcomeState.NOT_APPLICABLE:
