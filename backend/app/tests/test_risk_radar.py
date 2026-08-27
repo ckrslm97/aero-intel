@@ -24,6 +24,7 @@ from app.llm.heuristic import (
     fold_text,
 )
 from app.models.article import Article, ArticleEnrichment
+from app.models.entity import ArticleEntity, Entity
 from app.taxonomy import (
     RISK_FAMILIES,
     RISK_SEVERITY_WEIGHT,
@@ -398,14 +399,17 @@ def test_non_risk_article_classifies_to_all_none():
 # --------------------------------------------------------------------------
 
 
-async def _risk_article(db, source, *, url, risk_type, severity, country, city=None, days_ago=1):
+async def _risk_article(
+    db, source, *, url, risk_type, severity, country, city=None, days_ago=1,
+    title="t", entities=(),
+):
     from app.taxonomy import risk_family_of as family_of
 
     published = NOW - timedelta(days=days_ago)
     article = Article(
         source_id=source.id,
         url=url,
-        title="t",
+        title=title,
         raw_content="body",
         published_at=published,
         fetched_at=published,
@@ -426,17 +430,109 @@ async def _risk_article(db, source, *, url, risk_type, severity, country, city=N
             risk_city=city,
         )
     )
+    for entity in entities:
+        db.add(ArticleEntity(article_id=article.id, entity_id=entity.id))
     await db.flush()
     return article
 
 
-async def _source(db, name="S"):
+async def _source(db, name="S", tier=None):
     from app.models.source import Source
 
-    source = Source(name=name, url=f"https://example.com/{name}", source_type="rss")
+    source = Source(name=name, url=f"https://example.com/{name}", source_type="rss", tier=tier)
     db.add(source)
     await db.flush()
     return source
+
+
+async def _entity(db, entity_type, name, code=None):
+    entity = Entity(entity_type=entity_type, name=name, code=code)
+    db.add(entity)
+    await db.flush()
+    return entity
+
+
+async def test_the_same_eruption_from_three_outlets_becomes_one_signal(db_session):
+    """Real production case: the August 2026 Etna eruption/Catania Airport
+    closure was reported by three outlets, independently classified three
+    times, and came out as three cards in three different country groups
+    (Italy/medium, Malta/low, unspecified/high) -- Malta because an AeroTime
+    aside about ash "extending between eastern Malta and northern Libya"
+    outranked its own correctly-resolved Catania/Italy city match, and
+    unspecified because the eTurboNews tourism-angle piece never named a
+    country string at all. One event, one signal: severity takes the most
+    severe member (never under-report), country/city takes whichever member
+    actually resolved a city (real evidence beats an incidental country
+    mention or nothing)."""
+    source = await _source(db_session)
+    italy = await _entity(db_session, "country", "Italy")
+    cta = await _entity(db_session, "airport", "Catania Fontanarossa", code="CTA")
+
+    await _risk_article(
+        db_session, source,
+        url="https://aviation24.be/etna",
+        title="Etna patlaması Catania Havalimanı'nın kapatılmasına neden olurken 700 uçuş iptal edildi",
+        risk_type="volcano", severity="medium", country="Italy", city="Catania",
+        entities=(italy, cta),
+    )
+    await _risk_article(
+        db_session, source,
+        url="https://aerotime.aero/etna",
+        title="Mount Etna küllerinin Catania Havalimanı'nı kapatmasıyla birlikte "
+        "Sicilya genelinde 700 uçuş iptal edildi",
+        # The real bug: an incidental "ash reached Malta" aside resolved the
+        # whole article to Malta with no city at all.
+        risk_type="volcano", severity="low", country="Malta", city=None,
+        entities=(italy, cta),
+    )
+    await _risk_article(
+        db_session, source,
+        url="https://eturbonews.com/etna",
+        title="Mount Etna Eruption Creates a Tourism Boom and Travel Nightmare in Sicily",
+        risk_type="volcano", severity="high", country=None, city=None,
+        entities=(italy, cta),
+    )
+    await db_session.commit()
+
+    from fastapi import Response
+
+    out = await list_risks(days=14, response=Response(), db=db_session)
+
+    all_items = [item for country in out.countries for item in country.items]
+    assert len(all_items) == 1, f"expected one merged signal, got {len(all_items)}"
+
+    signal = all_items[0]
+    assert signal.severity == "high"  # the most severe member, never watered down
+    assert signal.country == "Italy"  # the city-bearing member's placement wins
+    assert signal.city == "Catania"
+    assert signal.source_count == 3
+    assert out.total == 1
+
+
+async def test_two_different_earthquakes_sharing_a_country_stay_separate():
+    """Sharing a country entity is necessary but not sufficient -- two
+    unrelated earthquakes in Turkey must not merge into one signal just
+    because both name the same country. same_event() also requires a shared
+    distinctive token (a city, a number), which two genuinely different
+    stories will not have."""
+    from app.pipeline.clustering import EventCandidate, same_event
+
+    turkey = "TURKEY"
+    a = EventCandidate(
+        article_id="a",
+        title="6.2 magnitude earthquake strikes Izmir, flights diverted",
+        entities=frozenset({turkey}),
+        tier="trade",
+        published_at="2026-08-10T10:00:00",
+    )
+    b = EventCandidate(
+        article_id="b",
+        title="Kahramanmaraş'ta deprem: havalimanı kapatıldı",
+        entities=frozenset({turkey}),
+        tier="trade",
+        published_at="2026-08-13T10:00:00",
+    )
+    assert same_event(a, b) is False
 
 
 async def test_countries_are_ranked_by_weighted_score_not_article_count(db_session):

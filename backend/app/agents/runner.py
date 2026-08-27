@@ -55,7 +55,7 @@ from app.llm.gazetteer import COUNTRY_ALIASES, fold_for_match
 from app.models.article import Article
 from app.models.entity import ArticleEntity
 from app.models.news_event import NewsEvent
-from app.pipeline.clustering import EventCandidate, cluster, pick_primary
+from app.pipeline.clustering import EventCandidate, cluster, entity_codes, pick_primary, tier_for_source
 from app.pipeline.confidence import ConfidenceInput, is_publishable, score
 from app.pipeline.language import resolve as resolve_language
 from app.pipeline.outcomes import OutcomeState
@@ -77,33 +77,6 @@ DEFAULT_BATCH_SIZE = 40
 REQUIRED_NEWS_FIELDS = ("title_tr", "summary_tr", "category")
 
 
-def _tier_for_trust_weight(weight: float) -> str:
-    """Bucket a bare trust_weight into a tier, for sources with none declared.
-
-    Every source app/ingest/sources_seed.py seeds now declares a real tier
-    (SourceSeed.tier), reconciled onto Source.tier by ensure_seeded(). This
-    bucketing only fires for a row seeded before that field existed and not
-    yet reconciled, or a source added by hand outside the seed list -- it is
-    the fallback, not the primary path. See _tier_for_source below.
-    """
-    if weight >= 0.90:
-        return "regulator"
-    if weight >= 0.75:
-        return "agency"
-    if weight >= 0.50:
-        return "trade"
-    return "aggregator"
-
-
-def _tier_for_source(source) -> str:
-    """The declared tier when there is one; the trust_weight bucket otherwise."""
-    if source is None:
-        return "trade"
-    if source.tier:
-        return source.tier
-    return _tier_for_trust_weight(source.trust_weight)
-
-
 def _slugify(title: str, article_id) -> str:
     ascii_title = unicodedata.normalize("NFKD", title or "").encode("ascii", "ignore").decode()
     slug = re.sub(r"[^a-z0-9]+", "-", ascii_title.lower()).strip("-")[:160]
@@ -111,22 +84,6 @@ def _slugify(title: str, article_id) -> str:
     # stem to the same slug text (rare, but "thy-yeni-hat" is generic) must
     # still get distinct rows.
     return f"{slug or 'olay'}-{str(article_id)[:8]}"
-
-
-def _entity_codes(article: Article) -> frozenset[str]:
-    """Subject entities for clustering, reusing v1's heuristic extraction
-    rather than spending a model call before we even know if this article
-    clears the gate."""
-    codes: set[str] = set()
-    for link in article.entity_links:
-        entity = link.entity
-        if entity is None:
-            continue
-        if entity.code:
-            codes.add(entity.code.upper())
-        elif entity.entity_type == "country" and entity.name:
-            codes.add(entity.name.upper())
-    return frozenset(codes)
 
 
 @dataclass
@@ -233,8 +190,8 @@ async def run_pipeline_v2(db: AsyncSession, *, limit: int = DEFAULT_BATCH_SIZE) 
         EventCandidate(
             article_id=a.id,
             title=a.title,
-            entities=_entity_codes(a),
-            tier=_tier_for_source(a.source),
+            entities=entity_codes(a),
+            tier=tier_for_source(a.source),
             published_at=(a.published_at or a.fetched_at).isoformat(),
         )
         for a in articles
