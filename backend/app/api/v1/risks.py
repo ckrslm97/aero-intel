@@ -163,6 +163,8 @@ async def list_risks(
                 title=a.title[:80],
                 entities=sorted(c.entities),
                 tier=c.tier,
+                content_len=len(a.raw_content or ""),
+                links_count=len(a.entity_links),
             )
 
     for group in cluster(candidates):
