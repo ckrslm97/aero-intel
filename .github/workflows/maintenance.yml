@@ -21,6 +21,7 @@ on:
           - seed-curated-data
           - re-enrich
           - reclassify
+          - backfill-risks
           - repair-translations
           - clean-headlines
           - translate-backlog
@@ -33,7 +34,7 @@ on:
         required: false
         type: string
       limit:
-        description: "translate-backlog only: how many articles to translate this run (default 12)"
+        description: "translate-backlog: how many articles to translate this run (default 12). backfill-risks: how many articles to scan (blank = all)"
         required: false
         type: string
       full_surface:
@@ -116,6 +117,12 @@ jobs:
               fi ;;
             reclassify)
               python -m app.cli reclassify ;;
+            backfill-risks)
+              if [ -n "${LIMIT}" ]; then
+                python -m app.cli backfill-risks --limit "${LIMIT}"
+              else
+                python -m app.cli backfill-risks
+              fi ;;
             repair-translations)
               python -m app.cli repair-translations ;;
             clean-headlines)
