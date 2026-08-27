@@ -118,8 +118,8 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           LLM_PROVIDER: openai_compat
           LLM_BASE_URL: https://api.groq.com/openai/v1
-          LLM_MODEL: llama-3.3-70b-versatile
-          LLM_MODEL_FAST: llama-3.1-8b-instant
+          LLM_MODEL: openai/gpt-oss-120b
+          LLM_MODEL_FAST: openai/gpt-oss-20b
           LLM_API_KEY: ${{ secrets.GROQ_API_KEY }}
           # daily-if-due sends the newsletter itself, so the link target has to
           # be here: without it the runner has no CORS origin to infer from and
@@ -131,5 +131,5 @@ jobs:
           # way so the send, when it comes, is instant.
           python -m app.cli daily-if-due
           python -m app.cli refresh-pdf
-          # One 70b call/day: the Turkish "pattern of the day" for /insights.
+          # One 120b call/day: the Turkish "pattern of the day" for /insights.
           python -m app.cli build-insight

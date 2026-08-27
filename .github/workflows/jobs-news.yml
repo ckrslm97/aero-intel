@@ -3,7 +3,7 @@ name: News ingest + enrich
 # Ingest RSS, dedup, and enrich (categorise + real Turkish translation) via
 # Groq. Enrichment is capped per run (LLM_ENRICH_BATCH_SIZE) so a single run
 # can't drain Groq's free daily budget: 12 runs/day x 12 articles = ~140/day,
-# which is the ceiling the model split (8b classify / 70b translate) affords.
+# which is the ceiling the model split (20b classify / 120b translate) affords.
 # The backlog is worked off over subsequent runs.
 on:
   schedule:
@@ -40,8 +40,8 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           LLM_PROVIDER: openai_compat
           LLM_BASE_URL: https://api.groq.com/openai/v1
-          LLM_MODEL: llama-3.3-70b-versatile
-          LLM_MODEL_FAST: llama-3.1-8b-instant
+          LLM_MODEL: openai/gpt-oss-120b
+          LLM_MODEL_FAST: openai/gpt-oss-20b
           # Raised from 12: the relevance gate (app/pipeline/relevance.py) keeps
           # low-signal articles off the LLM entirely, and translation now costs
           # one call instead of two, so the same token budget covers more.
@@ -61,7 +61,7 @@ jobs:
           PIPELINE_V2: "true"
           LLM_PROVIDER: openai_compat
           LLM_BASE_URL: https://api.groq.com/openai/v1
-          LLM_MODEL: llama-3.3-70b-versatile
+          LLM_MODEL: openai/gpt-oss-120b
           LLM_API_KEY: ${{ secrets.GROQ_API_KEY }}
           # Shares the Groq key and daily budget with the enrich/translate
           # calls above, so this starts deliberately small: 10 articles x 12
