@@ -53,9 +53,12 @@ Everything below is free-tier. Total cost: **$0**.
 
 1. Sign in at [console.groq.com](https://console.groq.com) and create an API key
    (starts with `gsk_`).
-2. Free-tier budget (per day, per model) that the app is designed around:
-   - `llama-3.3-70b-versatile` — 1,000 requests / 100k tokens (best Turkish → translation)
-   - `llama-3.1-8b-instant` — 14,400 requests / 500k tokens (→ categorisation)
+2. Free-tier budget (30 requests/min, 8k tokens/min, per model) that the app is
+   designed around. `llama-3.3-70b-versatile` and `llama-3.1-8b-instant` were
+   deprecated by Groq on 2026-08-16 and stopped being served entirely; the app
+   now uses their recommended replacements:
+   - `openai/gpt-oss-120b` — best Turkish → translation
+   - `openai/gpt-oss-20b` — categorisation
 
    The news job enriches at most `LLM_ENRICH_BATCH_SIZE` (12) articles per run, 12
    runs/day ≈ 140 articles/day. With ~382 articles in the DB, the full backlog is
