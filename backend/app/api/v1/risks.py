@@ -17,6 +17,7 @@ from sqlalchemy.orm import selectinload
 
 from app.api.cache_headers import AGGREGATES, public_cache
 from app.core.db import get_db
+from app.core.logging import get_logger
 from app.models.article import Article, ArticleEnrichment
 from app.models.entity import ArticleEntity
 from app.pipeline.clustering import EventCandidate, cluster, entity_codes, pick_primary, tier_for_source
@@ -28,6 +29,7 @@ from app.taxonomy import (
 )
 
 router = APIRouter(prefix="/risks", tags=["risks"])
+logger = get_logger(__name__)
 
 
 class RiskItemOut(BaseModel):
@@ -149,6 +151,19 @@ async def list_risks(
         )
         for a in articles
     ]
+
+    # TEMP DIAGNOSTIC -- remove after confirming why the Etna/Catania cluster
+    # isn't merging in production. Logs entity codes for anything volcano-
+    # related so we can see whether entity_codes() actually found ITALY/CTA.
+    for a, c in zip(articles, candidates):
+        if "etna" in a.title.lower() or "catania" in a.title.lower():
+            logger.info(
+                "risk_cluster_debug",
+                article_id=str(a.id),
+                title=a.title[:80],
+                entities=sorted(c.entities),
+                tier=c.tier,
+            )
 
     for group in cluster(candidates):
         members = [by_id[c.article_id] for c in group]
