@@ -217,6 +217,14 @@ PRODUCTION_FALSE_POSITIVES = [
         "Russia's invasion reshaped the fleet picture for domestic carriers.",
         id="invasion_mentioned_without_event_reporting",
     ),
+    pytest.param(
+        "Nemrut Kalderası Milli Park İlan Edildi: Bitlis Turizminde Yeni Dönem",
+        "Türkiye'nin en önemli volkanik oluşumlarından Nemrut Kalderası için yeni "
+        "bir dönem başladı. Türkiye'nin en dikkat çekici volkanik peyzajlarından "
+        "birine sahip olan göl, Nemrut Kalderası Milli Parkı adıyla Türkiye'nin "
+        "milli park destinasyonları arasına girmiş oldu.",
+        id="dormant_crater_lake_tourism_is_not_a_volcano",
+    ),
 ]
 
 
@@ -236,6 +244,38 @@ def test_weather_named_aircraft_guard_does_not_suppress_real_weather():
         "Hurricane Lala threatens Hawaii's Big Island",
         "The hurricane destroyed homes and a state of emergency was declared.",
     ) == "storm"
+
+
+def test_a_real_eruption_still_classifies_as_volcano():
+    """"volkanik"/"volcano" moved to weak after the Nemrut tourism false
+    positive -- a real eruption still has to survive that. Breaking coverage
+    carries casualty/evacuation language almost immediately, same bet already
+    made for storm/war/coup/attack/unrest."""
+    assert detect_risk_type(
+        "Volcano erupts near Nemrut, ash cloud grounds flights",
+        "The eruption forced the evacuation of nearby villages.",
+    ) == "volcano"
+    assert detect_risk_type(
+        "Nemrut Kalderası'nda volkanik patlama",
+        "Patlama sonrası bölge tahliye edildi, çok sayıda ev hasar gördü.",
+    ) == "volcano"
+
+
+def test_died_and_became_do_not_collide_into_the_same_severity():
+    """ASCII-folding turns "öldü" (died) and "oldu" (became/happened, one of
+    the most common Turkish auxiliary verbs) into the identical token --
+    "...milli park destinasyonları arasına girmiş oldu" (has thus become a
+    national park) inflated a tourism story to HIGH severity in production."""
+    assert detect_risk_severity(
+        "Nemrut Kalderası Milli Park İlan Edildi",
+        "Türkiye'nin milli park destinasyonları arasına girmiş oldu.",
+    ) != "high"
+    # A real death report must still resolve high through the forms that
+    # don't collide with "oldu".
+    assert detect_risk_severity(
+        "Depremde can kaybı",
+        "İki kişi hayatini kaybetti, bir kişi de öldürüldü.",
+    ) == "high"
 
 
 def test_no_weak_term_is_also_a_context_word():

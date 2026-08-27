@@ -474,12 +474,18 @@ _RISK_RULES: tuple[_RiskRule, ...] = (
         "volcano",
         strong=(
             "volcanic eruption", "volcanic ash", "volcano erupted", "volcano erupts",
-            "ash cloud", "ash plume", "volcano", "volcanoes", "volkanik",
-            "volkan patlamasi", "yanardag", "lava",
+            "ash cloud", "ash plume", "volkan patlamasi", "lava",
         ),
         # Not "ash" (a name, and Ash Wednesday) and not "erupted" ("chaos
-        # erupted") -- both matched non-volcanic stories in production.
-        weak=("eruption",),
+        # erupted") -- both matched non-volcanic stories in production. Bare
+        # "volcano"/"volkanik"/"yanardag" moved here from strong: a dormant
+        # crater lake's tourism coverage calls it a "volcanic formation" or
+        # "volcanic landscape" just as naturally as breaking eruption news
+        # does -- Nemrut Kalderası being declared a national park matched
+        # "volkanik" and published as a HIGH-severity live event. A real
+        # eruption still brings _RISK_CONTEXT words (evacuated, disaster,
+        # destroyed) or one of the unambiguous strong compounds above.
+        weak=("eruption", "volcano", "volcanoes", "volkanik", "yanardag"),
     ),
     _RiskRule(
         "storm",
@@ -564,7 +570,14 @@ _SEVERITY_HIGH: tuple[str, ...] = (
     "destroyed", "destroys", "devastated", "devastates", "devastation",
     "state of emergency", "catastrophic", "catastrophe", "mass evacuation",
     "leaves dead", "bodies recovered",
-    "olu", "olen", "oldu", "hayatini kaybetti", "can kaybi", "afet", "felaket",
+    # Not bare "oldu": ASCII-folding collapses "öldü" (died) and "oldu"
+    # (became/happened -- one of the most common auxiliary verbs in Turkish)
+    # onto the same token. "...milli park destinasyonları arasına girmiş
+    # oldu" (has thus become a national park) matched this and inflated a
+    # tourism story to HIGH severity in production. "olduruldu" (was killed)
+    # and "hayatini kaybetti" (lost their life) already cover the real
+    # death-verb forms without the collision.
+    "olu", "olen", "hayatini kaybetti", "can kaybi", "afet", "felaket",
     "yikildi", "olduruldu",
 )
 _SEVERITY_MEDIUM: tuple[str, ...] = (
