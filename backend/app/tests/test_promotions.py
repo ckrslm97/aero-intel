@@ -337,6 +337,62 @@ async def test_new_count_covers_the_whole_table_not_a_view_window(db_session):
     assert payload["airline_codes"] == ["PC", "TK"]
 
 
+# --- contract: no publish endpoint serves a below-threshold or dead row -
+#
+# Faz 15's contract-test requirement. Neither endpoint used to filter on
+# `confidence_band`/`superseded_at` at all, so once pipeline_v2 starts writing
+# these columns, a low-confidence campaign (or one Faz 13's
+# `mark_legacy_campaigns_superseded()` retired) would still have shown up
+# here. `confidence_band IS NULL` has to stay visible: it is not "assessed
+# and found wanting", it is "never assessed" -- the state of every row
+# `promo_scrape.py` has ever written -- and the fix must not use a bare
+# `!= "low"`, which SQL's three-valued logic would silently apply to NULLs
+# too.
+
+
+async def test_low_confidence_promotion_is_not_listed(db_session):
+    await _promo(db_session, slug="shown", confidence_band="high")
+    await _promo(db_session, slug="hidden", confidence_band="low")
+
+    assert [r.title_tr for r in await _list(db_session)] == ["shown"]
+
+
+async def test_superseded_promotion_is_not_listed(db_session):
+    await _promo(db_session, slug="live")
+    await _promo(db_session, slug="retired", superseded_at=NOW)
+
+    assert [r.title_tr for r in await _list(db_session)] == ["live"]
+
+
+async def test_null_confidence_promotion_still_shows_because_it_was_never_assessed(
+    db_session,
+):
+    # Every currently-live scraped Pegasus row has confidence_band IS NULL --
+    # promo_scrape.py never sets it. Treating "never assessed" the same as
+    # "assessed and found wanting" would empty the live page.
+    await _promo(db_session, slug="never-assessed", confidence_band=None)
+
+    assert [r.title_tr for r in await _list(db_session)] == ["never-assessed"]
+
+
+async def test_new_count_excludes_low_confidence_and_superseded_rows(db_session):
+    await _promo(db_session, slug="counted", airline="PC", detected_at=NOW)
+    await _promo(
+        db_session, slug="low", airline="TK", detected_at=NOW, confidence_band="low"
+    )
+    await _promo(
+        db_session,
+        slug="retired",
+        airline="LH",
+        detected_at=NOW,
+        superseded_at=NOW,
+    )
+
+    payload = await count_new_promotions(response=Response(), db=db_session)
+    assert payload["count"] == 1
+    assert payload["airline_codes"] == ["PC"]
+
+
 async def test_url_is_the_idempotency_key(db_session):
     await _promo(db_session, slug="same")
     stored = (await db_session.execute(select(Promotion))).scalars().all()
