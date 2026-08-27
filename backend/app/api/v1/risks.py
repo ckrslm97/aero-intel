@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.cache_headers import AGGREGATES, public_cache
+from app.core.logging import get_logger
 from app.core.db import get_db
 from app.models.article import Article, ArticleEnrichment
 from app.models.entity import ArticleEntity
@@ -28,6 +29,7 @@ from app.taxonomy import (
 )
 
 router = APIRouter(prefix="/risks", tags=["risks"])
+logger = get_logger(__name__)
 
 
 class RiskItemOut(BaseModel):
@@ -154,6 +156,14 @@ async def list_risks(
         members = [by_id[c.article_id] for c in group]
         primary = by_id[pick_primary(group).article_id]
         primary_enrichment = primary.enrichment
+
+        if len(members) > 1:
+            logger.info(
+                "risk_cluster_membership_debug",
+                size=len(members),
+                titles=[m.title[:60] for m in members],
+                ids=[str(m.id) for m in members],
+            )
 
         # Severity: the most severe member wins. A vaguer report that never
         # mentions the closure's scale should not water down one that does --
