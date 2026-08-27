@@ -152,6 +152,90 @@ async def _backfill_risks(limit: int | None) -> None:
         )
 
 
+async def _repair_etna_article_content() -> None:
+    """ONE-OFF, TEMPORARY -- see PR that added this / the PR that removes it.
+
+    Two articles about the August 2026 Etna eruption (Aviation24.be,
+    eTurboNews) were ingested with only a short RSS-snippet-length
+    raw_content, so extract_entities() never found ITALY/CTA in them and
+    app/api/v1/risks.py's new event-clustering (PR #35) couldn't merge them
+    with a third report (AeroTime) of the same event. This backfills the
+    real article bodies (fetched by hand from the source URLs) into just
+    these two specific rows and re-extracts entities from them -- it does
+    not touch the general ingestion pipeline, and is not meant to run again.
+    """
+    from app.llm.heuristic import extract_entity_mentions
+    from app.models.article import Article
+    from app.models.entity import ArticleEntity
+    from app.repositories.entity_repository import EntityRepository
+    from sqlalchemy import select
+
+    REPAIRS = {
+        "9aabd9ca-31de-41ac-9ef8-19cfafa5d2e5": (
+            "The continuing eruption of Mount Etna has caused major disruption to air "
+            "travel in Sicily, with Catania Fontanarossa Airport remaining closed until "
+            "at least 08:00 on 14 August as volcanic ash continues to affect the region. "
+            "Between 7 and 12 August, around 700 flights were cancelled, leaving tens of "
+            "thousands of passengers facing disrupted journeys during one of the busiest "
+            "periods of the summer season. More than 400 flights have been redirected or "
+            "rescheduled through other airports, including around 330 at Palermo, more "
+            "than 100 at Comiso and 22 at Trapani, with some services transferred to "
+            "Lamezia Terme on the Italian mainland. The situation was further complicated "
+            "when Comiso Airport itself temporarily closed for around 12 hours because of "
+            "volcanic ash contamination before reopening. Etna remains highly active, "
+            "producing intense Strombolian explosions and a volcanic plume several "
+            "kilometres high. Ash has reportedly travelled as far as Malta and North "
+            "Africa, while lava continues to flow from several fractures towards the "
+            "Valle del Bove. Italy's National Institute of Geophysics and Volcanology "
+            "(INGV) warned that it is impossible to predict when the eruption will end."
+        ),
+        "854dcaea-b6e9-4e6f-83b2-a97eeb2f78f0": (
+            "CATANIA, Sicily -- Mount Etna is demonstrating one of tourism's strangest "
+            "contradictions: the same eruption that is canceling hundreds of flights, "
+            "stranding tens of thousands of passengers, and costing Sicily's tourism "
+            "economy millions of euros is attracting extraordinary numbers of visitors to "
+            "the volcano itself. Europe's highest and most active volcano has been "
+            "erupting continuously for seven days. Catania-Fontanarossa Airport, the "
+            "principal gateway to eastern Sicily and Italy's fifth-busiest airport, has "
+            "repeatedly suspended operations as volcanic ash entered surrounding "
+            "airspace. On Thursday, August 13, airport operator SAC extended the "
+            "suspension of arrivals until 8:00 a.m. Friday, August 14. Catania Airport "
+            "handled 12.37 million passengers in 2025, illustrating how dependent "
+            "eastern Sicily's tourism economy has become on this single aviation "
+            "gateway."
+        ),
+    }
+
+    async with AsyncSessionLocal() as db:
+        entity_repo = EntityRepository(db)
+        for article_id, content in REPAIRS.items():
+            article = (
+                await db.execute(select(Article).where(Article.id == article_id))
+            ).scalar_one_or_none()
+            if article is None:
+                print(f"Skipped {article_id}: not found")
+                continue
+            article.raw_content = content
+            mentions = extract_entity_mentions(article.title, content)
+            for mention in mentions:
+                entity = await entity_repo.get_or_create(
+                    mention.entity_type, mention.name, mention.code
+                )
+                exists = (
+                    await db.execute(
+                        select(ArticleEntity).where(
+                            ArticleEntity.article_id == article.id,
+                            ArticleEntity.entity_id == entity.id,
+                        )
+                    )
+                ).scalar_one_or_none()
+                if exists is None:
+                    db.add(ArticleEntity(article_id=article.id, entity_id=entity.id))
+            await db.flush()
+            print(f"Repaired {article_id}: {[ (m.entity_type, m.name) for m in mentions ]}")
+        await db.commit()
+
+
 async def _seed_events() -> None:
     from app.ingest.events_seed import seed_events
 
@@ -442,6 +526,7 @@ def main() -> None:
             "reclassify",
             "backfill-regions",
             "backfill-risks",
+            "repair-etna-article-content",
             "build-insight",
             "repair-translations",
             "clean-headlines",
@@ -518,6 +603,8 @@ def main() -> None:
         # An absent --limit means the whole archive: the risk backfill is free,
         # heuristic-only, and a partial pass would leave the radar half-blind.
         asyncio.run(_backfill_risks(args.limit))
+    elif args.command == "repair-etna-article-content":
+        asyncio.run(_repair_etna_article_content())
     elif args.command == "repair-translations":
         asyncio.run(_repair_translations())
     elif args.command == "clean-headlines":

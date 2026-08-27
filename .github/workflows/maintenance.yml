@@ -22,6 +22,7 @@ on:
           - re-enrich
           - reclassify
           - backfill-risks
+          - repair-etna-article-content
           - repair-translations
           - clean-headlines
           - translate-backlog
@@ -123,6 +124,8 @@ jobs:
               else
                 python -m app.cli backfill-risks
               fi ;;
+            repair-etna-article-content)
+              python -m app.cli repair-etna-article-content ;;
             repair-translations)
               python -m app.cli repair-translations ;;
             clean-headlines)
