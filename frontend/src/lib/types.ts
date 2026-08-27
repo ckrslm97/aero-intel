@@ -332,6 +332,10 @@ export interface RiskItem {
   /** Published within the last 24h. Computed server-side; rendered as a quiet
    * text tag, never as a flash -- see risk-radar-client.tsx. */
   is_fresh: boolean;
+  /** How many articles clustered into this one signal. 1 for the common
+   * case; >1 means multiple outlets reported the same event and this is
+   * already the merged, reconciled view. */
+  source_count: number;
 }
 
 export interface RiskSeverityCounts {

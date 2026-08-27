@@ -123,6 +123,49 @@ def distinctive_tokens(text: str) -> set[str]:
     return {t for t in tokens if t not in GENERIC_TOKENS and t not in codes}
 
 
+def _tier_for_trust_weight(weight: float) -> str:
+    """Bucket a bare trust_weight into a tier, for sources with none declared.
+
+    Every source app/ingest/sources_seed.py seeds now declares a real tier
+    (SourceSeed.tier), reconciled onto Source.tier by ensure_seeded(). This
+    bucketing only fires for a row seeded before that field existed and not
+    yet reconciled, or a source added by hand outside the seed list -- it is
+    the fallback, not the primary path. See tier_for_source below.
+    """
+    if weight >= 0.90:
+        return "regulator"
+    if weight >= 0.75:
+        return "agency"
+    if weight >= 0.50:
+        return "trade"
+    return "aggregator"
+
+
+def tier_for_source(source) -> str:
+    """The declared tier when there is one; the trust_weight bucket otherwise."""
+    if source is None:
+        return "trade"
+    if source.tier:
+        return source.tier
+    return _tier_for_trust_weight(source.trust_weight)
+
+
+def entity_codes(article) -> frozenset[str]:
+    """Subject entities for clustering, reusing v1's heuristic extraction
+    rather than spending a model call before we even know if this article
+    clears the gate."""
+    codes: set[str] = set()
+    for link in article.entity_links:
+        entity = link.entity
+        if entity is None:
+            continue
+        if entity.code:
+            codes.add(entity.code.upper())
+        elif entity.entity_type == "country" and entity.name:
+            codes.add(entity.name.upper())
+    return frozenset(codes)
+
+
 @dataclass(frozen=True)
 class EventCandidate:
     """One article, reduced to what clustering needs."""

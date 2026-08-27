@@ -599,6 +599,7 @@ function RiskCard({ item }: { item: RiskItem }) {
           </span>
         )}
         {item.source_name && <span className="font-medium">{item.source_name}</span>}
+        {item.source_count > 1 && <span>+{item.source_count - 1} kaynak daha</span>}
         <a
           href={item.url}
           target="_blank"
