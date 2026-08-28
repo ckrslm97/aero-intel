@@ -26,6 +26,8 @@ from app.core.tr_dates import format_optional_range
 from app.ingest import promo_scrape
 from app.ingest.promo_scrape import SOURCE_NAME as SCRAPE_SOURCE
 from app.ingest.promo_scrape import ScrapedPromo, scrape_promotions
+from app.models.campaign_source import CampaignSource
+from app.models.campaign_version import CampaignVersion
 from app.models.promotion import NEW_WINDOW_HOURS, Promotion
 from app.pipeline.promo_dedup import (
     MAX_DETECTION_GAP,
@@ -514,6 +516,112 @@ async def test_a_campaign_found_by_both_paths_ends_up_as_one_row(db_session, mon
     # Earliest sighting: this campaign is three days old, not new. Adopting the
     # scrape's timestamp would flash it as "Yeni" all over again.
     assert survivor.detected_at == NOW - timedelta(days=3)
+
+    # The report that found it first is not discarded by being taken over: both
+    # pages stay on file, which is what a corroboration count counts.
+    sources = (
+        await db_session.execute(
+            select(CampaignSource).order_by(CampaignSource.url)
+        )
+    ).scalars().all()
+    assert [(s.url, s.source_tier) for s in sources] == [
+        ("https://haber.example.com/pegasus-kktc-indirim", "secondary"),
+        (scraped.url, "official"),
+    ]
+    # ...and what the takeover changed is written down rather than overwritten.
+    versions = (await db_session.execute(select(CampaignVersion))).scalars().all()
+    assert len(versions) == 1
+    assert versions[0].version_no == 1
+    assert versions[0].changed_fields["sale_ends"] == {
+        "previous": None, "new": "2026-08-23"
+    }
+    assert survivor.last_changed_at is not None
+
+
+async def test_a_freshly_scraped_campaign_files_the_page_and_versions_nothing(
+    db_session, monkeypatch
+):
+    """Creation is not a change: what it was before is nothing. The page it was
+    read from is recorded from the start, so no campaign is ever in the table
+    without a source."""
+    scraped = ScrapedPromo(
+        airline_code="PC",
+        airline_name="Pegasus Airlines",
+        title_tr="Kuzey Kıbrıs Uçuşları %40 indirimli!",
+        summary_tr="Salı, çarşamba ve perşembe günleri geçerlidir.",
+        url="https://www.flypgs.com/kampanyali-ucak-biletleri/kktc-2026",
+        sale_starts=date(2026, 8, 21),
+        sale_ends=date(2026, 8, 23),
+        discount_pct=40,
+    )
+
+    async def _fake_fetch(_client):
+        return [scraped]
+
+    monkeypatch.setattr(promo_scrape, "fetch_pegasus", _fake_fetch)
+    async with httpx.AsyncClient() as client:
+        assert (await scrape_promotions(db_session, client=client))["inserted"] == 1
+
+    row = (await db_session.execute(select(Promotion))).scalars().one()
+    source = (await db_session.execute(select(CampaignSource))).scalars().one()
+    assert (source.promotion_id, source.url) == (row.id, scraped.url)
+    assert source.source_tier == "official"
+    assert row.first_seen_at is not None and row.last_seen_at is not None
+    assert (await db_session.execute(select(CampaignVersion))).scalars().all() == []
+
+
+async def test_a_campaign_the_carrier_extended_in_place_is_versioned(
+    db_session, monkeypatch
+):
+    """Pegasus extends campaigns without changing their URL, so the row is
+    overwritten in place -- the case where "never overwrite silently" is the
+    whole requirement. Re-scraping the same page unchanged writes nothing."""
+    url = "https://www.flypgs.com/kampanyali-ucak-biletleri/kktc-2026"
+    stored = await _stored(
+        db_session,
+        title_tr="Kuzey Kıbrıs Uçuşları %40 indirimli!",
+        url=url,
+        source_name=SCRAPE_SOURCE,
+        discount_pct=40,
+        sale_starts=date(2026, 8, 21),
+        sale_ends=date(2026, 8, 23),
+    )
+    await db_session.commit()
+
+    extended = ScrapedPromo(
+        airline_code="PC",
+        airline_name="Pegasus Airlines",
+        title_tr="Kuzey Kıbrıs Uçuşları %40 indirimli!",
+        summary_tr="",
+        url=url,
+        sale_starts=date(2026, 8, 21),
+        sale_ends=date(2026, 8, 30),
+        discount_pct=40,
+    )
+
+    async def _fake_fetch(_client):
+        return [extended]
+
+    monkeypatch.setattr(promo_scrape, "fetch_pegasus", _fake_fetch)
+    async with httpx.AsyncClient() as client:
+        assert (await scrape_promotions(db_session, client=client))["updated"] == 1
+        # The identical page again: seen, not changed.
+        assert (await scrape_promotions(db_session, client=client))["updated"] == 1
+
+    versions = (
+        await db_session.execute(
+            select(CampaignVersion).order_by(CampaignVersion.version_no)
+        )
+    ).scalars().all()
+    assert [v.version_no for v in versions] == [1], "one edit, two sightings"
+    assert versions[0].changed_fields["sale_ends"] == {
+        "previous": "2026-08-23", "new": "2026-08-30"
+    }
+    assert versions[0].source_url == url
+    await db_session.refresh(stored)
+    assert stored.sale_ends == date(2026, 8, 30)
+    assert stored.conflict_detected is None, "one source revising itself is not a conflict"
+    assert len((await db_session.execute(select(CampaignSource))).scalars().all()) == 1
 
 
 async def test_the_second_run_finds_the_merged_row_instead_of_re_inserting(

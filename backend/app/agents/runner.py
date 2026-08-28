@@ -61,7 +61,15 @@ from app.pipeline.clustering import EventCandidate, cluster, entity_codes, pick_
 from app.pipeline.confidence import ConfidenceInput, is_publishable, score
 from app.pipeline.language import resolve as resolve_language
 from app.pipeline.outcomes import OutcomeState
-from app.pipeline.promo_dedup import candidate_from_row, find_duplicate, merge_candidate
+from app.pipeline.promo_dedup import (
+    campaign_tier_for_article,
+    candidate_from_row,
+    ensure_source_row,
+    find_duplicate,
+    merge_candidate,
+    record_version,
+    rescore_for_corroboration,
+)
 from app.pipeline.risk_scoring import score as score_risk
 from app.taxonomy import COUNTRY_TO_REGION, risk_category_family_of
 
@@ -191,14 +199,25 @@ _V2_MERGE_COLUMNS: tuple[str, ...] = (
 )
 
 
-def _fill_missing_campaign_fields(row, incoming) -> None:
+#: Of those, the ones a version row should carry. The route JSON is excluded
+#: for the same reason campaign_extract excludes its blobs: nobody reads two
+#: nested dicts as a diff.
+_VERSIONED_V2_COLUMNS = tuple(c for c in _V2_MERGE_COLUMNS if c != "route_json")
+
+
+def _fill_missing_campaign_fields(row, incoming) -> dict[str, dict]:
+    """Fill the v2 columns this row is missing; return what that changed."""
     row.last_seen_at = incoming.last_seen_at or row.last_seen_at
     if row.first_seen_at is None:
         row.first_seen_at = incoming.first_seen_at
+    changed: dict[str, dict] = {}
     for column in _V2_MERGE_COLUMNS:
         value = getattr(incoming, column, None)
         if value is not None and getattr(row, column) is None:
             setattr(row, column, value)
+            if column in _VERSIONED_V2_COLUMNS:
+                changed[column] = {"previous": None, "new": value}
+    return changed
 
 
 def apply_campaign_intelligence(
@@ -422,6 +441,12 @@ async def run_pipeline_v2(db: AsyncSession, *, limit: int = DEFAULT_BATCH_SIZE) 
                         source_count=len(members),
                         detected_at=now,
                     )
+                    # What this article counts as, as a campaign source. An
+                    # article is secondary reporting about somebody else's
+                    # campaign; only a source that IS the carrier ranks above
+                    # that -- see promo_dedup.ARTICLE_TIER_TO_CAMPAIGN_TIER.
+                    article_tier = campaign_tier_for_article(primary_candidate.tier)
+                    merged_into = None
                     if campaign_v2:
                         apply_campaign_intelligence(
                             promotion,
@@ -438,10 +463,44 @@ async def run_pipeline_v2(db: AsyncSession, *, limit: int = DEFAULT_BATCH_SIZE) 
                         # older row (and its detected_at, which the "Yeni"
                         # badge reads) and folds this reading into it.
                         candidate = candidate_from_row(promotion)
+                        candidate.source_tier = article_tier
                         duplicate = await find_duplicate(db, candidate)
                         if duplicate is not None:
-                            merge_candidate(duplicate, candidate)
-                            _fill_missing_campaign_fields(duplicate, promotion)
+                            displaced_url = duplicate.url
+                            displaced_source = duplicate.source_name
+                            changed = merge_candidate(duplicate, candidate)
+                            changed.update(
+                                _fill_missing_campaign_fields(duplicate, promotion)
+                            )
+                            await db.flush()
+                            # The incumbent's own page and this article both go
+                            # on the record; the row is then re-scored for the
+                            # corroboration it just gained.
+                            await ensure_source_row(
+                                db,
+                                duplicate,
+                                url=displaced_url,
+                                source_name=displaced_source,
+                                seen_at=duplicate.first_seen_at or duplicate.detected_at,
+                            )
+                            await ensure_source_row(
+                                db,
+                                duplicate,
+                                url=promotion.url,
+                                source_name=promotion.source_name,
+                                tier=article_tier,
+                                seen_at=now,
+                                page_published_at=(
+                                    primary.published_at.date()
+                                    if primary.published_at
+                                    else None
+                                ),
+                            )
+                            await rescore_for_corroboration(db, duplicate)
+                            await record_version(
+                                db, duplicate, changed, source_url=promotion.url, now=now
+                            )
+                            merged_into = duplicate
                             logger.info(
                                 "pipeline_v2_campaign_merged",
                                 airline=candidate.airline_code,
@@ -452,6 +511,25 @@ async def run_pipeline_v2(db: AsyncSession, *, limit: int = DEFAULT_BATCH_SIZE) 
                             db.add(promotion)
                     else:
                         db.add(promotion)
+
+                    if merged_into is None:
+                        # N>=1 for the row this run created. Unconditional,
+                        # like the rest of the provenance bookkeeping: it
+                        # changes nothing about what `promotions` holds or what
+                        # the API serves, and a v1 row with no recorded source
+                        # would be a hole in the invariant for no gain.
+                        await db.flush()
+                        await ensure_source_row(
+                            db,
+                            promotion,
+                            url=promotion.url,
+                            source_name=promotion.source_name,
+                            tier=article_tier,
+                            seen_at=now,
+                            page_published_at=(
+                                primary.published_at.date() if primary.published_at else None
+                            ),
+                        )
                     wrote_campaign = True
         except IntegrityError:
             logger.info("pipeline_v2_cluster_collision", primary_article_url=primary_url)
