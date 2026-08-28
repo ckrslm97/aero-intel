@@ -85,6 +85,15 @@ MAX_DETECTION_GAP = timedelta(days=45)
 # than a journalist's, so summaries are picked on substance instead.
 AIRLINE_PAGE_SOURCES = frozenset({"Pegasus kampanya sayfası"})
 
+# Every carrier the deep scan reads writes its source name the same way --
+# "Emirates kampanya sayfası", "Turkish Airlines kampanya sayfası" (see
+# pipeline/campaign_extract.py) -- and Pegasus, named above before that path
+# existed, already follows it. Matching the suffix rather than enumerating the
+# carriers keeps this module from importing the carrier registry to answer a
+# question about a string, and means adding an eighth carrier does not silently
+# demote its own campaign page below a news report about it.
+AIRLINE_PAGE_SUFFIX = "kampanya sayfası"
+
 
 # Words that appear in campaign titles regardless of WHICH campaign it is.
 # Two kinds: marketing/structural filler, and the carrier and loyalty-programme
@@ -187,7 +196,8 @@ def candidate_from_row(row: Promotion) -> PromoCandidate:
 
 
 def is_airline_sourced(source_name: str | None) -> bool:
-    return (source_name or "") in AIRLINE_PAGE_SOURCES
+    name = (source_name or "").strip()
+    return name in AIRLINE_PAGE_SOURCES or name.casefold().endswith(AIRLINE_PAGE_SUFFIX)
 
 
 def _aware(moment: datetime) -> datetime:

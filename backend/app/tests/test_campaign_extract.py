@@ -1,0 +1,557 @@
+"""The extraction chain, with the model canned.
+
+Every LLM answer here is a literal dict written into the test, for the same
+reason app/tests/test_pipeline_v2_runner.py records its outcomes: CI must not
+depend on a model being reachable, and -- more to the point -- the cases worth
+testing are the ones where the model is WRONG. A live model cannot be asked to
+hallucinate a date on demand; a canned one can, and that is the case the whole
+date-validation layer exists for.
+
+The page text is EK-shaped because Emirates is the one carrier a real Chromium
+verifiably reaches (app/ingest/carriers.py), so it is the text this chain will
+actually be fed. Nothing here assumes TK's page is fetchable.
+"""
+import json
+from datetime import date, datetime, timezone
+
+import pytest
+
+from app.ingest.carriers import CARRIER_MASTER
+from app.pipeline.campaign_extract import (
+    campaign_url,
+    extract_campaigns_from_page,
+    named_airlines,
+    resolve_route,
+    slugify_campaign,
+)
+from app.schemas.campaign import RawCampaignItem, parse_campaign_payload
+
+EK = CARRIER_MASTER["EK"]
+NOW = datetime(2026, 8, 28, 5, 0, tzinfo=timezone.utc)
+TODAY = date(2026, 8, 28)
+PAGE_URL = "https://www.emirates.com/tr/english/special-offers/"
+
+EK_PAGE = (
+    "Summer fares to Europe. "
+    "Save up to 25% on Economy Class fares from DXB to LHR. "
+    "Book by 15 September 2026. Travel between 1 October 2026 and 30 November 2026. "
+    "Promo code SUMMER25. Book now on emirates.com. "
+    "Dubai to Istanbul offer. Return fares from 1200 AED. "
+    "Book by 20 September 2026 for travel until 15 December 2026."
+)
+
+TR_PAGE = (
+    "Sonbahar fırsatı. Yurt dışı uçuşlarda %20 indirim. "
+    "Son rezervasyon 30 Kasım'a kadar. Hemen rezervasyon yapın."
+)
+
+
+def _generator(payload):
+    """A stand-in for the raw completion coroutine, returning canned JSON."""
+
+    async def generate(_prompt: str) -> str:
+        return payload if isinstance(payload, str) else json.dumps(payload)
+
+    return generate
+
+
+SUMMER = {
+    "campaign_name": "Summer fares to Europe",
+    "campaign_type": "SUMMER_SALE",
+    "is_fare_campaign": True,
+    "business_class_hint": "ACTIVE_CAMPAIGN",
+    "booking_end": "2026-09-15",
+    "travel_start": "2026-10-01",
+    "travel_end": "2026-11-30",
+    "discount_pct": 25,
+    "promo_code": "SUMMER25",
+    "cabin": "Economy",
+    "origin": "DXB",
+    "destination": "LHR",
+    "source_text": {
+        "booking_end": "Book by 15 September 2026.",
+        "travel_start": "Travel between 1 October 2026 and 30 November 2026.",
+        "travel_end": "Travel between 1 October 2026 and 30 November 2026.",
+        "discount_pct": "Save up to 25% on Economy Class fares",
+        "origin": "from DXB to LHR",
+        "destination": "from DXB to LHR",
+    },
+}
+
+ISTANBUL = {
+    "campaign_name": "Dubai to Istanbul offer",
+    "campaign_type": "DESTINATION_PROMOTION",
+    "is_fare_campaign": True,
+    "booking_end": "2026-09-20",
+    "travel_end": "2026-12-15",
+    "price_floor": 1200,
+    "currency": "AED",
+    "origin": "Dubai",
+    "destination": "Istanbul",
+    "source_text": {
+        "booking_end": "Book by 20 September 2026",
+        "travel_end": "for travel until 15 December 2026",
+        "price_floor": "Return fares from 1200 AED",
+        "origin": "Dubai to Istanbul offer",
+        "destination": "Dubai to Istanbul offer",
+    },
+}
+
+
+async def _extract(payload, *, text=EK_PAGE, carrier=EK):
+    return await extract_campaigns_from_page(
+        text,
+        carrier=carrier,
+        page_url=PAGE_URL,
+        source_quality=carrier.source_quality,
+        detected_at=NOW,
+        today=TODAY,
+        content_hash="a" * 64,
+        generate=_generator(payload),
+    )
+
+
+# --- the happy path -------------------------------------------------------
+
+
+async def test_two_campaigns_on_one_page_become_two_validated_records():
+    """The shape the article prompt cannot express: one document, N campaigns."""
+    result = await _extract({"campaigns": [SUMMER, ISTANBUL]})
+
+    assert result.succeeded is True
+    assert result.count == 2
+    first, second = result.campaigns
+
+    assert first.campaign_name == "Summer fares to Europe"
+    assert first.campaign_type == "SUMMER_SALE"
+    assert first.business_class == "ACTIVE_CAMPAIGN"
+    assert first.discount_pct == 25
+    assert first.sale_ends == date(2026, 9, 15)
+    assert (first.travel_starts, first.travel_ends) == (date(2026, 10, 1), date(2026, 11, 30))
+    assert first.sale_starts is None, "the page states no booking start; nothing invents one"
+
+    # Route: two airport codes is the only shape that earns an OND.
+    assert first.route.scope == "OND"
+    assert first.route.ond == "DXB-LHR"
+    assert (first.route.origin_code, first.route.dest_code) == ("DXB", "LHR")
+
+    # Cities, not codes: "Dubai to Istanbul" says nothing about which airport.
+    assert second.route.scope == "CITY_PAIR"
+    assert second.route.ond is None
+    assert second.route.origin_code is None
+
+
+async def test_every_published_field_carries_the_quote_it_came_from():
+    result = await _extract({"campaigns": [SUMMER]})
+    evidence = result.campaigns[0].evidence_json
+
+    assert evidence["booking_end"]["value"] == "2026-09-15"
+    assert evidence["booking_end"]["source_text"] == "Book by 15 September 2026."
+    assert evidence["booking_end"]["confidence"] == 1.0
+    assert evidence["discount_pct"]["value"] == 25
+    assert "25%" in evidence["discount_pct"]["source_text"]
+
+
+async def test_a_fully_quoted_fully_dated_official_campaign_needs_no_review():
+    result = await _extract({"campaigns": [SUMMER]})
+    campaign = result.campaigns[0]
+
+    assert campaign.confidence_band == "high"
+    assert campaign.review_required is False
+    # The dormant weight, awake: three dates checked, three found.
+    assert campaign.confidence_detail["components"]["signal_agreement"] == 1.0
+
+
+async def test_the_classification_reason_says_what_was_verified():
+    result = await _extract({"campaigns": [SUMMER]})
+    reason = result.campaigns[0].classification_reason
+
+    assert "3/3 tarih" in reason
+    assert "OND" in reason
+
+
+# --- date validation ------------------------------------------------------
+
+
+async def test_a_date_that_is_nowhere_on_the_page_is_not_published():
+    """The hallucination case. The model returns a plausible deadline the page
+    never states; the regex layer cannot find it in the quote or anywhere else,
+    so it does not reach the column -- but it is recorded, because a rejection
+    nobody can see is indistinguishable from a field that was never asked
+    about."""
+    invented = {**SUMMER, "booking_end": "2026-09-30"}
+    invented["source_text"] = {**SUMMER["source_text"], "booking_end": "Book now"}
+
+    result = await _extract({"campaigns": [invented]})
+    campaign = result.campaigns[0]
+
+    assert campaign.sale_ends is None
+    evidence = campaign.evidence_json["booking_end"]
+    assert evidence["value"] is None
+    assert evidence["rejected_value"] == "2026-09-30"
+    assert evidence["confidence"] == 0.0
+    # Two of three dates confirmed drags the score, and the row is queued for
+    # a human rather than published as if nothing happened.
+    assert campaign.confidence_detail["components"]["signal_agreement"] == pytest.approx(
+        2 / 3, abs=1e-4
+    )
+
+
+async def test_a_year_less_date_is_resolved_and_flagged_never_silently_completed():
+    yearless = {
+        "campaign_name": "Sonbahar fırsatı",
+        "campaign_type": "SEASONAL_PROMOTION",
+        "is_fare_campaign": True,
+        "discount_pct": 20,
+        "date_text": {"booking_end": "30 Kasım'a kadar"},
+        "destination": "Avrupa",
+        "source_text": {
+            "discount_pct": "Yurt dışı uçuşlarda %20 indirim",
+            "destination": "Yurt dışı uçuşlarda",
+        },
+    }
+
+    result = await _extract({"campaigns": [yearless]}, text=TR_PAGE)
+    campaign = result.campaigns[0]
+
+    assert campaign.sale_ends == date(2026, 11, 30), "completed from the scan year"
+    assert campaign.date_flags_json["inferred_year"] is True
+    assert campaign.date_flags_json["inferred_year_fields"] == ["booking_end"]
+    assert campaign.evidence_json["booking_end"]["inferred_year"] is True
+    assert "yıl sayfada yazmadığı" in campaign.classification_reason
+
+
+async def test_a_quote_the_page_does_not_contain_resolves_to_nothing():
+    """A `date_text` is supposed to be verbatim. One that is not is either a
+    paraphrase or an invention, and neither is a date."""
+    fabricated = {
+        "campaign_name": "Sonbahar fırsatı",
+        "is_fare_campaign": True,
+        "discount_pct": 20,
+        "date_text": {"booking_end": "31 Aralık'a kadar"},
+        "source_text": {"discount_pct": "%20 indirim"},
+    }
+
+    result = await _extract({"campaigns": [fabricated]}, text=TR_PAGE)
+    campaign = result.campaigns[0]
+
+    assert campaign.sale_ends is None
+    assert campaign.evidence_json["booking_end"]["note"].startswith("Alıntı")
+
+
+async def test_a_window_that_ends_before_it_starts_loses_both_ends():
+    reversed_window = {
+        **SUMMER,
+        "travel_start": "2026-11-30",
+        "travel_end": "2026-10-01",
+    }
+    result = await _extract({"campaigns": [reversed_window]})
+    campaign = result.campaigns[0]
+
+    assert campaign.travel_starts is None
+    assert campaign.travel_ends is None
+    assert "ters" in campaign.evidence_json["travel_end"]["note"]
+
+
+# --- entity validation ----------------------------------------------------
+
+
+async def test_a_partner_carriers_offer_on_our_page_is_not_our_campaign():
+    """Attribution is the error this whole rebuild started from: a campaign
+    filed under the wrong airline is a competitor's move on the wrong desk."""
+    partner = {
+        **SUMMER,
+        "campaign_name": "Qatar Airways ortak kampanyası",
+    }
+    result = await _extract({"campaigns": [partner]})
+
+    assert result.count == 0
+    assert result.dropped == (("Qatar Airways ortak kampanyası", "airline_mismatch:QR"),)
+
+
+async def test_a_campaign_naming_both_carriers_stays_with_the_page_it_is_on():
+    """A codeshare campaign names the partner AND us. Dropping it would lose a
+    real campaign from the carrier whose own site published it."""
+    codeshare = {
+        **SUMMER,
+        "campaign_name": "Emirates ve flydubai ortak kampanyası",
+    }
+    result = await _extract({"campaigns": [codeshare]})
+    assert result.count == 1
+
+
+def test_named_airlines_reads_the_gazetteer_not_a_substring():
+    assert named_airlines("Emirates ve flydubai") == {"EK", "FZ"}
+    assert named_airlines("Yaz indirimi") == set()
+
+
+async def test_a_baggage_promotion_is_dropped_by_the_rule_layer():
+    """Layer three. Not a fare campaign, however well-dated and well-quoted --
+    this is the single largest category among the 129 wrong rows."""
+    baggage = {
+        "campaign_name": "Extra baggage offer",
+        "campaign_type": "BAGGAGE_PROMOTION",
+        "is_fare_campaign": False,
+        "booking_end": "2026-09-15",
+        "source_text": {"booking_end": "Book by 15 September 2026."},
+    }
+    result = await _extract({"campaigns": [baggage]})
+
+    assert result.count == 0
+    assert result.dropped[0][1] == "business_class:PRODUCT_PROMOTION"
+
+
+async def test_one_rejected_card_does_not_cost_the_others_theirs():
+    result = await _extract(
+        {
+            "campaigns": [
+                SUMMER,
+                {
+                    "campaign_name": "Skywards miles sale",
+                    "is_fare_campaign": False,
+                    "source_text": {"booking_end": "Book by 15 September 2026."},
+                    "booking_end": "2026-09-15",
+                },
+                ISTANBUL,
+            ]
+        }
+    )
+    assert result.count == 2
+    assert len(result.dropped) == 1
+
+
+# --- route resolution -----------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("origin", "destination", "text", "scope", "ond"),
+    [
+        ("IST", "LHR", "", "OND", "IST-LHR"),
+        ("IST-LHR", None, "", "OND", "IST-LHR"),
+        ("Istanbul", "London", "", "CITY_PAIR", None),
+        ("İstanbul'dan", "Londra'ya", "", "CITY_PAIR", None),
+        ("Türkiye", "Almanya", "", "COUNTRY", None),
+        ("Türkiye'den", "Avrupa'ya", "", "REGION", None),
+        (None, "Avrupa", "", "REGION", None),
+        (None, None, "tüm uçuşlarda geçerli", "NETWORK_WIDE", None),
+        (None, None, "valid on all destinations", "NETWORK_WIDE", None),
+        (None, None, "", None, None),
+        ("Nowhereville", "Elsewhereton", "", None, None),
+    ],
+)
+def test_the_route_ladder(origin, destination, text, scope, ond):
+    route = resolve_route(origin, destination, text=text)
+    assert route.scope == scope
+    assert route.ond == ond
+
+
+def test_a_regional_campaign_is_never_fanned_out_into_invented_airport_pairs():
+    """The most tempting wrong enrichment available here: "Türkiye'den
+    Avrupa'ya" covers hundreds of city pairs and names none of them, and a row
+    claiming IST-LHR would be a competitive claim the carrier never made."""
+    route = resolve_route("Türkiye'den", "Avrupa'ya")
+
+    assert route.scope == "REGION"
+    assert route.ond is None
+    assert route.origin_code is None
+    assert route.dest_code is None
+    assert route.as_json()["dest"] == {"kind": "region", "text": "Avrupa'ya", "region": "europe"}
+
+
+def test_a_mixed_route_is_read_at_its_coarsest_end():
+    """One airport and one region is a regional campaign that happens to state
+    where it starts -- not an OND."""
+    route = resolve_route("IST", "Avrupa")
+    assert route.scope == "REGION"
+    assert route.ond is None
+
+
+def test_an_unresolvable_endpoint_is_recorded_rather_than_guessed():
+    route = resolve_route("Zzzz City", "LHR")
+    assert route.scope is None
+    assert route.as_json()["origin"] == {"kind": "unknown", "text": "Zzzz City"}
+
+
+def test_a_bare_code_that_is_also_a_word_needs_to_be_written_like_a_code():
+    """`Aug` is a month and `AUG` is Augusta, Maine -- the same distinction
+    llm/gazetteer.py's AMBIGUOUS_BARE_CODES draws for article bodies."""
+    assert resolve_route("Aug", "LHR").as_json()["origin"]["kind"] == "unknown"
+    assert resolve_route("AUG", "LHR").as_json()["origin"]["kind"] == "airport"
+
+
+# --- failure handling -----------------------------------------------------
+
+
+async def test_unparseable_json_fails_the_page_and_writes_nothing():
+    """FAILED never falls back. A whole official page guessed at by keyword
+    matching is the failure this rebuild exists to end."""
+    result = await _extract("I could not find any campaigns, sorry!")
+
+    assert result.succeeded is False
+    assert result.reason.startswith("schema_error")
+    assert result.count == 0
+
+
+async def test_a_campaigns_key_that_is_not_a_list_is_a_failed_page():
+    result = await _extract({"campaigns": {"campaign_name": "Yaz"}})
+    assert result.succeeded is False
+
+
+async def test_no_model_configured_is_a_failed_page_not_a_heuristic_pass(monkeypatch):
+    monkeypatch.setattr("app.llm.factory.get_raw_generator", lambda: None)
+    result = await extract_campaigns_from_page(
+        EK_PAGE,
+        carrier=EK,
+        page_url=PAGE_URL,
+        detected_at=NOW,
+        today=TODAY,
+    )
+    assert result.succeeded is False
+    assert result.reason == "no_llm_configured"
+    assert result.llm_calls == 0
+
+
+async def test_a_provider_error_is_a_failed_page():
+    async def explode(_prompt):
+        raise RuntimeError("groq is down")
+
+    result = await extract_campaigns_from_page(
+        EK_PAGE,
+        carrier=EK,
+        page_url=PAGE_URL,
+        detected_at=NOW,
+        today=TODAY,
+        generate=explode,
+    )
+    assert result.succeeded is False
+    assert result.reason == "llm_call_error"
+
+
+async def test_an_empty_page_is_a_successful_answer_not_a_failure():
+    """A carrier between campaigns must not be retried twice a day forever."""
+    result = await _extract({"campaigns": []})
+    assert result.succeeded is True
+    assert result.count == 0
+
+
+# --- the idempotency key --------------------------------------------------
+
+
+async def test_each_campaign_on_a_shared_page_gets_its_own_stable_url():
+    result = await _extract({"campaigns": [SUMMER, ISTANBUL]})
+    urls = [c.url for c in result.campaigns]
+
+    assert len(set(urls)) == 2, "promotions.url is UNIQUE; one page is not one campaign"
+    assert all(url.startswith(PAGE_URL + "#") for url in urls)
+    # Stable across runs: the same campaign name is the same row, not a new one
+    # on every scan.
+    assert campaign_url(PAGE_URL, SUMMER["campaign_name"]) == urls[0]
+
+
+def test_the_fragment_survives_turkish_and_punctuation():
+    assert slugify_campaign("Yaz İndirimi %40'a varan!") == "yaz-indirimi-40-a-varan"
+    assert slugify_campaign("") == "kampanya"
+
+
+# --- schema layer ---------------------------------------------------------
+
+
+def test_an_off_taxonomy_slug_is_dropped_and_recorded_not_raised():
+    item = RawCampaignItem.model_validate(
+        {"campaign_name": "Mega sale", "campaign_type": "MEGA_SALE"}
+    )
+    assert item.campaign_type is None
+    assert item.dropped_fields == ["campaign_type:MEGA_SALE"]
+
+
+@pytest.mark.parametrize("value", [0, 130, "çok", None, True])
+def test_an_out_of_range_discount_is_missing_data(value):
+    item = RawCampaignItem.model_validate({"campaign_name": "X", "discount_pct": value})
+    assert item.discount_pct is None
+
+
+def test_a_price_floor_without_a_currency_is_not_a_price():
+    item = RawCampaignItem.model_validate(
+        {"campaign_name": "X", "price_floor": 199, "currency": None}
+    )
+    assert item.price_floor is None
+    assert item.dropped_fields == ["price_floor:no_currency"]
+
+
+def test_a_date_that_is_not_iso_becomes_date_text_for_the_regex_layer():
+    item = RawCampaignItem.model_validate(
+        {"campaign_name": "X", "booking_end": "30 Kasım"}
+    )
+    assert item.booking_end is None
+    assert item.date_text["booking_end"] == "30 Kasım"
+
+
+def test_the_model_writing_the_word_null_is_still_null():
+    item = RawCampaignItem.model_validate(
+        {"campaign_name": "X", "promo_code": "yok", "cabin": "null"}
+    )
+    assert item.promo_code is None
+    assert item.cabin is None
+
+
+def test_a_nameless_card_is_dropped_without_costing_the_page():
+    page = parse_campaign_payload(
+        {"campaigns": [{"campaign_name": "Yaz"}, {"discount_pct": 40}, "not an object"]}
+    )
+    assert [c.campaign_name for c in page.campaigns] == ["Yaz"]
+    assert page.invalid_items == 2
+
+
+@pytest.mark.parametrize("payload", [None, [], {"items": []}, {"campaigns": "Yaz"}])
+def test_a_malformed_payload_raises_rather_than_being_half_believed(payload):
+    with pytest.raises(ValueError):
+        parse_campaign_payload(payload)
+
+
+# --- the prompt -----------------------------------------------------------
+
+
+def test_the_page_prompt_states_the_taxonomy_it_will_be_graded_against():
+    """A model cannot answer inside a closed set it was never shown -- and the
+    schema layer drops anything outside it, so an un-interpolated prompt would
+    lose every campaign_type silently."""
+    from app.llm.campaign_prompt import build_campaign_page_prompt
+    from app.taxonomy import CAMPAIGN_TYPES, ROUTE_SCOPES
+
+    prompt = build_campaign_page_prompt("EK", "Emirates", PAGE_URL, EK_PAGE)
+
+    assert "Emirates (EK)" in prompt
+    assert PAGE_URL in prompt
+    assert all(slug in prompt for slug in CAMPAIGN_TYPES)
+    assert all(slug in prompt for slug in ROUTE_SCOPES)
+    assert "campaigns" in prompt and "source_text" in prompt
+    # The two rules the whole chain depends on the model following.
+    assert "date_text" in prompt
+    assert "Yıl TAHMİN ETME" in prompt
+
+
+def test_a_long_page_is_cut_with_a_marker_rather_than_silently():
+    """A truncated last card reads as a campaign with missing fields; saying
+    the text was cut is what stops half a card being extracted as a whole one."""
+    from app.llm.campaign_prompt import MAX_PAGE_CHARS, TRUNCATION_MARKER, build_campaign_page_prompt
+
+    prompt = build_campaign_page_prompt("EK", "Emirates", PAGE_URL, "kampanya " * 5000)
+
+    assert TRUNCATION_MARKER in prompt
+    body = prompt[prompt.index("SAYFA METNİ:") :]
+    assert len(body) <= MAX_PAGE_CHARS + len(TRUNCATION_MARKER) + 40, (
+        "the cap is on the page text, whatever the rules above it cost"
+    )
+
+
+def test_the_article_prompt_is_unchanged_until_the_fragment_is_passed():
+    """The golden set grades the current article prompt; a silently widened
+    one would change every answer it grades."""
+    from app.llm.classify_prompt import build_prompt, campaign_topic_fragment
+
+    plain = build_prompt("Başlık", "Metin")
+    assert "business_class_hint" not in plain
+
+    widened = build_prompt("Başlık", "Metin", topic_fragment=campaign_topic_fragment())
+    assert "business_class_hint" in widened
+    assert "KONUYA ÖZEL KURALLAR" in widened

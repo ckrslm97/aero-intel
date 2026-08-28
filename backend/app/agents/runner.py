@@ -49,8 +49,10 @@ from sqlalchemy.orm import selectinload
 
 from app.agents.campaign_airline import build_promotion, validate_campaign
 from app.agents.gate import evaluate as gate_evaluate
+from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.llm.classify import classify_article
+from app.llm.classify_prompt import campaign_topic_fragment
 from app.llm.gazetteer import COUNTRY_ALIASES, fold_for_match
 from app.models.article import Article
 from app.models.entity import ArticleEntity
@@ -59,6 +61,7 @@ from app.pipeline.clustering import EventCandidate, cluster, entity_codes, pick_
 from app.pipeline.confidence import ConfidenceInput, is_publishable, score
 from app.pipeline.language import resolve as resolve_language
 from app.pipeline.outcomes import OutcomeState
+from app.pipeline.promo_dedup import candidate_from_row, find_duplicate, merge_candidate
 from app.pipeline.risk_scoring import score as score_risk
 from app.taxonomy import COUNTRY_TO_REGION, risk_category_family_of
 
@@ -172,6 +175,66 @@ def _region_for(country: str | None) -> str | None:
     return COUNTRY_TO_REGION.get(canonical)
 
 
+#: The campaign-intelligence columns an article-derived row can fill on a row
+#: that already exists. Null-never-overwrites, the same rule promo_dedup applies
+#: to the columns it knows about: a row classified from the carrier's own page
+#: must not be re-labelled by a news report that happens to arrive later.
+_V2_MERGE_COLUMNS: tuple[str, ...] = (
+    "campaign_type",
+    "business_class",
+    "classification_reason",
+    "route_scope",
+    "ond",
+    "origin_code",
+    "dest_code",
+    "route_json",
+)
+
+
+def _fill_missing_campaign_fields(row, incoming) -> None:
+    row.last_seen_at = incoming.last_seen_at or row.last_seen_at
+    if row.first_seen_at is None:
+        row.first_seen_at = incoming.first_seen_at
+    for column in _V2_MERGE_COLUMNS:
+        value = getattr(incoming, column, None)
+        if value is not None and getattr(row, column) is None:
+            setattr(row, column, value)
+
+
+def apply_campaign_intelligence(
+    promotion, campaign, details: dict, *, text: str, now: datetime
+) -> None:
+    """Fill the campaign-intelligence columns on an article-derived row.
+
+    The deep-scan path gets these from the extraction chain; the article path
+    gets what the consolidated prompt's campaign fragment returned, run through
+    the *same* route resolver (pipeline/campaign_extract.resolve_route) so a
+    campaign found in a news report and the same campaign found on the
+    carrier's page describe their route identically instead of in two dialects.
+
+    No evidence_json: an article path has no per-field quotes to cite, and an
+    empty citation map would read as "checked, nothing found" rather than "not
+    asked for". Confidence stays exactly what build_promotion computed --
+    nothing here is new evidence about how sure we are.
+    """
+    from app.pipeline.campaign_extract import resolve_route
+
+    route = resolve_route(campaign.origin, campaign.destination, text=text)
+
+    promotion.campaign_type = campaign.campaign_type
+    # The rule layer's verdict outranks the model's hint: `details` is
+    # validate_campaign's answer, which has already looked at the rulepacks.
+    promotion.business_class = details.get("business_class") or campaign.business_class_hint
+    promotion.classification_reason = details.get("classification_reason")
+    promotion.route_scope = route.scope
+    promotion.ond = route.ond
+    promotion.origin_code = route.origin_code
+    promotion.dest_code = route.dest_code
+    promotion.route_json = route.as_json()
+    promotion.first_seen_at = now
+    promotion.last_seen_at = now
+
+
 async def run_pipeline_v2(db: AsyncSession, *, limit: int = DEFAULT_BATCH_SIZE) -> dict:
     """Process up to `limit` unclustered, already-enriched articles.
 
@@ -180,6 +243,9 @@ async def run_pipeline_v2(db: AsyncSession, *, limit: int = DEFAULT_BATCH_SIZE) 
     That keeps the function directly testable without monkeypatching settings.
     """
     stats = RunStats()
+    # Read once per run, not per cluster: a flag that could change mid-batch
+    # would give two clusters in the same run two different behaviours.
+    campaign_v2 = get_settings().campaign_v2_enabled
     articles = await _fetch_candidates(db, limit)
     stats.candidates = len(articles)
     if not articles:
@@ -225,7 +291,14 @@ async def run_pipeline_v2(db: AsyncSession, *, limit: int = DEFAULT_BATCH_SIZE) 
             stats.rejected_gate += 1
             continue
 
-        result = await classify_article(primary.title, primary.raw_content)
+        result = await classify_article(
+            primary.title,
+            primary.raw_content,
+            # Empty string when the flag is off, which is the parameter's own
+            # default -- the prompt is then byte-for-byte the one the golden
+            # set grades.
+            topic_fragment=campaign_topic_fragment() if campaign_v2 else "",
+        )
 
         if result.article.state is OutcomeState.FAILED:
             for member in members:
@@ -274,10 +347,12 @@ async def run_pipeline_v2(db: AsyncSession, *, limit: int = DEFAULT_BATCH_SIZE) 
         # reaching production after the model-level fix. It only ever narrows
         # a CLASSIFIED verdict to NOT_APPLICABLE, never the reverse.
         campaign_to_persist = None
+        campaign_details: dict = {}
         if result.campaign.state is OutcomeState.CLASSIFIED:
             campaign_verdict = validate_campaign(
                 primary.title, result.campaign.payload, today=now.date()
             )
+            campaign_details = campaign_verdict.details
             if campaign_verdict.is_classified:
                 campaign_to_persist = campaign_verdict.payload
             else:
@@ -347,7 +422,36 @@ async def run_pipeline_v2(db: AsyncSession, *, limit: int = DEFAULT_BATCH_SIZE) 
                         source_count=len(members),
                         detected_at=now,
                     )
-                    db.add(promotion)
+                    if campaign_v2:
+                        apply_campaign_intelligence(
+                            promotion,
+                            campaign_to_persist,
+                            campaign_details,
+                            text=f"{primary.title}\n{primary.raw_content or ''}",
+                            now=now,
+                        )
+                        # The documented gap in this path, closed: every other
+                        # write path asks promo_dedup before inserting, and
+                        # this one did not -- so the airline's own campaign
+                        # page and a news report about the same campaign each
+                        # drew their own bar on the timeline. Merging keeps the
+                        # older row (and its detected_at, which the "Yeni"
+                        # badge reads) and folds this reading into it.
+                        candidate = candidate_from_row(promotion)
+                        duplicate = await find_duplicate(db, candidate)
+                        if duplicate is not None:
+                            merge_candidate(duplicate, candidate)
+                            _fill_missing_campaign_fields(duplicate, promotion)
+                            logger.info(
+                                "pipeline_v2_campaign_merged",
+                                airline=candidate.airline_code,
+                                kept_id=str(duplicate.id),
+                                incoming_url=candidate.url,
+                            )
+                        else:
+                            db.add(promotion)
+                    else:
+                        db.add(promotion)
                     wrote_campaign = True
         except IntegrityError:
             logger.info("pipeline_v2_cluster_collision", primary_article_url=primary_url)
