@@ -1,13 +1,48 @@
 "use client";
 
-import { ChevronLeft, ChevronRight, ExternalLink, Megaphone } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  CalendarRange,
+  ChevronLeft,
+  ChevronRight,
+  Download,
+  ExternalLink,
+  Megaphone,
+  SlidersHorizontal,
+  Table2,
+} from "lucide-react";
+import { useCallback, useMemo, useRef, useState } from "react";
 
 import { AirlineLogo } from "@/components/airline-logo";
+import { CampaignAlertStrip } from "@/components/campaign-alert-strip";
+import { CampaignAnalystTable } from "@/components/campaign-analyst-table";
 import { CampaignDrawer } from "@/components/campaign-drawer";
+import {
+  DataSourceError,
+  LastUpdatedStamp,
+  StaleDataBanner,
+} from "@/components/data-source-error";
+import { Pagination } from "@/components/pagination";
 import { Skeleton } from "@/components/ui/skeleton";
-import { apiFetch } from "@/lib/api";
-import { airlineTabs } from "@/lib/nav";
+import { useDataSource } from "@/hooks/use-data-source";
+import { API_BASE_URL, apiFetch } from "@/lib/api";
+import {
+  campaignFacetCounts,
+  campaignQueryString,
+  campaignStatusStyle,
+  confidenceBandLabel,
+  EMPTY_CAMPAIGN_FILTERS,
+  filterCampaigns,
+  hasActiveCampaignFilter,
+  reviewRequiredCount,
+  type CampaignFilters,
+} from "@/lib/campaigns";
+import { airlineTabs, worldRegions } from "@/lib/nav";
+import {
+  CAMPAIGN_STATUSES,
+  CAMPAIGN_TYPE_LABELS_TR,
+  CAMPAIGN_TYPES,
+  type CampaignType,
+} from "@/lib/taxonomy.gen";
 import type { PromotionNewCountOut, PromotionOut } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -33,6 +68,9 @@ const FLOW_LIMIT = 12;
 /** Label rail width. Matches the grid template below; the two must agree,
  * because the week-line and today overlays are inset by exactly this. */
 const LABEL_WIDTH = 176;
+/** Rows per page in the analyst table. Twenty-five is what fits a laptop
+ * screen without the header scrolling out of sight. */
+const PAGE_SIZE = 25;
 
 const MS_DAY = 86_400_000;
 
@@ -81,6 +119,14 @@ type Placement =
   | { kind: "bar" | "open"; promo: PromotionOut; start: number; end: number; status: Status }
   | { kind: "point"; promo: PromotionOut; at: number; status: Status };
 
+/** Deliberately NOT `promo.status` from the API.
+ *
+ * These bars draw the SALE window and nothing else, so their three states are
+ * about that window alone. The API's five-state status also answers "is the
+ * travel benefit still live" (BOOKING_CLOSED_TRAVEL_ACTIVE), which has no bar
+ * to be drawn on this grid -- painting it as "live" would show a closed sale
+ * as buyable. The analyst table renders the full five states instead, which is
+ * exactly the division of labour the view toggle exists for. */
 function statusOf(promo: PromotionOut, today: number): Status {
   const start = promo.sale_starts ? parseDay(promo.sale_starts) : null;
   const end = promo.sale_ends ? parseDay(promo.sale_ends) : null;
@@ -125,27 +171,40 @@ function place(promo: PromotionOut, windowStart: number, today: number): Placeme
   return { kind: "bar", promo, start: clamp(start), end: clamp(end), status };
 }
 
-/** The rival campaign timeline.
+const chipClass = (active: boolean) =>
+  cn(
+    "flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
+    active
+      ? "bg-primary/12 text-primary ring-1 ring-primary/40 dark:glow-soft"
+      : "border border-border text-muted-foreground hover:bg-accent",
+  );
+
+/** The rival campaign page.
  *
- * The primary visual is a carrier x time swimlane built out of DOM and CSS
- * grid rather than a chart library. It is worth saying why: every bar here is
- * a link into a drawer, carries a `title`, an `aria-label` and a "Yeni" badge,
- * and has to survive three different missing-data shapes. A canvas renderer
- * would hand back none of that -- it would draw rectangles and leave the
- * keyboard, the screen reader and the badge anchoring to be rebuilt on top.
+ * Two views over one fetch. The timeline is a carrier x time swimlane built out
+ * of DOM and CSS grid rather than a chart library: every bar is a link into a
+ * drawer, carries a `title`, an `aria-label` and a "Yeni" badge, and has to
+ * survive three different missing-data shapes -- a canvas renderer would draw
+ * rectangles and leave the keyboard, the screen reader and the badge anchoring
+ * to be rebuilt on top. The analyst table is the same rows as values side by
+ * side, for the comparison a timeline structurally cannot make.
  *
- * Colour discipline: fill is the carrier's own brand hex and light is the
- * status. Live burns at full strength with a glow, upcoming is an outline at
- * 15%, expired is the same fill at 40% with nothing lit. There is never a
- * second hue -- a red bar on this page means Emirates or Turkish, never
- * "urgent". The legend states all three in words, because colour never
- * carries meaning alone here.
+ * The window is fetched once (eight weeks, no server-side paging) and every
+ * filter is applied in memory -- the Risk Radarı pattern, for the same reason:
+ * the payload is already small, so narrowing it locally is exact and costs no
+ * round trip. The export links carry the same filters to the API, because an
+ * export must be able to exceed what the page is holding.
+ *
+ * Colour discipline on the timeline: fill is the carrier's own brand hex and
+ * light is the status. There is never a second hue -- a red bar here means
+ * Emirates or Turkish, never "urgent". The table is where semantic colour is
+ * allowed, and there it is always paired with an icon and a word.
  */
 export function CampaignsClient() {
-  const [promotions, setPromotions] = useState<PromotionOut[] | null>(null);
-  const [newCount, setNewCount] = useState<PromotionNewCountOut | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [view, setView] = useState<"timeline" | "table">("timeline");
   const [weekOffset, setWeekOffset] = useState(0);
+  const [filters, setFiltersState] = useState<CampaignFilters>(EMPTY_CAMPAIGN_FILTERS);
+  const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<PromotionOut | null>(null);
   const [highlighted, setHighlighted] = useState<string | null>(null);
 
@@ -167,31 +226,53 @@ export function CampaignsClient() {
   const fromIso = new Date(windowStart * MS_DAY).toISOString().slice(0, 10);
   const toIso = new Date(windowEnd * MS_DAY).toISOString().slice(0, 10);
 
-  useEffect(() => {
-    let cancelled = false;
-    Promise.all([
-      apiFetch<PromotionOut[]>(`/promotions?date_from=${fromIso}&date_to=${toIso}`),
-      apiFetch<PromotionNewCountOut>("/promotions/new-count"),
-    ])
-      .then(([rows, fresh]) => {
-        if (cancelled) return;
-        setPromotions(rows);
-        setNewCount(fresh);
-        setError(null);
-      })
-      .catch(() => {
-        if (!cancelled) setError("Kampanyalar yüklenemedi. Sunucu çalışıyor mu?");
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [fromIso, toIso]);
+  const fetcher = useCallback(
+    async (signal: AbortSignal) => {
+      const [rows, fresh] = await Promise.all([
+        apiFetch<PromotionOut[]>(`/promotions?date_from=${fromIso}&date_to=${toIso}`, {
+          cache: "default",
+          signal,
+        }),
+        // The banner is a bonus, not a dependency: a failing count must not
+        // take the campaigns down with it.
+        apiFetch<PromotionNewCountOut>("/promotions/new-count", {
+          cache: "default",
+          signal,
+        }).catch(() => null),
+      ]);
+      return { rows, fresh };
+    },
+    [fromIso, toIso],
+  );
+  const { data, error, loaded, lastUpdated, stale, retry } = useDataSource(fetcher, [
+    fromIso,
+    toIso,
+  ]);
 
-  useEffect(
-    () => () => {
-      if (highlightTimer.current) clearTimeout(highlightTimer.current);
+  const promotions = data?.rows ?? null;
+  const newCount = data?.fresh ?? null;
+
+  /** Any filter change resets to page 1. Doing it in the setter rather than in
+   * an effect keeps the two state updates in one commit -- an effect would
+   * render page 5 of a two-page result first. */
+  const setFilters = useCallback((next: CampaignFilters) => {
+    setFiltersState(next);
+    setPage(1);
+  }, []);
+  const toggleFilter = useCallback(
+    <K extends keyof CampaignFilters>(key: K, value: CampaignFilters[K]) => {
+      setFiltersState((current) => ({
+        ...current,
+        [key]: current[key] === value ? EMPTY_CAMPAIGN_FILTERS[key] : value,
+      }));
+      setPage(1);
     },
     [],
+  );
+
+  const filtered = useMemo(
+    () => filterCampaigns(promotions ?? [], filters),
+    [promotions, filters],
   );
 
   /** The API's own notion of "new", not a number retyped here: the backend
@@ -211,9 +292,8 @@ export function CampaignsClient() {
    * would read as "we have no data" rather than "they ran no campaigns", and
    * the footer says the second thing in words. */
   const lanes = useMemo(() => {
-    if (!promotions) return [];
     const byCarrier = new Map<string, Placement[]>();
-    for (const promo of promotions) {
+    for (const promo of filtered) {
       const placed = place(promo, windowStart, today);
       if (!placed) continue;
       const bucket = byCarrier.get(promo.airline_code);
@@ -236,26 +316,61 @@ export function CampaignsClient() {
         if (b.code === "TK") return 1;
         return b.items.length - a.items.length;
       });
-  }, [promotions, windowStart, today]);
+  }, [filtered, windowStart, today]);
 
   const litCodes = new Set(lanes.map((l) => l.code));
   const darkCarriers = airlineTabs.filter((a) => !litCodes.has(a.code));
 
   const flow = useMemo(
     () =>
-      (promotions ?? [])
+      filtered
         .slice()
         .sort(
           (a, b) => new Date(b.detected_at).getTime() - new Date(a.detected_at).getTime(),
         )
         .slice(0, FLOW_LIMIT),
-    [promotions],
+    [filtered],
   );
 
   const freshCodes = useMemo(
     () => (newCount?.airline_codes ?? []).filter((code) => BRAND[code]),
     [newCount],
   );
+
+  // Facet counts are computed against every OTHER active filter, so a chip's
+  // number is what clicking it would actually give you.
+  const airlineCounts = useMemo(
+    () => campaignFacetCounts(promotions ?? [], filters, "airline"),
+    [promotions, filters],
+  );
+  const typeCounts = useMemo(
+    () => campaignFacetCounts(promotions ?? [], filters, "campaignType"),
+    [promotions, filters],
+  );
+  const statusCounts = useMemo(
+    () => campaignFacetCounts(promotions ?? [], filters, "status"),
+    [promotions, filters],
+  );
+  const regionCounts = useMemo(
+    () => campaignFacetCounts(promotions ?? [], filters, "region"),
+    [promotions, filters],
+  );
+  const bandCounts = useMemo(
+    () => campaignFacetCounts(promotions ?? [], filters, "band"),
+    [promotions, filters],
+  );
+  const reviewCount = useMemo(
+    () => reviewRequiredCount(promotions ?? [], filters),
+    [promotions, filters],
+  );
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+  const pageRows = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+
+  const exportQuery = campaignQueryString(filters, { from: fromIso, to: toIso });
+  const exportHref = (format: "csv" | "json") =>
+    `${API_BASE_URL}/promotions/export?format=${format}${exportQuery ? `&${exportQuery}` : ""}`;
 
   const todayIdx = today - windowStart;
   const todayInWindow = todayIdx >= 0 && todayIdx < DAY_COUNT;
@@ -274,6 +389,14 @@ export function CampaignsClient() {
 
   const weekTicks = Array.from({ length: WEEKS }, (_, i) => windowStart + i * 7);
 
+  const availableTypes = CAMPAIGN_TYPES.filter((type) => (typeCounts[type] ?? 0) > 0);
+  const availableStatuses = CAMPAIGN_STATUSES.filter(
+    (status) => (statusCounts[status] ?? 0) > 0,
+  );
+  const availableRegions = worldRegions.filter((r) => (regionCounts[r.slug] ?? 0) > 0);
+  const availableCarriers = airlineTabs.filter((a) => (airlineCounts[a.code] ?? 0) > 0);
+  const availableBands = ["high", "medium"].filter((band) => (bandCounts[band] ?? 0) > 0);
+
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-col gap-1">
@@ -286,14 +409,18 @@ export function CampaignsClient() {
         </p>
       </div>
 
-      {error ? (
-        <p className="rounded-lg border border-dashed border-border p-6 text-sm text-muted-foreground">
-          {error}
-        </p>
-      ) : promotions === null ? (
+      {/* Renders nothing at all when the alerts endpoint is missing or down --
+          see campaign-alert-strip.tsx. */}
+      <CampaignAlertStrip />
+
+      {!loaded ? (
         <Skeleton className="h-96 w-full rounded-xl" />
+      ) : error && !promotions ? (
+        <DataSourceError onRetry={retry} lastUpdated={lastUpdated} />
       ) : (
         <>
+          {stale && <StaleDataBanner onRetry={retry} lastUpdated={lastUpdated} />}
+
           {newCount !== null && newCount.count > 0 && (
             <div
               style={
@@ -329,14 +456,237 @@ export function CampaignsClient() {
             </div>
           )}
 
-          {lanes.length === 0 ? (
+          {/* --- filters + view toggle + export ------------------------- */}
+          <div className="flex flex-col gap-2 rounded-lg border border-border bg-background/50 p-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <SlidersHorizontal className="size-4 text-muted-foreground" />
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Filtreler
+              </span>
+              <span className="text-xs tabular-nums text-muted-foreground">
+                {filtered.length} / {promotions?.length ?? 0} kampanya
+              </span>
+              {hasActiveCampaignFilter(filters) && (
+                <button
+                  type="button"
+                  onClick={() => setFilters(EMPTY_CAMPAIGN_FILTERS)}
+                  className="text-xs font-medium text-primary hover:underline"
+                >
+                  Filtreleri temizle
+                </button>
+              )}
+
+              <div className="ml-auto flex items-center gap-1.5">
+                <div
+                  role="group"
+                  aria-label="Görünüm"
+                  className="flex items-center rounded-lg border border-border p-0.5"
+                >
+                  <ViewButton
+                    active={view === "timeline"}
+                    onClick={() => setView("timeline")}
+                    icon={CalendarRange}
+                    label="Zaman çizelgesi"
+                  />
+                  <ViewButton
+                    active={view === "table"}
+                    onClick={() => setView("table")}
+                    icon={Table2}
+                    label="Analist tablosu"
+                  />
+                </div>
+                <a
+                  href={exportHref("csv")}
+                  className="flex items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  title="Görünen filtrelerle CSV indir (en fazla 2000 satır)"
+                >
+                  <Download className="size-3.5" />
+                  CSV
+                </a>
+                <a
+                  href={exportHref("json")}
+                  className="flex items-center gap-1 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  title="Görünen filtrelerle JSON indir (en fazla 2000 satır)"
+                >
+                  <Download className="size-3.5" />
+                  JSON
+                </a>
+              </div>
+            </div>
+
+            {availableCarriers.length > 0 && (
+              <FilterRow label="Taşıyıcı">
+                <button
+                  type="button"
+                  onClick={() => setFilters({ ...filters, airline: null })}
+                  className={chipClass(!filters.airline)}
+                >
+                  Tümü
+                </button>
+                {availableCarriers.map((carrier) => (
+                  <button
+                    key={carrier.code}
+                    type="button"
+                    onClick={() => toggleFilter("airline", carrier.code)}
+                    className={chipClass(filters.airline === carrier.code)}
+                    title={carrier.name}
+                  >
+                    <AirlineLogo
+                      code={carrier.code}
+                      name={carrier.name}
+                      className="size-3.5"
+                    />
+                    {carrier.code}
+                    <span className="ml-0.5 tabular-nums opacity-70">
+                      {airlineCounts[carrier.code]}
+                    </span>
+                  </button>
+                ))}
+              </FilterRow>
+            )}
+
+            {availableStatuses.length > 0 && (
+              <FilterRow label="Durum">
+                <button
+                  type="button"
+                  onClick={() => setFilters({ ...filters, status: null })}
+                  className={chipClass(!filters.status)}
+                >
+                  Tümü
+                </button>
+                {availableStatuses.map((status) => (
+                  <button
+                    key={status}
+                    type="button"
+                    onClick={() => toggleFilter("status", status)}
+                    className={chipClass(filters.status === status)}
+                  >
+                    {campaignStatusStyle(status).short}
+                    <span className="ml-0.5 tabular-nums opacity-70">
+                      {statusCounts[status]}
+                    </span>
+                  </button>
+                ))}
+              </FilterRow>
+            )}
+
+            {availableTypes.length > 0 && (
+              <FilterRow label="Tür">
+                <button
+                  type="button"
+                  onClick={() => setFilters({ ...filters, campaignType: null })}
+                  className={chipClass(!filters.campaignType)}
+                >
+                  Tümü
+                </button>
+                {availableTypes.map((type) => (
+                  <button
+                    key={type}
+                    type="button"
+                    onClick={() => toggleFilter("campaignType", type)}
+                    className={chipClass(filters.campaignType === type)}
+                  >
+                    {CAMPAIGN_TYPE_LABELS_TR[type as CampaignType]}
+                    <span className="ml-0.5 tabular-nums opacity-70">{typeCounts[type]}</span>
+                  </button>
+                ))}
+              </FilterRow>
+            )}
+
+            {availableRegions.length > 0 && (
+              <FilterRow label="Bölge">
+                <button
+                  type="button"
+                  onClick={() => setFilters({ ...filters, region: null })}
+                  className={chipClass(!filters.region)}
+                >
+                  Tümü
+                </button>
+                {availableRegions.map((region) => (
+                  <button
+                    key={region.slug}
+                    type="button"
+                    onClick={() => toggleFilter("region", region.slug)}
+                    className={chipClass(filters.region === region.slug)}
+                  >
+                    {region.name}
+                    <span className="ml-0.5 tabular-nums opacity-70">
+                      {regionCounts[region.slug]}
+                    </span>
+                  </button>
+                ))}
+              </FilterRow>
+            )}
+
+            {(availableBands.length > 0 || reviewCount > 0) && (
+              <FilterRow label="Güven">
+                <button
+                  type="button"
+                  onClick={() => setFilters({ ...filters, band: null })}
+                  className={chipClass(!filters.band)}
+                >
+                  Tümü
+                </button>
+                {availableBands.map((band) => (
+                  <button
+                    key={band}
+                    type="button"
+                    onClick={() => toggleFilter("band", band)}
+                    className={chipClass(filters.band === band)}
+                  >
+                    {confidenceBandLabel(band)}
+                    <span className="ml-0.5 tabular-nums opacity-70">{bandCounts[band]}</span>
+                  </button>
+                ))}
+                {reviewCount > 0 && (
+                  <button
+                    type="button"
+                    aria-pressed={filters.reviewOnly}
+                    onClick={() =>
+                      setFilters({ ...filters, reviewOnly: !filters.reviewOnly })
+                    }
+                    className={cn(
+                      chipClass(filters.reviewOnly),
+                      !filters.reviewOnly && "border-warning/40 text-warning",
+                    )}
+                    title="Güven eşiğinin altında kalan, insan incelemesi bekleyen kayıtlar"
+                  >
+                    İnceleme gerekli
+                    <span className="ml-0.5 tabular-nums opacity-70">{reviewCount}</span>
+                  </button>
+                )}
+              </FilterRow>
+            )}
+          </div>
+
+          {filtered.length === 0 ? (
             <div className="rounded-xl border border-dashed border-border p-10 text-center">
               <Megaphone className="mx-auto mb-3 size-6 text-muted-foreground" />
-              <p className="text-sm font-medium">Bu dönemde kayıtlı kampanya yok.</p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Sekiz haftalık pencerede hiçbir taşıyıcının kampanyası bulunmuyor. Oklarla
-                başka bir döneme bakabilirsiniz.
+              <p className="text-sm font-medium">
+                {hasActiveCampaignFilter(filters)
+                  ? "Bu filtrelerle kampanya yok."
+                  : "Bu dönemde kayıtlı kampanya yok."}
               </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {hasActiveCampaignFilter(filters)
+                  ? "Filtreleri gevşetin ya da temizleyin."
+                  : "Sekiz haftalık pencerede hiçbir taşıyıcının kampanyası bulunmuyor. Oklarla başka bir döneme bakabilirsiniz."}
+              </p>
+            </div>
+          ) : view === "table" ? (
+            <div className="flex flex-col gap-3">
+              <CampaignAnalystTable rows={pageRows} onSelect={setSelected} />
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="text-xs tabular-nums text-muted-foreground">
+                  {(currentPage - 1) * PAGE_SIZE + 1}–
+                  {Math.min(currentPage * PAGE_SIZE, filtered.length)} / {filtered.length}
+                </span>
+                <Pagination
+                  page={currentPage}
+                  totalPages={totalPages}
+                  onPageChange={setPage}
+                />
+              </div>
             </div>
           ) : (
             <>
@@ -491,6 +841,8 @@ export function CampaignsClient() {
               </div>
             </>
           )}
+
+          <LastUpdatedStamp date={lastUpdated} />
         </>
       )}
 
@@ -499,6 +851,46 @@ export function CampaignsClient() {
         brandHex={selected ? (BRAND[selected.airline_code]?.color ?? "var(--primary)") : "var(--primary)"}
         onClose={() => setSelected(null)}
       />
+    </div>
+  );
+}
+
+function ViewButton({
+  active,
+  onClick,
+  icon: Icon,
+  label,
+}: {
+  active: boolean;
+  onClick: () => void;
+  icon: typeof CalendarRange;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={cn(
+        "flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
+        active
+          ? "bg-primary/12 text-primary"
+          : "text-muted-foreground hover:bg-accent hover:text-foreground",
+      )}
+    >
+      <Icon className="size-3.5" />
+      {label}
+    </button>
+  );
+}
+
+function FilterRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <span className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+        {label}
+      </span>
+      {children}
     </div>
   );
 }
