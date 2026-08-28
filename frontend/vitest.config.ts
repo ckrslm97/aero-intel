@@ -28,7 +28,13 @@ export default defineConfig({
       include: [
         "src/components/pagination.tsx",
         "src/components/data-source-error.tsx",
+        // PR7: the campaign page's filtering/labelling rules and the two
+        // components built on top of them. The swimlane is deliberately not
+        // here -- it is a pixel-geometry surface, checked in a browser.
+        "src/components/campaign-alert-strip.tsx",
+        "src/components/campaign-analyst-table.tsx",
         "src/hooks/*.ts",
+        "src/lib/campaigns.ts",
         "src/lib/format.ts",
       ],
     },

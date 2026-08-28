@@ -1,3 +1,10 @@
+import type {
+  CampaignBusinessClass,
+  CampaignStatus,
+  CampaignType,
+  RouteScope,
+} from "@/lib/taxonomy.gen";
+
 export interface SourceOut {
   id: string;
   name: string;
@@ -304,6 +311,112 @@ export interface PromotionOut {
   /** Pre-formatted Turkish range, already saying which end is unknown. */
   sale_range_tr: string;
   travel_range_tr: string;
+
+  /* --- Kampanya İstihbaratı (PR1-PR7) -----------------------------------
+   *
+   * Computed at read time, never stored: a status column would be stale every
+   * morning until a cron caught up. Everything else below is NULL on the ~200
+   * legacy rows and stays NULL -- the analyst table renders "—" for an
+   * unclassified campaign rather than inventing a type for it, so none of
+   * these may be treated as guaranteed content. */
+  status: CampaignStatus;
+  campaign_type: CampaignType | null;
+  business_class: CampaignBusinessClass | null;
+  route_scope: RouteScope | null;
+  /** "IST-LHR", set only when route_scope is OND. */
+  ond: string | null;
+  origin_code: string | null;
+  dest_code: string | null;
+  /** {"origin": {airport, city, country, region}, "dest": {...}} */
+  route_json: CampaignRouteJson | null;
+  confidence_score: number | null;
+  /** high | medium. Low never reaches this endpoint; null means never assessed. */
+  confidence_band: string | null;
+  review_required: boolean | null;
+  conflict_detected: boolean | null;
+  classification_reason: string | null;
+  first_seen_at: string | null;
+  last_changed_at: string | null;
+  /** cabin, promo_code, currency, price_floor, discount_type, ... */
+  attrs_json: Record<string, unknown> | null;
+  /** {field: {value, source_text, confidence}} -- the drawer quotes source_text. */
+  evidence_json: Record<string, CampaignEvidence> | null;
+  /** e.g. {"inferred_year": true} when the page said "30 Eylül" with no year. */
+  date_flags_json: Record<string, unknown> | null;
+  /** Recorded edits, and how many pages told us about this campaign. */
+  version_count: number;
+  source_count: number;
+}
+
+export interface CampaignRouteLeg {
+  airport?: string | null;
+  city?: string | null;
+  country?: string | null;
+  region?: string | null;
+}
+
+export interface CampaignRouteJson {
+  origin?: CampaignRouteLeg | null;
+  dest?: CampaignRouteLeg | null;
+}
+
+/** One field's provenance: what we read, and the sentence we read it from. */
+export interface CampaignEvidence {
+  value?: unknown;
+  source_text?: string | null;
+  confidence?: number | null;
+}
+
+/** `GET /promotions/{id}/versions` -- what changed, newest edit first.
+ *
+ * A campaign page is edited in place (the URL never moves), so an in-place row
+ * update would erase the single fact a revenue desk most wants: that the rival
+ * moved. Each accepted change is a row here instead. */
+export interface PromotionVersion {
+  version_no: number;
+  changed_fields: Record<string, PromotionFieldChange>;
+  source_url: string | null;
+  created_at: string;
+}
+
+export interface PromotionFieldChange {
+  previous?: unknown;
+  new?: unknown;
+  /** True when two sources disagreed and the more official one won. */
+  conflict?: boolean;
+  /** The losing value, kept on the record rather than discarded. */
+  rejected?: unknown;
+}
+
+/** `GET /promotions/{id}/sources` -- every page that told us, most official
+ * first. `source_tier` is the ordering that decided who won a conflict. */
+export interface PromotionSource {
+  url: string;
+  source_name: string | null;
+  /** official | newsroom | secondary */
+  source_tier: string | null;
+  source_quality: number | null;
+  first_seen_at: string | null;
+  last_seen_at: string | null;
+}
+
+/** `GET /promotions/count` -- how many rows the same filters would list. */
+export interface PromotionCountOut {
+  total: number;
+}
+
+/** `GET /campaign-alerts` (PR6). Unacknowledged, CRITICAL first.
+ *
+ * The strip that renders these degrades to nothing at all when the endpoint is
+ * missing: alerts are an addition to the page, never a precondition for it. */
+export interface CampaignAlert {
+  id: string;
+  promotion_id: string;
+  alert_type: "NEW" | "CHANGE" | "EXPIRING" | "EXPIRED" | "LOW_CONFIDENCE";
+  priority: "CRITICAL" | "HIGH" | "MEDIUM" | "INFO";
+  title_tr: string;
+  detail_json: Record<string, unknown> | null;
+  created_at: string;
 }
 
 /** `GET /promotions/new-count` -- a count over the whole table rather than
