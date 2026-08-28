@@ -72,6 +72,40 @@
         </tr>
         {% endif %}
 
+        {#- The campaign radar: the last 24h of the two loudest alert levels.
+            Rendered only when there are any -- an empty heading every quiet
+            morning is how a reader learns to skip the section. Every line
+            links to the campaigns page rather than to the carrier: the alert
+            is about a competitive move, and the place to act on it is our own
+            table, not the airline's landing page.
+
+            A Jinja comment rather than an HTML one, unlike the notes above:
+            this block names the internal priority values, and an HTML comment
+            would ship them to every inbox. -#}
+        {% if alerts %}
+        <tr>
+          <td style="padding:20px 28px 0 28px;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#fdf1ef;border-left:3px solid #b4451f;">
+              <tr>
+                <td style="padding:14px 16px;">
+                  <p style="margin:0 0 10px 0;color:#8a3a1a;font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;">Kampanya Radarı</p>
+                  {% for alert in alerts %}
+                  <p style="margin:0 0 8px 0;color:#52514e;font-size:13px;line-height:1.55;">
+                    <span style="color:{% if alert.priority == 'CRITICAL' %}#b4451f{% else %}#8a6d3b{% endif %};font-size:11px;font-weight:700;">{{ alert.priority_label }}</span>
+                    &nbsp;&middot;&nbsp;<span style="color:#898781;font-size:12px;">{{ alert.airline_name }}</span><br>
+                    <a href="{{ campaigns_url }}" style="color:#14130f;font-weight:600;text-decoration:none;">{{ alert.title_tr }}</a>
+                  </p>
+                  {% endfor %}
+                  <p style="margin:10px 0 0 0;font-size:12px;">
+                    <a href="{{ campaigns_url }}" style="color:#a86e00;text-decoration:none;">Tüm kampanyalar &rarr;</a>
+                  </p>
+                </td>
+              </tr>
+            </table>
+          </td>
+        </tr>
+        {% endif %}
+
         <!-- Headline links -->
         {% if headlines %}
         <tr>

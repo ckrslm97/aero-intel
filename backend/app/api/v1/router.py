@@ -5,6 +5,7 @@ from app.api.v1 import (
     admin,
     articles,
     biz,
+    campaign_alerts,
     editions,
     events,
     health,
@@ -33,6 +34,7 @@ api_router.include_router(search.router)
 api_router.include_router(kokpit.router)
 api_router.include_router(kpis.router)
 api_router.include_router(promotions.router)
+api_router.include_router(campaign_alerts.router)
 api_router.include_router(recommendations.router)
 api_router.include_router(risks.router)
 api_router.include_router(subscribers.router)

@@ -105,3 +105,19 @@ jobs:
             --max-llm-calls 10 \
             ${{ inputs.dry_run && '--dry-run' || '' }} \
             ${{ inputs.carriers != '' && format('--carriers {0}', inputs.carriers) || '' }}
+
+      # Same job, straight after the scan: the alerts this sweep's new and
+      # changed campaigns deserve should exist by the time the run goes green,
+      # not on whenever the next workflow happens to fire. It runs on a dry-run
+      # dispatch too -- a dry run writes no campaigns, so there is nothing new
+      # to alert on and the generator finds nothing, which is the correct
+      # no-op rather than a case worth branching on.
+      #
+      # Deliberately a second step rather than an `&&` on the one above: a
+      # deep scan that fails halfway has still written the campaigns it got to,
+      # and those still deserve their alerts. `if: always()` is what says so.
+      - name: Generate campaign alerts
+        if: ${{ !cancelled() }}
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python -m app.cli generate-campaign-alerts

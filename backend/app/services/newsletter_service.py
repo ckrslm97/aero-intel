@@ -13,6 +13,7 @@ from app.email.sender import send_email
 from app.models.edition import Edition
 from app.repositories.email_delivery_repository import EmailDeliveryRepository
 from app.repositories.subscriber_repository import SubscriberRepository
+from app.services.campaign_alerts import recent_alert_highlights
 from app.services.insights_service import latest_digest
 
 logger = get_logger(__name__)
@@ -33,7 +34,15 @@ async def send_newsletter_for_edition(db: AsyncSession, edition: Edition) -> dic
     # newsletter in the daily job; if it hasn't run yet the email simply omits
     # the block rather than delaying the send.
     digest_row = await latest_digest(db)
-    html_body = render_newsletter_html(edition, digest=digest_row.body if digest_row else None)
+    # Same contract as the digest above: the campaign radar is whatever the
+    # alert generator has written in the last day, and an empty list simply
+    # omits the section rather than delaying or failing the send.
+    alerts = await recent_alert_highlights(db)
+    html_body = render_newsletter_html(
+        edition,
+        digest=digest_row.body if digest_row else None,
+        alerts=alerts,
+    )
     # Aggregator headlines run long (Google News appends " - Publisher"), and a
     # 200-character subject is truncated mid-word by every mail client.
     headline = edition.headline

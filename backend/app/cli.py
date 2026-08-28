@@ -361,6 +361,25 @@ async def _deep_scan(carriers: str | None, dry_run: bool, max_llm_calls: int) ->
         )
 
 
+async def _generate_campaign_alerts() -> None:
+    """Turn today's campaign state into alerts. Safe to run any number of
+    times: every alert carries a dedupe key bucketed on a property of the
+    campaign rather than on the clock, so a second run of the day writes
+    nothing. That is why two workflows call this -- see the module docstring
+    in app/services/campaign_alerts.py."""
+    from app.services.campaign_alerts import generate_alerts
+
+    async with AsyncSessionLocal() as db:
+        summary = await generate_alerts(db)
+        print(
+            f"Kampanya uyarıları: {summary['total']} yeni uyarı "
+            f"({summary['NEW']} yeni kampanya, {summary['CHANGE']} değişiklik, "
+            f"{summary['EXPIRING']} bitmek üzere, {summary['EXPIRED']} sona erdi, "
+            f"{summary['LOW_CONFIDENCE']} inceleme), "
+            f"{summary['duplicates']} zaten kayıtlıydı"
+        )
+
+
 async def _dedupe_promotions() -> None:
     """Collapse campaigns already stored twice under two different URLs.
 
@@ -577,6 +596,7 @@ def main() -> None:
             "scrape-promotions",
             "refresh-promotions",
             "deep-scan",
+            "generate-campaign-alerts",
             "dedupe-promotions",
             "prune-kpi-duplicates",
             "seed-curated-data",
@@ -699,6 +719,8 @@ def main() -> None:
         asyncio.run(_refresh_promotions())
     elif args.command == "deep-scan":
         asyncio.run(_deep_scan(args.carriers, args.dry_run, args.max_llm_calls))
+    elif args.command == "generate-campaign-alerts":
+        asyncio.run(_generate_campaign_alerts())
     elif args.command == "dedupe-promotions":
         asyncio.run(_dedupe_promotions())
     elif args.command == "prune-kpi-duplicates":
