@@ -154,3 +154,125 @@ export type RivalCode =
   | "VF";
 
 export const RIVAL_CODES: readonly RivalCode[] = ["AF", "BA", "EK", "EY", "KL", "LH", "PC", "QR", "VF"] as const;
+
+
+/** Kampanya İstihbaratı -- see backend/app/taxonomy.py. */
+export type CampaignType =
+  | "FARE_DISCOUNT"
+  | "PERCENT_DISCOUNT"
+  | "FIXED_FARE"
+  | "FLASH_SALE"
+  | "EARLY_BOOKING"
+  | "LAST_MINUTE"
+  | "ROUND_TRIP_PROMOTION"
+  | "ONE_WAY_PROMOTION"
+  | "DESTINATION_PROMOTION"
+  | "SEASONAL_PROMOTION"
+  | "NEW_ROUTE_PROMOTION"
+  | "BLACK_FRIDAY"
+  | "CYBER_MONDAY"
+  | "SUMMER_SALE"
+  | "WINTER_SALE"
+  | "RAMADAN_PROMOTION"
+  | "EID_PROMOTION"
+  | "NATIONAL_HOLIDAY"
+  | "STUDENT_PROMOTION"
+  | "FAMILY_PROMOTION"
+  | "CORPORATE_PROMOTION"
+  | "LOYALTY_PROMOTION"
+  | "MILES_PROMOTION"
+  | "BAGGAGE_PROMOTION"
+  | "ANCILLARY_PROMOTION"
+  | "PARTNER_PROMOTION"
+  | "OTHER";
+
+export const CAMPAIGN_TYPES: readonly CampaignType[] = ["FARE_DISCOUNT", "PERCENT_DISCOUNT", "FIXED_FARE", "FLASH_SALE", "EARLY_BOOKING", "LAST_MINUTE", "ROUND_TRIP_PROMOTION", "ONE_WAY_PROMOTION", "DESTINATION_PROMOTION", "SEASONAL_PROMOTION", "NEW_ROUTE_PROMOTION", "BLACK_FRIDAY", "CYBER_MONDAY", "SUMMER_SALE", "WINTER_SALE", "RAMADAN_PROMOTION", "EID_PROMOTION", "NATIONAL_HOLIDAY", "STUDENT_PROMOTION", "FAMILY_PROMOTION", "CORPORATE_PROMOTION", "LOYALTY_PROMOTION", "MILES_PROMOTION", "BAGGAGE_PROMOTION", "ANCILLARY_PROMOTION", "PARTNER_PROMOTION", "OTHER"] as const;
+
+
+export const CAMPAIGN_TYPE_LABELS_TR: Record<CampaignType, string> = {
+  "FARE_DISCOUNT": "Bilet İndirimi",
+  "PERCENT_DISCOUNT": "Yüzde İndirim",
+  "FIXED_FARE": "Sabit Fiyat",
+  "FLASH_SALE": "Flaş İndirim",
+  "EARLY_BOOKING": "Erken Rezervasyon",
+  "LAST_MINUTE": "Son Dakika",
+  "ROUND_TRIP_PROMOTION": "Gidiş-Dönüş Kampanyası",
+  "ONE_WAY_PROMOTION": "Tek Yön Kampanyası",
+  "DESTINATION_PROMOTION": "Destinasyon Kampanyası",
+  "SEASONAL_PROMOTION": "Sezonluk Kampanya",
+  "NEW_ROUTE_PROMOTION": "Yeni Hat Kampanyası",
+  "BLACK_FRIDAY": "Black Friday",
+  "CYBER_MONDAY": "Cyber Monday",
+  "SUMMER_SALE": "Yaz İndirimi",
+  "WINTER_SALE": "Kış İndirimi",
+  "RAMADAN_PROMOTION": "Ramazan Kampanyası",
+  "EID_PROMOTION": "Bayram Kampanyası",
+  "NATIONAL_HOLIDAY": "Resmî Tatil Kampanyası",
+  "STUDENT_PROMOTION": "Öğrenci Kampanyası",
+  "FAMILY_PROMOTION": "Aile Kampanyası",
+  "CORPORATE_PROMOTION": "Kurumsal Kampanya",
+  "LOYALTY_PROMOTION": "Sadakat Programı Kampanyası",
+  "MILES_PROMOTION": "Mil Kampanyası",
+  "BAGGAGE_PROMOTION": "Bagaj Kampanyası",
+  "ANCILLARY_PROMOTION": "Ek Hizmet Kampanyası",
+  "PARTNER_PROMOTION": "İş Birliği Kampanyası",
+  "OTHER": "Diğer",
+};
+
+export type CampaignBusinessClass =
+  | "ACTIVE_CAMPAIGN"
+  | "UPCOMING_CAMPAIGN"
+  | "EXPIRED_CAMPAIGN"
+  | "EVERGREEN_OFFER"
+  | "NEWS_ONLY"
+  | "PRODUCT_PROMOTION"
+  | "LOYALTY_PROMOTION";
+
+export const CAMPAIGN_BUSINESS_CLASSES: readonly CampaignBusinessClass[] = ["ACTIVE_CAMPAIGN", "UPCOMING_CAMPAIGN", "EXPIRED_CAMPAIGN", "EVERGREEN_OFFER", "NEWS_ONLY", "PRODUCT_PROMOTION", "LOYALTY_PROMOTION"] as const;
+
+
+export const CAMPAIGN_BUSINESS_CLASS_LABELS_TR: Record<CampaignBusinessClass, string> = {
+  "ACTIVE_CAMPAIGN": "Aktif Kampanya",
+  "UPCOMING_CAMPAIGN": "Yaklaşan Kampanya",
+  "EXPIRED_CAMPAIGN": "Süresi Dolmuş Kampanya",
+  "EVERGREEN_OFFER": "Sürekli Teklif",
+  "NEWS_ONLY": "Sadece Haber",
+  "PRODUCT_PROMOTION": "Ürün/Hizmet Kampanyası",
+  "LOYALTY_PROMOTION": "Sadakat Kampanyası",
+};
+
+export type RouteScope =
+  | "OND"
+  | "CITY_PAIR"
+  | "COUNTRY"
+  | "REGION"
+  | "NETWORK_WIDE";
+
+export const ROUTE_SCOPES: readonly RouteScope[] = ["OND", "CITY_PAIR", "COUNTRY", "REGION", "NETWORK_WIDE"] as const;
+
+
+export const ROUTE_SCOPE_LABELS_TR: Record<RouteScope, string> = {
+  "OND": "Kalkış-Varış (OND)",
+  "CITY_PAIR": "Şehir Çifti",
+  "COUNTRY": "Ülke",
+  "REGION": "Bölge",
+  "NETWORK_WIDE": "Tüm Ağ",
+};
+
+export type CampaignStatus =
+  | "UPCOMING"
+  | "ACTIVE_BOOKING"
+  | "BOOKING_CLOSED_TRAVEL_ACTIVE"
+  | "EXPIRED"
+  | "UNKNOWN";
+
+export const CAMPAIGN_STATUSES: readonly CampaignStatus[] = ["UPCOMING", "ACTIVE_BOOKING", "BOOKING_CLOSED_TRAVEL_ACTIVE", "EXPIRED", "UNKNOWN"] as const;
+
+
+export const CAMPAIGN_STATUS_LABELS_TR: Record<CampaignStatus, string> = {
+  "UPCOMING": "Yakında",
+  "ACTIVE_BOOKING": "Satışta",
+  "BOOKING_CLOSED_TRAVEL_ACTIVE": "Satış kapandı, seyahat sürüyor",
+  "EXPIRED": "Süresi doldu",
+  "UNKNOWN": "Belirsiz",
+};

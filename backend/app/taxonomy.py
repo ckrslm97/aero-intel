@@ -500,3 +500,202 @@ def is_valid_risk_category(slug: str | None) -> bool:
 
 def risk_category_family_of(slug: str | None) -> str | None:
     return RISK_CATEGORY_FAMILY_OF.get(slug) if slug else None
+
+
+# ---------------------------------------------------------------------------
+# Kampanya İstihbaratı taxonomy
+#
+# Four independent closed sets, all of them string columns on `promotions`
+# rather than Postgres enums -- the same call the rest of this file already
+# makes, and for the same reason: adding a value to a Postgres enum is a
+# migration, adding one here is a code change that the golden set and the
+# generated frontend union both notice immediately.
+#
+# The four answer four genuinely different questions about one row, and the
+# reason they are not collapsed into one field is that they disagree in
+# practice. A row can be a FLASH_SALE (what kind of offer), an ACTIVE_CAMPAIGN
+# (is this a fare campaign at all), NETWORK_WIDE (which markets), and EXPIRED
+# (where is it in time) -- four answers, one campaign, and merging any pair of
+# them loses information the analyst table has a column for.
+#
+# Note on the deliberate name collision: LOYALTY_PROMOTION is both a campaign
+# *type* and a business *class*. They are not the same statement. As a type it
+# says "this offer is about miles"; as a business class it says "this is not a
+# fare campaign and must never be published as one". A miles-earning promo that
+# also cuts fares is type LOYALTY_PROMOTION with class ACTIVE_CAMPAIGN, and a
+# pure mileage-sale page is both. Keeping the word in both sets costs nothing
+# (they are separate dicts) and renaming one of them to avoid the overlap would
+# make both read worse.
+# ---------------------------------------------------------------------------
+
+#: What kind of offer this is. Closed at 27 values, OTHER last: an open-ended
+#: "campaign type" field would drift into dozens of near-synonyms across
+#: re-extraction runs and make the per-type rollup uncountable, exactly as the
+#: risk taxonomy above found. A model answering outside this set writes OTHER
+#: rather than a slug nothing can render or count.
+CAMPAIGN_TYPES: tuple[str, ...] = (
+    # Discount shape -- how the saving is expressed.
+    "FARE_DISCOUNT",
+    "PERCENT_DISCOUNT",
+    "FIXED_FARE",
+    # Urgency / booking-horizon shape.
+    "FLASH_SALE",
+    "EARLY_BOOKING",
+    "LAST_MINUTE",
+    # Itinerary shape.
+    "ROUND_TRIP_PROMOTION",
+    "ONE_WAY_PROMOTION",
+    # Scope of the offer.
+    "DESTINATION_PROMOTION",
+    "SEASONAL_PROMOTION",
+    "NEW_ROUTE_PROMOTION",
+    # Calendar pegs. These are their own types rather than SEASONAL_PROMOTION
+    # with a date, because a revenue desk plans against them by name a year
+    # ahead and wants last year's Black Friday next to this year's.
+    "BLACK_FRIDAY",
+    "CYBER_MONDAY",
+    "SUMMER_SALE",
+    "WINTER_SALE",
+    "RAMADAN_PROMOTION",
+    "EID_PROMOTION",
+    "NATIONAL_HOLIDAY",
+    # Audience segments.
+    "STUDENT_PROMOTION",
+    "FAMILY_PROMOTION",
+    "CORPORATE_PROMOTION",
+    # Loyalty and ancillary. A campaign can legitimately be one of these AND a
+    # fare campaign; whether it counts as one is the business_class question
+    # below, not this one.
+    "LOYALTY_PROMOTION",
+    "MILES_PROMOTION",
+    "BAGGAGE_PROMOTION",
+    "ANCILLARY_PROMOTION",
+    "PARTNER_PROMOTION",
+    # The honest fallback.
+    "OTHER",
+)
+
+#: Turkish display labels. Same discipline as CATEGORY_LABELS_TR: the analyst
+#: table, the campaign drawer, the alert mail and the frontend all read these
+#: instead of keeping their own copy, so a relabel happens once.
+CAMPAIGN_TYPE_LABELS_TR: dict[str, str] = {
+    "FARE_DISCOUNT": "Bilet İndirimi",
+    "PERCENT_DISCOUNT": "Yüzde İndirim",
+    "FIXED_FARE": "Sabit Fiyat",
+    "FLASH_SALE": "Flaş İndirim",
+    "EARLY_BOOKING": "Erken Rezervasyon",
+    "LAST_MINUTE": "Son Dakika",
+    "ROUND_TRIP_PROMOTION": "Gidiş-Dönüş Kampanyası",
+    "ONE_WAY_PROMOTION": "Tek Yön Kampanyası",
+    "DESTINATION_PROMOTION": "Destinasyon Kampanyası",
+    "SEASONAL_PROMOTION": "Sezonluk Kampanya",
+    "NEW_ROUTE_PROMOTION": "Yeni Hat Kampanyası",
+    "BLACK_FRIDAY": "Black Friday",
+    "CYBER_MONDAY": "Cyber Monday",
+    "SUMMER_SALE": "Yaz İndirimi",
+    "WINTER_SALE": "Kış İndirimi",
+    "RAMADAN_PROMOTION": "Ramazan Kampanyası",
+    "EID_PROMOTION": "Bayram Kampanyası",
+    "NATIONAL_HOLIDAY": "Resmî Tatil Kampanyası",
+    "STUDENT_PROMOTION": "Öğrenci Kampanyası",
+    "FAMILY_PROMOTION": "Aile Kampanyası",
+    "CORPORATE_PROMOTION": "Kurumsal Kampanya",
+    "LOYALTY_PROMOTION": "Sadakat Programı Kampanyası",
+    "MILES_PROMOTION": "Mil Kampanyası",
+    "BAGGAGE_PROMOTION": "Bagaj Kampanyası",
+    "ANCILLARY_PROMOTION": "Ek Hizmet Kampanyası",
+    "PARTNER_PROMOTION": "İş Birliği Kampanyası",
+    "OTHER": "Diğer",
+}
+
+#: Is this even a fare campaign? The single most load-bearing field in the
+#: whole campaign surface, and the reason it exists: of 131 rows the old
+#: pipeline published, 129 were loyalty-programme guides, product promos,
+#: credit-card content or plain news wearing a campaign's shape. Everything
+#: except ACTIVE/UPCOMING/EXPIRED_CAMPAIGN is a row that must never reach the
+#: published campaign timeline, however confidently it was extracted.
+#:
+#: The ACTIVE/UPCOMING/EXPIRED split is *derived from dates*, not detected
+#: separately -- see CAMPAIGN_STATUSES and services/campaign_status.py. The
+#: detection layer (agents/campaign_airline.py) only ever answers the "is this
+#: a fare campaign" half.
+CAMPAIGN_BUSINESS_CLASSES: tuple[str, ...] = (
+    "ACTIVE_CAMPAIGN",
+    "UPCOMING_CAMPAIGN",
+    "EXPIRED_CAMPAIGN",
+    "EVERGREEN_OFFER",
+    "NEWS_ONLY",
+    "PRODUCT_PROMOTION",
+    "LOYALTY_PROMOTION",
+)
+
+CAMPAIGN_BUSINESS_CLASS_LABELS_TR: dict[str, str] = {
+    "ACTIVE_CAMPAIGN": "Aktif Kampanya",
+    "UPCOMING_CAMPAIGN": "Yaklaşan Kampanya",
+    "EXPIRED_CAMPAIGN": "Süresi Dolmuş Kampanya",
+    "EVERGREEN_OFFER": "Sürekli Teklif",
+    "NEWS_ONLY": "Sadece Haber",
+    "PRODUCT_PROMOTION": "Ürün/Hizmet Kampanyası",
+    "LOYALTY_PROMOTION": "Sadakat Kampanyası",
+}
+
+#: How precisely the campaign's market is known, coarsest question first: an
+#: OND ("IST-LHR") is a directional airport pair, a CITY_PAIR is the same
+#: without committing to which airport, and REGION/NETWORK_WIDE are the honest
+#: answers when the copy says "Avrupa'ya" or "tüm hatlarda". The ladder exists
+#: so a regional campaign is never fanned out into invented OND pairs -- the
+#: single most tempting and most wrong enrichment available here.
+ROUTE_SCOPES: tuple[str, ...] = (
+    "OND",
+    "CITY_PAIR",
+    "COUNTRY",
+    "REGION",
+    "NETWORK_WIDE",
+)
+
+ROUTE_SCOPE_LABELS_TR: dict[str, str] = {
+    "OND": "Kalkış-Varış (OND)",
+    "CITY_PAIR": "Şehir Çifti",
+    "COUNTRY": "Ülke",
+    "REGION": "Bölge",
+    "NETWORK_WIDE": "Tüm Ağ",
+}
+
+#: Where the campaign is in time. Never stored -- computed at read time from
+#: (dates, today) by services/campaign_status.py, which is why these slugs live
+#: here rather than as a column's check constraint. See that module for the
+#: decision table and for why storing this would be wrong.
+CAMPAIGN_STATUSES: tuple[str, ...] = (
+    "UPCOMING",
+    "ACTIVE_BOOKING",
+    "BOOKING_CLOSED_TRAVEL_ACTIVE",
+    "EXPIRED",
+    "UNKNOWN",
+)
+
+CAMPAIGN_STATUS_LABELS_TR: dict[str, str] = {
+    "UPCOMING": "Yakında",
+    "ACTIVE_BOOKING": "Satışta",
+    "BOOKING_CLOSED_TRAVEL_ACTIVE": "Satış kapandı, seyahat sürüyor",
+    "EXPIRED": "Süresi doldu",
+    "UNKNOWN": "Belirsiz",
+}
+
+
+def is_valid_campaign_type(slug: str | None) -> bool:
+    """Closed-set gate, same contract as is_valid_risk_type above: every write
+    path goes through this, so a model inventing "MEGA_SALE" writes OTHER or
+    null rather than a slug nothing can render, filter or count."""
+    return slug in CAMPAIGN_TYPES
+
+
+def is_valid_business_class(slug: str | None) -> bool:
+    return slug in CAMPAIGN_BUSINESS_CLASSES
+
+
+def is_valid_route_scope(slug: str | None) -> bool:
+    return slug in ROUTE_SCOPES
+
+
+def is_valid_campaign_status(slug: str | None) -> bool:
+    return slug in CAMPAIGN_STATUSES

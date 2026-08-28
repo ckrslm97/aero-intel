@@ -34,13 +34,41 @@ pipeline/confidence.py: `sale_starts or sale_ends` is the one genuinely
 variable required field (airline_code is guaranteed by the parser, url by the
 article always having one) -- missing it caps the row at the low band, which
 is how "eksikse yayınlama" is actually enforced rather than merely stated.
+
+The business-class layer
+------------------------
+The two guards above ask "is this campaign live and plausible". They cannot
+ask the prior question -- "is this a fare campaign at all" -- because both of
+them pass a page with no dates on it, and most of the 129 wrong rows had no
+dates. That question is what `_business_class()` answers, with keyword
+rulepacks rather than another model call: the four wrong kinds are lexically
+obvious (a mileage sale says "miles", a baggage promo says "bagaj", a student
+page says "öğrenci"), they are the same four kinds every time, and a rulepack
+is auditable in a way a second LLM verdict is not.
+
+Only the "is this a fare campaign" half of `business_class` is decided here.
+ACTIVE/UPCOMING/EXPIRED_CAMPAIGN is a *date* question, answered by
+services/campaign_status.py from the same four columns the UI reads, and
+duplicating that here would give one row two answers that drift apart the
+moment the clock moves. A page that passes every guard is ACTIVE_CAMPAIGN in
+the sense that matters here: a real fare campaign, whose position in time is
+computed elsewhere.
+
+Every verdict, positive or negative, carries a `classification_reason` -- one
+honest Turkish sentence saying what the decision was based on. It rides in the
+Outcome's `details` dict rather than in a new return type, because that is the
+mechanism already in place and existing callers (agents/runner.py,
+services/golden_eval_service.py) go on reading `.payload`/`.reason` unchanged.
 """
 from __future__ import annotations
 
 from datetime import date, datetime
 
+from app.agents.gate import DISTRACTOR_TERMS
+from app.core.tr_dates import format_optional_range
 from app.llm.classify import CampaignExtraction
 from app.llm.gazetteer import AIRLINE_ALIASES
+from app.llm.heuristic import _keyword_pattern, fold_text
 from app.models.article import Article
 from app.models.news_event import NewsEvent
 from app.models.promotion import Promotion
@@ -66,6 +94,73 @@ _AIRLINE_NAME_BY_CODE: dict[str, str] = {
 
 REQUIRED_FIELDS = ("sale_window",)
 
+# --- business-class rulepacks ------------------------------------------------
+#
+# Written in fold_text() form: ASCII, lowercase, Turkish diacritics mapped onto
+# their bases and every non-alphanumeric character collapsed to a space. So
+# "öğrenci" is "ogrenci" and "Miles&Smiles" is "miles smiles". Writing them any
+# other way would silently never match -- the same trap agents/gate.py
+# documents at the top of its own tables.
+
+#: Standing benefits with no campaign window: a segment that always gets this
+#: rate. A published "campaign" that never starts and never ends is noise on a
+#: timeline whose entire purpose is when-does-this-close. Detection needs BOTH
+#: the vocabulary and the absence of a sale window, because "öğrencilere özel
+#: 3 gün %30" is a real, dated campaign that happens to target students.
+EVERGREEN_TERMS: tuple[str, ...] = (
+    "ogrenci", "ogrenciler", "ogrencilere", "student", "students", "youth",
+    "kurumsal", "corporate", "sirketler icin", "business traveller",
+    "senior", "65 yas", "65 yas ustu", "emekli", "retiree",
+    "resident", "residents", "mukim", "ikamet", "diplomat",
+    "her zaman", "her zaman gecerli", "yil boyu", "yil boyunca", "surekli",
+    "always", "always available", "year round", "standing offer",
+    "engelli", "gazi", "sehit yakini", "ogretmen", "teacher",
+)
+_EVERGREEN = _keyword_pattern(EVERGREEN_TERMS)
+
+#: Something other than a seat is on sale. Baggage, lounges, seat selection,
+#: hotels and car hire are ancillary revenue -- legitimate aviation news, and
+#: never a fare campaign. The hotel half is imported from gate.py rather than
+#: retyped: that list already knows about Bonvoy, Hyatt and "konaklama", and
+#: two copies of it would drift on the first addition to either.
+PRODUCT_TERMS: tuple[str, ...] = (
+    "bagaj", "bagaj hakki", "ek bagaj", "baggage", "extra baggage", "luggage",
+    "lounge", "lounge access", "bekleme salonu", "cip salonu",
+    "koltuk secimi", "seat selection", "seat upgrade", "yer secimi",
+    "arac kiralama", "car rental", "rent a car", "transfer hizmeti",
+    "wifi", "yemek servisi", "inflight meal", "sigorta", "insurance",
+    "esim", "otopark", "parking",
+) + DISTRACTOR_TERMS["hotel"]
+_PRODUCT = _keyword_pattern(PRODUCT_TERMS)
+
+#: Miles, points and status. The single largest category among the 129 wrong
+#: rows -- Avios bonus sales, Flying Blue devaluations, TrueBlue point
+#: purchases -- all of which are about the currency, not about the fare.
+LOYALTY_TERMS: tuple[str, ...] = (
+    "mil", "mil kazan", "mil kazanim", "bonus mil", "mile", "miles",
+    "puan", "puanlar", "bolpuan", "point", "points", "bonus points",
+    "statu", "status match", "statu esitleme", "elite status", "tier",
+    "miles smiles", "milesandsmiles", "avios", "skywards", "flying blue",
+    "trueblue", "bolbol", "executive club", "frequent flyer", "mileage",
+    "odul bilet", "award ticket", "award chart", "redemption",
+    "sadakat programi", "loyalty programme", "loyalty program",
+)
+_LOYALTY = _keyword_pattern(LOYALTY_TERMS)
+
+#: What a page that actually wants to sell you a ticket says. Its ABSENCE is
+#: the signal -- together with no dates and no rate, it means the page reports
+#: a campaign rather than being one. Deliberately loose: every term here makes
+#: NEWS_ONLY *less* likely, so a false match costs nothing but a row that
+#: survives to the next guard, while a missing term would reject a real
+#: campaign.
+BOOKING_CTA_TERMS: tuple[str, ...] = (
+    "rezervasyon", "rezerve", "bilet al", "biletini al", "satin al",
+    "hemen al", "hemen rezervasyon", "simdi al", "bilet satin",
+    "book", "book now", "booking", "buy", "buy now", "purchase", "reserve",
+    "get it now", "shop", "kesfet", "firsati kacirma", "son gun",
+)
+_BOOKING_CTA = _keyword_pattern(BOOKING_CTA_TERMS)
+
 
 def _looks_expired(title: str) -> bool:
     folded = (title or "").lower()
@@ -84,28 +179,187 @@ def _window_is_stale(ends: date | None, *, today: date) -> bool:
     return (today - ends).days > STALE_AFTER_DAYS
 
 
+def _first_match(pattern, text: str) -> str | None:
+    """The matched phrase, so the reason can quote what actually decided it."""
+    found = pattern.search(text)
+    return found.group(0) if found else None
+
+
+def _business_class(
+    text: str, campaign: CampaignExtraction
+) -> tuple[str, str | None] | None:
+    """The non-fare class this page belongs to, or None if it is a fare campaign.
+
+    Order is by how specific the evidence is, not by how common the class is.
+    A page saying both "bagaj" and "mil" is a product promo that happens to
+    award miles, so PRODUCT is asked first; LOYALTY is next because its
+    vocabulary is unambiguous; EVERGREEN needs a second condition and so comes
+    after the two that do not; NEWS_ONLY is last because it is defined by
+    absence and everything positive should get its say first.
+    """
+    product = _first_match(_PRODUCT, text)
+    if product:
+        return "PRODUCT_PROMOTION", product
+
+    loyalty = _first_match(_LOYALTY, text)
+    if loyalty:
+        return "LOYALTY_PROMOTION", loyalty
+
+    # Evergreen needs the vocabulary AND no sale window: a student fare that
+    # runs for three days in September is a real campaign that happens to
+    # target students, and rejecting it would be the rulepack overreaching.
+    has_sale_window = campaign.sale_starts is not None or campaign.sale_ends is not None
+    evergreen = _first_match(_EVERGREEN, text)
+    if evergreen and not has_sale_window:
+        return "EVERGREEN_OFFER", evergreen
+
+    # Nothing to book, nothing to book it by, and nothing off the price: an
+    # article about the campaign surface rather than a campaign.
+    has_any_date = any(
+        value is not None
+        for value in (
+            campaign.sale_starts,
+            campaign.sale_ends,
+            campaign.travel_starts,
+            campaign.travel_ends,
+        )
+    )
+    if not has_any_date and campaign.discount_pct is None and not _BOOKING_CTA.search(text):
+        return "NEWS_ONLY", None
+
+    return None
+
+
+_CLASS_REASONS: dict[str, str] = {
+    "PRODUCT_PROMOTION": (
+        "Bagaj, lounge, otel gibi yan ürün/hizmet kampanyası — bilet ücreti kampanyası değil"
+    ),
+    "LOYALTY_PROMOTION": (
+        "Mil/puan kazanımı veya sadakat programı kampanyası — ücret kampanyası değil"
+    ),
+    "EVERGREEN_OFFER": (
+        "Belirli bir yolcu grubuna sürekli sunulan standart teklif, satış dönemi yok "
+        "— süreli ücret kampanyası değil"
+    ),
+    "NEWS_ONLY": (
+        "Tarih, indirim oranı ve rezervasyon çağrısı yok — kampanyayı anlatan içerik, "
+        "kampanyanın kendisi değil"
+    ),
+}
+
+
+def _rejection_reason(business_class: str, evidence: str | None) -> str:
+    """One Turkish sentence, quoting the phrase that decided it where there is
+    one. A verdict the analyst cannot check is a verdict they cannot trust."""
+    base = _CLASS_REASONS[business_class]
+    if evidence:
+        return f"{base} (\"{evidence}\" geçiyor)."
+    return f"{base}."
+
+
+def _acceptance_reason(campaign: CampaignExtraction) -> str:
+    """What this row was accepted on, in the reader's language."""
+    stated: list[str] = []
+    if campaign.sale_starts or campaign.sale_ends:
+        stated.append(
+            f"satış dönemi ({format_optional_range(campaign.sale_starts, campaign.sale_ends)})"
+        )
+    elif campaign.travel_starts or campaign.travel_ends:
+        stated.append(
+            "seyahat dönemi "
+            f"({format_optional_range(campaign.travel_starts, campaign.travel_ends)})"
+        )
+    if campaign.discount_pct is not None:
+        stated.append(f"%{campaign.discount_pct} indirim")
+
+    if not stated:
+        return (
+            "Ücret kampanyası olarak sınıflandırıldı; tarih ve indirim oranı "
+            "kaynakta belirtilmemiş."
+        )
+    return f"{' ve '.join(stated).capitalize()} açıkça belirtilmiş; ücret kampanyası."
+
+
 def validate_campaign(
-    title: str, campaign: CampaignExtraction, *, today: date | None = None
+    title: str,
+    campaign: CampaignExtraction,
+    *,
+    today: date | None = None,
+    text: str | None = None,
 ) -> Outcome[CampaignExtraction]:
     """The second validation layer, on top of the model's own verdict.
 
     Downgrades a CLASSIFIED campaign to NOT_APPLICABLE when it matches one of
-    the two patterns still reaching production after the model-level fix.
-    Never upgrades or invents -- this only ever narrows what the model already
-    said yes to.
+    the patterns still reaching production after the model-level fix. Never
+    upgrades or invents -- this only ever narrows what the model already said
+    yes to.
+
+    `text` is the page or article body when the caller has one; the rulepacks
+    read title and body together. It is optional because the golden-set
+    evaluator (services/golden_eval_service.py) grades labelled titles with no
+    body available, and a rulepack that needs a body would silently stop
+    grading there.
+
+    Both verdicts carry `business_class` and `classification_reason` in
+    `details`. Callers that only read `.payload` and `.reason` -- which is all
+    of them today -- are unaffected; PR4 writes both onto the row.
+
+    Guard order is deliberate: the three date guards run first so their
+    machine-readable reasons stay stable (they are what the golden-set
+    regression asserts on), and because "this window is a partnership, not a
+    sale" is a statement about the extraction rather than about the page. The
+    date guards leave `business_class` null -- they are not business-class
+    verdicts, and services/campaign_status.py owns the EXPIRED question.
     """
     reference = today or date.today()
 
     if _looks_expired(title):
-        return Outcome.not_applicable("expired_title")
+        return Outcome.not_applicable(
+            "expired_title",
+            business_class=None,
+            classification_reason=(
+                "Başlık kampanyanın süresinin dolduğunu belirtiyor "
+                "([Expired]/[Deal Alert]) — canlı kampanya olarak yayınlanmadı."
+            ),
+        )
 
     if _window_is_implausible(campaign.sale_starts, campaign.sale_ends):
-        return Outcome.not_applicable("implausible_sale_window")
+        span = (campaign.sale_ends - campaign.sale_starts).days
+        return Outcome.not_applicable(
+            "implausible_sale_window",
+            business_class=None,
+            classification_reason=(
+                f"Satış dönemi {span} gün "
+                f"({format_optional_range(campaign.sale_starts, campaign.sale_ends)}) — "
+                f"gerçek bir bilet kampanyası için fazla uzun "
+                f"(üst sınır {MAX_SALE_WINDOW_DAYS} gün); duyuru ya da iş birliği."
+            ),
+        )
 
     if _window_is_stale(campaign.sale_ends, today=reference):
-        return Outcome.not_applicable("sale_window_closed")
+        return Outcome.not_applicable(
+            "sale_window_closed",
+            business_class=None,
+            classification_reason=(
+                f"Satış dönemi {campaign.sale_ends.isoformat()} tarihinde kapandı; "
+                f"{STALE_AFTER_DAYS} günlük gösterim toleransı aşıldı."
+            ),
+        )
 
-    return Outcome.classified(campaign)
+    detected = _business_class(fold_text(f"{title}\n{text or ''}"), campaign)
+    if detected is not None:
+        business_class, evidence = detected
+        return Outcome.not_applicable(
+            f"business_class:{business_class}",
+            business_class=business_class,
+            classification_reason=_rejection_reason(business_class, evidence),
+        )
+
+    return Outcome.classified(
+        campaign,
+        business_class="ACTIVE_CAMPAIGN",
+        classification_reason=_acceptance_reason(campaign),
+    )
 
 
 def build_promotion(
