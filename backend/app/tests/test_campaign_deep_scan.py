@@ -29,6 +29,8 @@ from app.ingest.deep_scan import (
     normalize,
     record_run,
 )
+from app.models.campaign_source import CampaignSource
+from app.models.campaign_version import CampaignVersion
 from app.models.promotion import Promotion
 from app.models.scrape_run import ScrapeRun
 
@@ -123,6 +125,24 @@ async def _promotions(db) -> list[Promotion]:
     return list(rows)
 
 
+async def _versions(db, promotion_id=None) -> list[CampaignVersion]:
+    stmt = select(CampaignVersion).order_by(CampaignVersion.version_no)
+    if promotion_id is not None:
+        stmt = stmt.where(CampaignVersion.promotion_id == promotion_id)
+    return list((await db.execute(stmt)).scalars().all())
+
+
+async def _sources(db, promotion_id) -> list[CampaignSource]:
+    rows = (
+        await db.execute(
+            select(CampaignSource)
+            .where(CampaignSource.promotion_id == promotion_id)
+            .order_by(CampaignSource.url)
+        )
+    ).scalars().all()
+    return list(rows)
+
+
 async def _runs(db) -> list[ScrapeRun]:
     rows = (
         await db.execute(select(ScrapeRun).order_by(ScrapeRun.started_at))
@@ -187,6 +207,59 @@ async def test_the_same_campaign_with_new_terms_refreshes_its_row(
     europe = next(row for row in rows if "autumn" in row.url)
     assert europe.discount_pct == 40
     assert budget.updated == 2
+
+    # ...and the move is on the record, which is the whole point: an in-place
+    # update erases exactly the fact a revenue desk wants.
+    versions = await _versions(db_session, europe.id)
+    assert [v.version_no for v in versions] == [1]
+    assert versions[0].changed_fields["discount_pct"] == {"previous": 30, "new": 40}
+    assert versions[0].source_url == europe.url
+    assert europe.last_changed_at is not None
+    # One source restating itself is not a conflict.
+    assert europe.conflict_detected is None
+
+
+# --- versioning and provenance on this path -------------------------------
+
+
+async def test_creating_a_campaign_files_its_page_and_writes_no_version(
+    db_session, canned, monkeypatch
+):
+    """A version row records a CHANGE; a campaign's first sighting is already
+    on the row itself, in first_seen_at. What creation does write is the page
+    it was read from -- a campaign is never in the table with no known source."""
+    await _scan(db_session, monkeypatch)
+
+    rows = await _promotions(db_session)
+    assert await _versions(db_session) == []
+    for row in rows:
+        sources = await _sources(db_session, row.id)
+        assert [s.url for s in sources] == [row.url]
+        assert sources[0].source_tier == "official"
+        assert sources[0].source_name == "Emirates kampanya sayfası"
+        assert sources[0].content_hash == content_hash(normalize(PAGE_TEXT))
+        assert sources[0].first_seen_at == sources[0].last_seen_at
+
+
+async def test_a_page_edit_that_changes_no_campaign_bumps_last_seen_only(
+    db_session, canned, monkeypatch
+):
+    """The page's footer changed, so the hash did and extraction ran again --
+    but the campaigns say exactly what they said. Nothing moved, so nothing is
+    versioned; only the sighting is refreshed."""
+    await _scan(db_session, monkeypatch)
+    first = {row.url: row.last_seen_at for row in await _promotions(db_session)}
+
+    budget, summary = await _scan(
+        db_session, monkeypatch, text=PAGE_TEXT + " Footer updated on this page."
+    )
+
+    assert summary["changed"] == 1 and budget.updated == 2
+    assert await _versions(db_session) == [], "a sighting is not an edit"
+    for row in await _promotions(db_session):
+        assert row.last_seen_at > first[row.url]
+        assert row.last_changed_at is None
+        assert len(await _sources(db_session, row.id)) == 1, "same page, same source"
 
 
 # --- carry-over: the case the design turns on -----------------------------
@@ -308,6 +381,20 @@ async def test_a_campaign_already_written_from_a_news_article_is_merged_not_doub
     )
     assert merged.business_class == "ACTIVE_CAMPAIGN"
     assert merged.route_scope == "OND"
+
+    # Both pages stay on the record -- the report the row came from and the
+    # carrier's page that took it over. That count is what corroboration means.
+    sources = await _sources(db_session, seeded_id)
+    assert [(s.url, s.source_tier) for s in sources] == [
+        ("https://havayolu101.example/emirates-autumn-fares", "secondary"),
+        (merged.url, "official"),
+    ]
+    # And the merge itself is versioned: this row gained a sale window, a rate
+    # and a URL it did not have, from a source it did not have.
+    versions = await _versions(db_session, seeded_id)
+    assert [v.version_no for v in versions] == [1]
+    assert versions[0].changed_fields["sale_ends"]["previous"] is None
+    assert versions[0].changed_fields["url"]["previous"].startswith("https://havayolu101")
 
 
 # --- the flag and the dry run ---------------------------------------------

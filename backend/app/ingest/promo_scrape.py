@@ -46,7 +46,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
 from app.models.promotion import Promotion
-from app.pipeline.promo_dedup import PromoCandidate, find_duplicate, merge_candidate
+from app.pipeline.promo_dedup import (
+    PromoCandidate,
+    apply_updates,
+    ensure_source_row,
+    find_duplicate,
+    merge_candidate,
+    record_version,
+    rescore_for_corroboration,
+)
 from app.pipeline.promotions import TR_MONTHS, find_dates
 
 logger = get_logger(__name__)
@@ -187,6 +195,14 @@ async def scrape_promotions(
     checked against app/pipeline/promo_dedup before it becomes an insert, and a
     match is merged -- the airline's dates and canonical link win, the article's
     summary and the earlier sighting survive.
+
+    Versioning and source rows are written here unconditionally, not behind
+    `CAMPAIGN_V2_ENABLED`. This is the live v1 Pegasus path and the flag exists
+    to keep half-populated v2 data off the screen -- but a `campaign_versions`
+    row and a `campaign_sources` row change nothing about what this function
+    stores on `promotions` or what the API serves from it. They are bookkeeping
+    about writes that were happening anyway, and gating them would mean the one
+    carrier we can actually read every 30 minutes is the one with no history.
     """
     owns_client = client is None
     if client is None:
@@ -231,44 +247,97 @@ async def scrape_promotions(
                 if twin is not None:
                     # Same campaign, already on the timeline under the news
                     # report's URL. Take it over rather than drawing it twice.
-                    merge_candidate(twin, candidate)
+                    displaced_url, displaced_source = twin.url, twin.source_name
+                    changed = merge_candidate(twin, candidate)
                     await db.flush()
-                    result["merged"] += 1
-                    continue
-                db.add(
-                    Promotion(
-                        airline_code=promo.airline_code,
-                        airline_name=promo.airline_name,
-                        title_tr=promo.title_tr,
-                        summary_tr=promo.summary_tr,
-                        discount_pct=promo.discount_pct,
-                        markets=None,
-                        sale_starts=promo.sale_starts,
-                        sale_ends=promo.sale_ends,
-                        travel_starts=None,
-                        travel_ends=None,
+                    # Both pages stay on the record: the report is what the
+                    # corroboration count is counting, and the campaign page is
+                    # the row's own URL from here on.
+                    await ensure_source_row(
+                        db,
+                        twin,
+                        url=displaced_url,
+                        source_name=displaced_source,
+                        seen_at=twin.detected_at,
+                    )
+                    await ensure_source_row(
+                        db,
+                        twin,
                         url=promo.url,
                         source_name=SOURCE_NAME,
-                        region=None,
-                        # First sighting: this is a scrape, so "when we saw it"
-                        # is genuinely now. That is what makes the 48h banner
-                        # fire the first run after a campaign goes live.
-                        detected_at=now,
+                        tier="official",
+                        seen_at=now,
                     )
+                    await rescore_for_corroboration(db, twin)
+                    await record_version(db, twin, changed, source_url=promo.url)
+                    result["merged"] += 1
+                    continue
+                row = Promotion(
+                    airline_code=promo.airline_code,
+                    airline_name=promo.airline_name,
+                    title_tr=promo.title_tr,
+                    summary_tr=promo.summary_tr,
+                    discount_pct=promo.discount_pct,
+                    markets=None,
+                    sale_starts=promo.sale_starts,
+                    sale_ends=promo.sale_ends,
+                    travel_starts=None,
+                    travel_ends=None,
+                    url=promo.url,
+                    source_name=SOURCE_NAME,
+                    region=None,
+                    # First sighting: this is a scrape, so "when we saw it"
+                    # is genuinely now. That is what makes the 48h banner
+                    # fire the first run after a campaign goes live.
+                    detected_at=now,
+                    first_seen_at=now,
+                    last_seen_at=now,
                 )
+                db.add(row)
                 # Flushed as we go so the duplicate check above sees rows this
                 # same run inserted: one page can list a campaign twice.
                 await db.flush()
+                # N>=1: a campaign always knows at least one page that carried
+                # it, from the moment it exists.
+                await ensure_source_row(
+                    db,
+                    row,
+                    url=promo.url,
+                    source_name=SOURCE_NAME,
+                    tier="official",
+                    seen_at=now,
+                )
                 result["inserted"] += 1
             else:
-                existing.title_tr = promo.title_tr
-                existing.summary_tr = promo.summary_tr
-                existing.discount_pct = promo.discount_pct
-                existing.sale_starts = promo.sale_starts
-                existing.sale_ends = promo.sale_ends
+                # The same page restating itself, so the incoming reading wins
+                # every field -- but it is written through `apply_updates` so
+                # that what it changed is a version row rather than a silent
+                # overwrite. Pegasus extends and re-rates campaigns in place;
+                # this is the only record that it did.
+                changed = apply_updates(
+                    existing,
+                    {
+                        "title_tr": promo.title_tr,
+                        "summary_tr": promo.summary_tr,
+                        "discount_pct": promo.discount_pct,
+                        "sale_starts": promo.sale_starts,
+                        "sale_ends": promo.sale_ends,
+                    },
+                )
                 # detected_at is deliberately NOT touched: re-seeing a campaign
                 # is not detecting it, and refreshing it would keep an
                 # eight-month-old campaign permanently badged "Yeni".
+                existing.last_seen_at = now
+                await db.flush()
+                await ensure_source_row(
+                    db,
+                    existing,
+                    url=promo.url,
+                    source_name=SOURCE_NAME,
+                    tier="official",
+                    seen_at=now,
+                )
+                await record_version(db, existing, changed, source_url=promo.url)
                 result["updated"] += 1
 
         await db.commit()

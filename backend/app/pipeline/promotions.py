@@ -626,6 +626,15 @@ async def extract_promotions(
             # one campaign -- see app/pipeline/promo_dedup.py.
             twin = await find_duplicate(db, candidate)
             if twin is not None:
+                # The diff `merge_candidate` returns is deliberately dropped
+                # here, and on the refresh below. This extractor re-reads the
+                # same article text every 30 minutes with an LLM whose answer
+                # is not stable to the field, so a version row from this path
+                # would record model variance, not a carrier moving its
+                # campaign -- audit noise in the one table that has to stay
+                # readable. The article-derived campaigns that ARE versioned
+                # are the v2 ones agents/runner.py writes, where the reading is
+                # taken once per cluster and merged against a source tier.
                 merge_candidate(twin, candidate)
                 await db.flush()
                 stats["merged"] += 1

@@ -15,6 +15,8 @@ from app.agents import runner as runner_module
 from app.agents.runner import run_pipeline_v2
 from app.llm.classify import CampaignExtraction, Classification, ClassificationResult, RiskAssessment
 from app.models.article import Article
+from app.models.campaign_source import CampaignSource
+from app.models.campaign_version import CampaignVersion
 from app.models.entity import ArticleEntity, Entity
 from app.models.news_event import NewsEvent
 from app.models.promotion import Promotion
@@ -592,6 +594,88 @@ async def test_a_campaign_the_table_already_has_is_merged_not_inserted_again(
     assert rows[0]["url"] == "https://www.flypgs.com/kampanyalar/balkanlar", (
         "the airline's own page keeps its canonical URL"
     )
+
+    # Both pages are on the record, at the tier each of them earns: the
+    # carrier's campaign page is official, and a news outlet reporting on it is
+    # secondary reporting about somebody else's campaign, however good it is.
+    sources = (
+        await db_session.execute(
+            CampaignSource.__table__.select().order_by(CampaignSource.__table__.c.url)
+        )
+    ).mappings().all()
+    assert [(s["url"], s["source_tier"]) for s in sources] == [
+        ("https://a.example/balkanlar", "secondary"),
+        ("https://www.flypgs.com/kampanyalar/balkanlar", "official"),
+    ]
+    # ...and what the article added to the row is a version row, not a silent
+    # overwrite of the page's own reading.
+    versions = (
+        await db_session.execute(CampaignVersion.__table__.select())
+    ).mappings().all()
+    assert len(versions) == 1
+    assert versions[0]["version_no"] == 1
+    assert versions[0]["changed_fields"]["discount_pct"] == {"previous": None, "new": 50}
+    assert versions[0]["source_url"] == "https://a.example/balkanlar"
+    assert rows[0]["last_changed_at"] is not None
+
+
+async def test_a_campaign_written_from_an_article_records_the_article_as_its_source(
+    db_session, monkeypatch, campaign_v2
+):
+    """N>=1 from the moment a row exists -- and no version row for creating it,
+    because a version records a change and there is nothing yet to change."""
+    async def _answer(title, content, *, topic_fragment=""):
+        return _campaign_result()
+
+    monkeypatch.setattr(runner_module, "classify_article", _answer)
+    await _seed_campaign_article(db_session)
+
+    await run_pipeline_v2(db_session, limit=10)
+
+    promotion = (await db_session.execute(Promotion.__table__.select())).mappings().one()
+    sources = (await db_session.execute(CampaignSource.__table__.select())).mappings().all()
+    assert len(sources) == 1
+    assert sources[0]["promotion_id"] == promotion["id"]
+    assert sources[0]["url"] == promotion["url"]
+    assert sources[0]["source_tier"] == "secondary"
+    assert sources[0]["page_published_at"] is not None
+    assert (
+        await db_session.execute(CampaignVersion.__table__.select())
+    ).mappings().all() == []
+
+
+async def test_a_carriers_own_feed_is_a_newsroom_not_a_campaign_page(
+    db_session, monkeypatch, campaign_v2
+):
+    """`sources.tier == "official"` means the carrier's own channel. That
+    outranks the trade press and still does not outrank the page that actually
+    sells the fare and states its terms."""
+    async def _answer(title, content, *, topic_fragment=""):
+        return _campaign_result()
+
+    monkeypatch.setattr(runner_module, "classify_article", _answer)
+    source = Source(
+        name="Pegasus Basın Odası",
+        url="https://www.flypgs.com/basin-odasi/feed",
+        source_type="rss",
+        trust_weight=0.9,
+        tier="official",
+    )
+    db_session.add(source)
+    await db_session.flush()
+    await _article(
+        db_session,
+        source,
+        "https://www.flypgs.com/basin-odasi/balkanlar",
+        "Balkanlar %50'ye Varan İndirimle!",
+        content="Pegasus Balkanlar hattında indirim kampanyası başlattı.",
+    )
+    await db_session.commit()
+
+    await run_pipeline_v2(db_session, limit=10)
+
+    sources = (await db_session.execute(CampaignSource.__table__.select())).mappings().all()
+    assert [s["source_tier"] for s in sources] == ["newsroom"]
 
 
 async def test_with_the_flag_off_the_new_columns_stay_null(db_session, monkeypatch):

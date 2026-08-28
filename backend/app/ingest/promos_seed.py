@@ -244,6 +244,12 @@ async def _seed_promotion_rows(db: AsyncSession, now: datetime) -> int:
             # Curation is the newer reading of what this entry says, so it wins
             # every field it states -- but a blank here must not erase a window
             # the airline's own page contributed.
+            #
+            # The returned diff is dropped on both branches: PROMOS is a
+            # hand-maintained constant in this file, so a change here is a code
+            # edit arriving with a deploy, and a version row saying "the
+            # campaign moved" would be attributing our own commit to the
+            # carrier.
             merge_candidate(existing, candidate, prefer_candidate=True)
             continue
         twin = await find_duplicate(db, candidate)

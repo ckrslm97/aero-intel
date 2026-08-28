@@ -980,24 +980,52 @@ def candidate_for(extracted: ExtractedCampaign) -> PromoCandidate:
         region=(extracted.route.origin or extracted.route.dest).region
         if (extracted.route.origin or extracted.route.dest)
         else None,
+        campaign_type=extracted.campaign_type,
+        # Stated rather than inferred from the source name: this page is on the
+        # carrier's own domain (app/ingest/carriers.py), which is what makes it
+        # win a disagreement with a report about it.
+        source_tier="official",
     )
 
 
-def _refresh_row(row: Promotion, extracted: ExtractedCampaign, *, prefer: bool) -> None:
-    """Bring the v2 columns on an existing row up to date.
+#: The v2 columns whose movement belongs in a version row. Everything else
+#: `_refresh_row` writes is either a blob nobody reads as a diff
+#: (evidence_json, route_json, attrs_json, raw_text), a per-scan fingerprint
+#: (content_hash) or a derived number that moves on its own (confidence_*). A
+#: version row is read by a person asking what the carrier changed; two
+#: paragraphs of JSON side by side would not answer that.
+VERSIONED_V2_COLUMNS: tuple[str, ...] = (
+    "campaign_type",
+    "business_class",
+    "route_scope",
+    "ond",
+    "origin_code",
+    "dest_code",
+)
+
+
+def _refresh_row(
+    row: Promotion, extracted: ExtractedCampaign, *, prefer: bool
+) -> dict[str, dict]:
+    """Bring the v2 columns on an existing row up to date; return what moved.
 
     `promo_dedup.merge_candidate` knows the columns that predate this rebuild
     and its rule -- null never overwrites a value -- is the right one here too,
-    so this only handles what that function has never heard of. Versioning and
-    conflict flags are PR5's; what happens here is the observation lifecycle
-    (`last_seen_at` always moves, `first_seen_at` only backwards) plus filling
-    the classification columns a legacy or news-sourced row does not have.
+    so this only handles what that function has never heard of. What happens
+    here is the observation lifecycle (`last_seen_at` always moves,
+    `first_seen_at` only backwards) plus filling the classification columns a
+    legacy or news-sourced row does not have.
+
+    The returned diff has the same shape `merge_candidate` returns and is
+    merged into it before `record_version` writes, so one scan of one page
+    produces one version row rather than two.
     """
     now = extracted.detected_at
     row.last_seen_at = now
     if row.first_seen_at is None or now < row.first_seen_at:
         row.first_seen_at = now
 
+    changed: dict[str, dict] = {}
     for column, value in (
         ("campaign_type", extracted.campaign_type),
         ("business_class", extracted.business_class),
@@ -1019,8 +1047,12 @@ def _refresh_row(row: Promotion, extracted: ExtractedCampaign, *, prefer: bool) 
     ):
         if value is None:
             continue
-        if prefer or getattr(row, column) is None:
+        previous = getattr(row, column)
+        if (prefer or previous is None) and previous != value:
             setattr(row, column, value)
+            if column in VERSIONED_V2_COLUMNS:
+                changed[column] = {"previous": previous, "new": value}
+    return changed
 
 
 async def persist_extracted(db, extracted: ExtractedCampaign) -> str:
@@ -1037,28 +1069,55 @@ async def persist_extracted(db, extracted: ExtractedCampaign) -> str:
       is what closes the documented "insert without asking" gap for this path.
     * **New.** A row.
 
+    Every one of the three writes its provenance: the page's URL is filed in
+    `campaign_sources` (so a campaign always has at least one recorded source,
+    and a merge has two), and anything that actually moved is written to
+    `campaign_versions`. Creation writes no version row -- see
+    `promo_dedup.record_version` for why.
+
     Flushed, not committed: the caller owns the transaction, exactly as
     `record_run` does.
     """
     from sqlalchemy import select
 
-    from app.pipeline.promo_dedup import find_duplicate, merge_candidate
+    from app.pipeline.promo_dedup import (
+        ensure_source_row,
+        find_duplicate,
+        merge_candidate,
+        record_version,
+        rescore_for_corroboration,
+    )
 
     candidate = candidate_for(extracted)
     existing = (
         await db.execute(select(Promotion).where(Promotion.url == extracted.url))
     ).scalar_one_or_none()
     if existing is not None:
-        merge_candidate(existing, candidate, prefer_candidate=True)
-        _refresh_row(existing, extracted, prefer=True)
+        changed = merge_candidate(existing, candidate, prefer_candidate=True)
+        changed.update(_refresh_row(existing, extracted, prefer=True))
         await db.flush()
+        await _file_page_source(db, existing, extracted)
+        await record_version(db, existing, changed, source_url=extracted.url)
         return "updated"
 
     match = await find_duplicate(db, candidate)
     if match is not None:
-        merge_candidate(match, candidate)
-        _refresh_row(match, extracted, prefer=False)
+        # Read before the merge: the carrier's page is about to take the row's
+        # URL and source name, and the page it displaces is the second source.
+        displaced_url, displaced_source = match.url, match.source_name
+        changed = merge_candidate(match, candidate)
+        changed.update(_refresh_row(match, extracted, prefer=False))
         await db.flush()
+        await ensure_source_row(
+            db,
+            match,
+            url=displaced_url,
+            source_name=displaced_source,
+            seen_at=match.first_seen_at or match.detected_at,
+        )
+        await _file_page_source(db, match, extracted)
+        await rescore_for_corroboration(db, match)
+        await record_version(db, match, changed, source_url=extracted.url)
         logger.info(
             "campaign_extract_merged",
             airline=extracted.carrier_code,
@@ -1067,9 +1126,32 @@ async def persist_extracted(db, extracted: ExtractedCampaign) -> str:
         )
         return "merged"
 
-    db.add(build_promotion_from_page(extracted))
+    row = build_promotion_from_page(extracted)
+    db.add(row)
     await db.flush()
+    await _file_page_source(db, row, extracted)
     return "inserted"
+
+
+async def _file_page_source(db, row: Promotion, extracted: ExtractedCampaign):
+    """The carrier's own campaign page, as a `campaign_sources` row.
+
+    `official` without asking: this path only ever runs over a page from
+    app/ingest/carriers.py, which is the carrier's own domain by construction.
+    """
+    from app.pipeline.promo_dedup import ensure_source_row
+
+    return await ensure_source_row(
+        db,
+        row,
+        url=extracted.url,
+        source_name=extracted.source_name,
+        tier="official",
+        quality=extracted.attrs_json.get("source_quality"),
+        seen_at=extracted.detected_at,
+        content_hash=extracted.content_hash,
+        raw_excerpt=extracted.raw_text,
+    )
 
 
 def build_promotion_from_page(extracted: ExtractedCampaign) -> Promotion:

@@ -203,6 +203,52 @@ def is_publishable(band: str | None) -> bool:
     return band in ("high", "medium")
 
 
+#: Denominator used when a stored completeness ratio is turned back into the
+#: (present, total) pair `ConfidenceInput` is written in. Nothing downstream
+#: reads the pair -- `score()` divides it immediately and `_cap_for` reads only
+#: the ratio -- so any denominator that preserves the ratio reproduces the
+#: original score exactly; 1000 keeps three decimals of it.
+_COMPLETENESS_SCALE = 1000
+
+_TIER_BY_SCORE = {value: name for name, value in SOURCE_TIER_SCORES.items()}
+
+
+def rescore_with_corroboration(
+    detail: dict | None, *, source_count: int
+) -> ConfidenceResult | None:
+    """Re-run `score()` for a stored record whose source count has changed.
+
+    The one input that can legitimately change after a record is written is how
+    many independent pages reported it: a second source turning up is new
+    evidence that the campaign is real, and a score that cannot move for it
+    would make the `corroboration` weight decorative. Everything else is
+    reconstructed from `confidence_detail` exactly as it was scored -- this is
+    a re-score of one input, not a re-judgement of the record.
+
+    None when the stored detail predates component storage or is unreadable,
+    which the caller must treat as "leave the score alone".
+    """
+    components = (detail or {}).get("components") or {}
+    if not components:
+        return None
+    try:
+        completeness = float(components.get("field_completeness", 0.0))
+        return score(
+            ConfidenceInput(
+                source_tier=_TIER_BY_SCORE.get(
+                    round(float(components.get("source_tier", 0.0)), 4), DEFAULT_SOURCE_TIER
+                ),
+                classifier_certainty=float(components.get("classifier_certainty", 0.0)),
+                required_fields_present=round(completeness * _COMPLETENESS_SCALE),
+                required_fields_total=_COMPLETENESS_SCALE,
+                signal_agreement=float(components.get("signal_agreement", 0.5)),
+                source_count=source_count,
+            )
+        )
+    except (TypeError, ValueError):
+        return None
+
+
 def explain(data: ConfidenceInput) -> dict:
     """Score plus the inputs that produced it, for the audit trail."""
     result = score(data)
