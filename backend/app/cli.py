@@ -332,6 +332,27 @@ async def _refresh_promotions() -> None:
         )
 
 
+async def _deep_scan(carriers: str | None, dry_run: bool) -> None:
+    """The 2x/day Playwright sweep of the bot-walled carrier campaign pages.
+
+    The totals printed here are the summary; the answer the first dispatch is
+    actually asked -- which carriers a real Chromium gets through -- is one
+    `deep_scan_page` log line per page and one `scrape_runs` row per attempt.
+    """
+    from app.ingest.deep_scan import deep_scan
+
+    codes = [part for part in carriers.split(",") if part.strip()] if carriers else None
+
+    async with AsyncSessionLocal() as db:
+        summary = await deep_scan(db, carriers=codes, dry_run=dry_run)
+        print(
+            f"Deep scan{' (dry run)' if dry_run else ''}: "
+            f"{summary['scanned']} sayfa tarandı, {summary['changed']} değişti, "
+            f"{summary['blocked']} bot duvarına takıldı, {summary['errors']} hata, "
+            f"{summary['skipped_static']} statik taşıyıcı atlandı"
+        )
+
+
 async def _dedupe_promotions() -> None:
     """Collapse campaigns already stored twice under two different URLs.
 
@@ -541,6 +562,7 @@ def main() -> None:
             "extract-promotions",
             "scrape-promotions",
             "refresh-promotions",
+            "deep-scan",
             "dedupe-promotions",
             "prune-kpi-duplicates",
             "seed-curated-data",
@@ -583,6 +605,24 @@ def main() -> None:
             "backfill-regions: articles to walk (default: all). "
             "backfill-risks: articles to reclassify (default: all)"
             "pipeline-v2: articles to process this run (default: 40)"
+        ),
+    )
+    parser.add_argument(
+        "--carriers",
+        default=None,
+        help=(
+            "deep-scan: comma-separated carrier codes or names to scan "
+            "(e.g. TK,VF or ajet). Default: every carrier in "
+            "app/ingest/carriers.py CARRIER_MASTER."
+        ),
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=(
+            "deep-scan: fetch and record scrape_runs telemetry without handing "
+            "changed pages to extraction. The bot-wall go/no-go gate -- the run "
+            "log is written either way, which is what makes the gate readable."
         ),
     )
     args = parser.parse_args()
@@ -631,6 +671,8 @@ def main() -> None:
         asyncio.run(_scrape_promotions())
     elif args.command == "refresh-promotions":
         asyncio.run(_refresh_promotions())
+    elif args.command == "deep-scan":
+        asyncio.run(_deep_scan(args.carriers, args.dry_run))
     elif args.command == "dedupe-promotions":
         asyncio.run(_dedupe_promotions())
     elif args.command == "prune-kpi-duplicates":

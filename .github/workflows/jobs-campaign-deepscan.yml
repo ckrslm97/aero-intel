@@ -1,0 +1,94 @@
+name: Campaign deep scan
+
+# Playwright sweep of the carrier campaign pages that a plain GET cannot read
+# (app/ingest/carriers.py: TK, AJet, QR, EK, EY, BA -- Pegasus is static and
+# stays with jobs-promotions.yml). Loads each page in a real Chromium, hashes
+# the extracted text, and writes one scrape_runs row per attempt. No LLM call
+# is made here.
+#
+# Twice a day, and deliberately not more, for three separate reasons that all
+# point the same way:
+#   * LLM budget. Every page whose hash moves becomes an extraction call on the
+#     shared Groq free tier. Two scans a day across seven carriers is a ceiling
+#     of ~14 change events; a 30-minute cadence like jobs-promotions.yml would
+#     be ~670, and campaign pages do not change 670 times a day.
+#   * Site courtesy. These are first-party marketing pages on origins that
+#     already treat us as suspicious. Fourteen page views a day is less than
+#     one interested customer generates.
+#   * Cron delay tolerance. This repo measures GitHub's scheduler at 2-2.75h
+#     late (see jobs-daily-edition.yml). 05:00 and 15:00 UTC are twelve hours
+#     apart precisely so a two-hour drift on either entry still leaves the two
+#     sweeps roughly half a day apart -- nothing here is time-of-day sensitive,
+#     only "twice, spread out".
+on:
+  schedule:
+    - cron: "0 5,15 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Record scrape_runs telemetry without handing changed pages to extraction"
+        type: boolean
+        default: false
+      carriers:
+        description: "Comma-separated carrier codes to scan (blank = all, e.g. TK,VF)"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  # Two overlapping sweeps would double the load on every carrier's origin and
+  # race each other's change detection: both would read the same page, both
+  # would find the same "previous" hash, and one would record a false unchanged.
+  group: campaign-deepscan
+  cancel-in-progress: false
+
+jobs:
+  deep-scan:
+    runs-on: ubuntu-latest
+    # A hung carrier page is a real outcome here (TK's documented failure mode),
+    # and each page is capped at 30s by the scanner -- so 20 minutes is a
+    # backstop against the browser itself wedging, not the expected runtime.
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          # Playwright is a dev-only dependency; this and the daily edition are
+          # the only two jobs that need a browser.
+          cache-dependency-path: backend/requirements-dev.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      # Chromium is large; cache it across runs keyed on the Playwright version.
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('backend/requirements-dev.txt') }}
+
+      - name: Install Chromium
+        run: playwright install --with-deps chromium
+
+      - name: Deep scan carrier campaign pages
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        # The `inputs` context (not `github.event.inputs`) is used so the
+        # boolean stays a boolean: `github.event.inputs.dry_run` is the string
+        # "true"/"false" and both are truthy. On a scheduled run `inputs` is
+        # empty, so both expressions collapse to nothing and the command is a
+        # plain full-registry scan.
+        run: |
+          alembic upgrade head
+          python -m app.cli deep-scan \
+            ${{ inputs.dry_run && '--dry-run' || '' }} \
+            ${{ inputs.carriers != '' && format('--carriers {0}', inputs.carriers) || '' }}
