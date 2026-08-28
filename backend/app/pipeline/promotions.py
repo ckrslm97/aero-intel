@@ -77,6 +77,28 @@ TR_MONTHS = (
 )
 _MONTH_INDEX = {name: i + 1 for i, name in enumerate(TR_MONTHS)}
 
+# The English half. Airline campaign pages are bilingual far more often than
+# the news feed is -- TK, QR, EK and BA publish the same campaign in English
+# and Turkish, and the English page is frequently the one that is fetchable --
+# so an English-only date was a campaign silently reduced to a dateless point
+# marker. Abbreviations are in because marketing copy uses them freely
+# ("Book by 28 Aug"), and "sept" is in because it is common enough that
+# leaving it out would look like an oversight rather than a decision.
+EN_MONTHS: tuple[str, ...] = (
+    "january", "february", "march", "april", "may", "june",
+    "july", "august", "september", "october", "november", "december",
+)
+EN_MONTH_ABBREVIATIONS: tuple[str, ...] = (
+    "jan", "feb", "mar", "apr", "may", "jun",
+    "jul", "aug", "sep", "oct", "nov", "dec",
+)
+_EN_MONTH_INDEX: dict[str, int] = {name: i + 1 for i, name in enumerate(EN_MONTHS)}
+_EN_MONTH_INDEX.update({name: i + 1 for i, name in enumerate(EN_MONTH_ABBREVIATIONS)})
+_EN_MONTH_INDEX["sept"] = 9
+# Longest first: an unordered alternation lets "aug" win inside "august" and
+# leaves a stray "ust" behind, which then fails to parse as anything.
+_EN_MONTH_NAMES = "|".join(sorted(_EN_MONTH_INDEX, key=len, reverse=True))
+
 # "15 Ekim 2026", "2 Mayıs", "31 Aralık'a" -- the apostrophe-suffix form is
 # how Turkish attaches case endings to a date and is extremely common in
 # campaign copy ("30 Kasım'a kadar").
@@ -84,7 +106,29 @@ _TR_DATE = re.compile(
     r"\b(\d{1,2})\s+(" + "|".join(TR_MONTHS) + r")\b\s*(?:['’][a-zçğıöşü]+)?\s*(\d{4})?",
     re.IGNORECASE,
 )
-# 02.05.2026 / 02/05/2026
+# "28 August 2026", "28 Aug", "1st September 2027" -- the British order, which
+# is what the Gulf and Turkish carriers write.
+_EN_DATE_DMY = re.compile(
+    r"\b(\d{1,2})(?:st|nd|rd|th)?\s+(" + _EN_MONTH_NAMES + r")\b\.?,?\s*(\d{4})?",
+    re.IGNORECASE,
+)
+# "Aug 28, 2026", "August 28" -- the American order. Both are read, because
+# both appear on the same pages; unlike the numeric form below there is no
+# ambiguity between them, since the month is spelled out.
+_EN_DATE_MDY = re.compile(
+    r"\b(" + _EN_MONTH_NAMES + r")\b\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b,?\s*(\d{4})?",
+    re.IGNORECASE,
+)
+# 02.05.2026 / 02/05/2026 -- read as DD/MM, the Turkish convention.
+#
+# This is knowingly ambiguous: "02/05/2026" is 2 May to every source this
+# product reads and 5 February to a US one. The resolution is deliberate
+# rather than accidental. Every carrier in TRACKED_AIRLINES writes DD/MM on
+# its own pages (Turkish, European and Gulf convention alike), the news feed
+# is predominantly Turkish, and there is no signal in a bare numeric date to
+# disambiguate on -- so a "smart" heuristic would only be a coin flip wearing
+# a comment. Where a US-format date matters, the spelled-out month forms above
+# read it correctly; this pattern stays DD/MM.
 _NUMERIC_DATE = re.compile(r"\b(\d{1,2})[./](\d{1,2})[./](\d{4})\b")
 
 # "%40", "%40'a varan", "40%". Two digits max: "%100" is real but a three-digit
@@ -98,13 +142,49 @@ _SALE_CUES = (
     "satış", "satis", "satın", "satin", "alım", "alim", "rezervasyon",
     "bilet al", "bilet satış", "geçerlilik", "gecerlilik", "kampanya",
     "son gün", "booking", "book by", "sale",
+    # English, matched as substrings like the Turkish ones above: "book"
+    # subsumes "book by"/"booking" and costs nothing to state, "valid" is how
+    # an offer's own window is introduced ("valid until"), and the rest are
+    # the verbs a booking deadline is written with.
+    "book", "reserve", "purchase", "buy", "valid", "on sale",
 )
 _TRAVEL_CUES = (
     "seyahat", "uçuş", "ucus", "uçacak", "gidiş", "gidis", "dönüş", "donus",
-    "kalkış", "travel", "fly", "flight",
+    "kalkış", "travel", "fly", "flight", "depart", "journey",
 )
 # How far back from a range we look for one of those cues.
 _CUE_WINDOW = 90
+
+# A deadline or a start can be announced either side of the date, and which
+# side depends on the language: Turkish puts it after ("30 Kasım'a kadar"),
+# English puts it before ("Book until 31 December"). The tail patterns are the
+# original ones; the head patterns are anchored to the end of the preceding
+# text so the cue has to be the word immediately before the date -- without
+# that anchor "announced by Turkish Airlines on 5 January" reads as a booking
+# deadline of 5 January, which is not what it says.
+_DEADLINE_TAIL = re.compile(r"kadar|son(?:una)?\b|until|through|by\b")
+_DEADLINE_HEAD = re.compile(
+    r"\b(?:until|through|thru|by|before|no later than|not later than"
+    r"|ends?(?: on)?|last day(?: is)?|deadline(?: is)?|en geç|en gec|son tarih)"
+    r"\s*:?\s*$"
+)
+_START_TAIL = re.compile(r"itibaren|başlıyor|basliyor|from\b|starting")
+_START_HEAD = re.compile(
+    r"\b(?:from|starting(?: on)?|starts?(?: on)?|beginning(?: on)?"
+    r"|as of|effective(?: from)?|valid from)\s*:?\s*$"
+)
+# How far before a date we look for one of those edge cues. Deliberately much
+# shorter than _CUE_WINDOW: "which window is this" is a paragraph-level
+# question, "is this an end date" is a two-word one.
+_EDGE_CUE_WINDOW = 26
+
+# What can sit between two dates and still leave them one range. "and" and
+# "through" are the English forms of "ile"/"arası" and are what makes
+# "travel between 1 October and 31 December" a window rather than two
+# unrelated dates.
+_RANGE_SEPARATOR = re.compile(
+    r"[-–—/]|\bile\b|\barası|\bve\b|\bto\b|\band\b|\bthrough\b|\bthru\b|\buntil\b"
+)
 
 # Turkish market names -> world-region slug (app/taxonomy.py COUNTRY_TO_REGION
 # values). Cities are kept as written; the drawer maps slugs through
@@ -157,35 +237,86 @@ def _safe_date(year: int, month: int, day: int) -> date | None:
         return None
 
 
+def find_dates_flagged(
+    text: str, default_year: int | None = None
+) -> list[tuple[int, date, bool]]:
+    """Every date in `text`, as (character offset, date, year_was_inferred).
+
+    The third element is the one `find_dates` cannot carry. "15 Ekim" and
+    "15 Ekim 2026" produce the same `date` object, but only one of them was
+    actually stated: the other was completed from `default_year`, the
+    article's own publication year, which is the least-wrong reading available
+    and still a reading rather than a quote. A campaign published in December
+    and advertising "10 Ocak" means next January, and this flag is what lets
+    the caller record that doubt (`promotions.date_flags_json`) and the drawer
+    show it, instead of drawing an inferred date exactly like a published one.
+
+    `default_year` fills in a yearless date; with no default_year a yearless
+    date is dropped rather than assigned an arbitrary one -- unchanged
+    behaviour, and the reason this stays a flag rather than a rejection.
+
+    Four patterns feed this, in precedence order: Turkish, English D-M-Y,
+    English M-D-Y, numeric. Overlapping matches are suppressed so one date can
+    never be counted twice -- with four patterns over the same string that is
+    no longer only theoretical, and a double-counted date would let the range
+    pairing below build a window out of one date and itself.
+    """
+    folded = _fold(text)
+    spans: list[tuple[int, int, date, bool]] = []
+
+    def claim(match: re.Match[str], parsed: date | None, inferred: bool) -> None:
+        if parsed is None:
+            return
+        start, end = match.span()
+        if any(start < taken_end and taken_start < end for taken_start, taken_end, _, _ in spans):
+            return
+        spans.append((start, end, parsed, inferred))
+
+    def resolve_year(raw: str | None) -> tuple[int | None, bool]:
+        if raw:
+            return int(raw), False
+        return default_year, True
+
+    for match in _TR_DATE.finditer(folded):
+        year, inferred = resolve_year(match.group(3))
+        if year is None:
+            continue
+        claim(match, _safe_date(year, _MONTH_INDEX[match.group(2)], int(match.group(1))), inferred)
+
+    for match in _EN_DATE_DMY.finditer(folded):
+        year, inferred = resolve_year(match.group(3))
+        if year is None:
+            continue
+        month = _EN_MONTH_INDEX[match.group(2)]
+        claim(match, _safe_date(year, month, int(match.group(1))), inferred)
+
+    for match in _EN_DATE_MDY.finditer(folded):
+        year, inferred = resolve_year(match.group(3))
+        if year is None:
+            continue
+        month = _EN_MONTH_INDEX[match.group(1)]
+        claim(match, _safe_date(year, month, int(match.group(2))), inferred)
+
+    for match in _NUMERIC_DATE.finditer(folded):
+        claim(
+            match,
+            _safe_date(int(match.group(3)), int(match.group(2)), int(match.group(1))),
+            False,
+        )
+
+    spans.sort(key=lambda item: item[0])
+    return [(start, parsed, inferred) for start, _, parsed, inferred in spans]
+
+
 def find_dates(text: str, default_year: int | None = None) -> list[tuple[int, date]]:
     """Every date in `text`, as (character offset, date), in document order.
 
-    `default_year` fills in a "15 Ekim" that states no year -- campaign copy
-    routinely omits it, and the article's own publication year is the only
-    reading that isn't a guess. With no default_year, a yearless date is
-    dropped rather than assigned an arbitrary one.
+    The original two-tuple shape, kept because every current caller wants
+    exactly this and none of them can act on the inferred-year flag yet. It
+    delegates rather than duplicating the parsing, so the two views of the
+    same text can never disagree about what a date is.
     """
-    found: list[tuple[int, date]] = []
-    folded = _fold(text)
-
-    for match in _TR_DATE.finditer(folded):
-        day = int(match.group(1))
-        month = _MONTH_INDEX[match.group(2)]
-        year_raw = match.group(3)
-        year = int(year_raw) if year_raw else default_year
-        if year is None:
-            continue
-        parsed = _safe_date(year, month, day)
-        if parsed:
-            found.append((match.start(), parsed))
-
-    for match in _NUMERIC_DATE.finditer(folded):
-        parsed = _safe_date(int(match.group(3)), int(match.group(2)), int(match.group(1)))
-        if parsed:
-            found.append((match.start(), parsed))
-
-    found.sort(key=lambda item: item[0])
-    return found
+    return [(offset, parsed) for offset, parsed, _ in find_dates_flagged(text, default_year)]
 
 
 def _classify_window(text: str, offset: int) -> str:
@@ -252,9 +383,20 @@ def heuristic_extract(
         # Long enough to hold a separator and a date, not a whole sentence.
         if len(between) > 60 or end_date < start_date:
             continue
-        if not re.search(r"[-–—/]|\bile\b|\barası|\bve\b|\bto\b", between):
+        if not _RANGE_SEPARATOR.search(between):
             continue
         kind = _classify_window(folded, start_at)
+        # Both ends must belong to the same window, or this is not one range.
+        # "Book until 31 December 2026 for travel until 31 March 2027" has two
+        # dates, a separator between them and only sixteen characters in
+        # between -- and pairing them produces a fifteen-month "booking
+        # window" assembled from a booking deadline and a travel deadline.
+        # Conflating those two is the specific failure the whole
+        # sale/travel column split exists to prevent, so a disagreement about
+        # which window a date belongs to blocks the pairing rather than being
+        # resolved in favour of whichever date came first.
+        if kind != _classify_window(folded, end_at):
+            continue
         if kind == "travel" and fields.travel_starts is None:
             fields.travel_starts, fields.travel_ends = start_date, end_date
             used |= {i, i + 1}
@@ -262,14 +404,17 @@ def heuristic_extract(
             fields.sale_starts, fields.sale_ends = start_date, end_date
             used |= {i, i + 1}
 
-    # A lone date after "…e kadar" / "…until" is an END, not a start. This is
-    # the single most common shape in campaign copy ("30 Kasım'a kadar") and
-    # reading it as a start would draw the bar in the wrong place entirely.
+    # A lone date after "…e kadar" / before "until …" is an END, not a start.
+    # This is the single most common shape in campaign copy ("30 Kasım'a
+    # kadar", "Book by 31 December") and reading it as a start would draw the
+    # bar in the wrong place entirely. Turkish states the cue after the date,
+    # English before it, so both sides are read.
     for i, (offset, value) in enumerate(dates):
         if i in used:
             continue
         tail = folded[offset : offset + 60]
-        is_deadline = bool(re.search(r"kadar|son(?:una)?\b|until|through|by\b", tail))
+        head = folded[max(0, offset - _EDGE_CUE_WINDOW) : offset]
+        is_deadline = bool(_DEADLINE_TAIL.search(tail)) or bool(_DEADLINE_HEAD.search(head))
         kind = _classify_window(folded, offset)
         if is_deadline:
             if kind == "travel" and fields.travel_ends is None:
@@ -278,7 +423,7 @@ def heuristic_extract(
             elif kind == "sale" and fields.sale_ends is None:
                 fields.sale_ends = value
                 used.add(i)
-        elif re.search(r"itibaren|başlıyor|basliyor|from\b|starting", tail):
+        elif _START_TAIL.search(tail) or _START_HEAD.search(head):
             if kind == "travel" and fields.travel_starts is None:
                 fields.travel_starts = value
                 used.add(i)

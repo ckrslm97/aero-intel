@@ -31,6 +31,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.taxonomy import (  # noqa: E402
+    CAMPAIGN_BUSINESS_CLASS_LABELS_TR,
+    CAMPAIGN_BUSINESS_CLASSES,
+    CAMPAIGN_STATUS_LABELS_TR,
+    CAMPAIGN_STATUSES,
+    CAMPAIGN_TYPE_LABELS_TR,
+    CAMPAIGN_TYPES,
     CATEGORIES,
     CATEGORY_LABELS_TR,
     COUNTRY_TO_REGION,
@@ -40,6 +46,8 @@ from app.taxonomy import (  # noqa: E402
     REGION_LABELS_TR,
     RISK_TYPES,
     RIVAL_CODES,
+    ROUTE_SCOPE_LABELS_TR,
+    ROUTE_SCOPES,
 )
 
 OUTPUT = Path(__file__).resolve().parents[2] / "frontend" / "src" / "lib" / "taxonomy.gen.ts"
@@ -126,6 +134,61 @@ def render() -> str:
 
     parts.append(_ts_string_union("RivalCode", list(RIVAL_CODES)))
     parts.append(_ts_const_array("RIVAL_CODES", "RivalCode", list(RIVAL_CODES)))
+    parts.append("")
+
+    # --- campaign intelligence taxonomy --------------------------------------
+    #
+    # Exported now, one release before the analyst UI consumes it, deliberately:
+    # the labels are already the backend's own (the campaign drawer and the
+    # alert mail render these exact strings), and shipping the union types early
+    # means the UI phase is a frontend-only change instead of a cross-stack one.
+    parts.append("/** Kampanya İstihbaratı -- see backend/app/taxonomy.py. */")
+    parts.append(_ts_string_union("CampaignType", list(CAMPAIGN_TYPES)))
+    parts.append(_ts_const_array("CAMPAIGN_TYPES", "CampaignType", list(CAMPAIGN_TYPES)))
+    parts.append("")
+
+    parts.append("export const CAMPAIGN_TYPE_LABELS_TR: Record<CampaignType, string> = {")
+    for slug in CAMPAIGN_TYPES:
+        parts.append(f'  "{slug}": "{CAMPAIGN_TYPE_LABELS_TR[slug]}",')
+    parts.append("};\n")
+
+    parts.append(_ts_string_union("CampaignBusinessClass", list(CAMPAIGN_BUSINESS_CLASSES)))
+    parts.append(
+        _ts_const_array(
+            "CAMPAIGN_BUSINESS_CLASSES",
+            "CampaignBusinessClass",
+            list(CAMPAIGN_BUSINESS_CLASSES),
+        )
+    )
+    parts.append("")
+
+    parts.append(
+        "export const CAMPAIGN_BUSINESS_CLASS_LABELS_TR: "
+        "Record<CampaignBusinessClass, string> = {"
+    )
+    for slug in CAMPAIGN_BUSINESS_CLASSES:
+        parts.append(f'  "{slug}": "{CAMPAIGN_BUSINESS_CLASS_LABELS_TR[slug]}",')
+    parts.append("};\n")
+
+    parts.append(_ts_string_union("RouteScope", list(ROUTE_SCOPES)))
+    parts.append(_ts_const_array("ROUTE_SCOPES", "RouteScope", list(ROUTE_SCOPES)))
+    parts.append("")
+
+    parts.append("export const ROUTE_SCOPE_LABELS_TR: Record<RouteScope, string> = {")
+    for slug in ROUTE_SCOPES:
+        parts.append(f'  "{slug}": "{ROUTE_SCOPE_LABELS_TR[slug]}",')
+    parts.append("};\n")
+
+    # Computed at read time from the date columns, never stored -- the frontend
+    # receives it on each PromotionOut rather than filtering a column.
+    parts.append(_ts_string_union("CampaignStatus", list(CAMPAIGN_STATUSES)))
+    parts.append(_ts_const_array("CAMPAIGN_STATUSES", "CampaignStatus", list(CAMPAIGN_STATUSES)))
+    parts.append("")
+
+    parts.append("export const CAMPAIGN_STATUS_LABELS_TR: Record<CampaignStatus, string> = {")
+    for slug in CAMPAIGN_STATUSES:
+        parts.append(f'  "{slug}": "{CAMPAIGN_STATUS_LABELS_TR[slug]}",')
+    parts.append("};\n")
 
     return "\n".join(parts).rstrip() + "\n"
 

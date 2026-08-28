@@ -78,9 +78,20 @@ class Outcome(Generic[T]):
         )
 
     @classmethod
-    def not_applicable(cls, reason: str, *, certainty: float | None = None) -> Outcome[T]:
-        """The classifier looked and said no. This is a real answer."""
-        return cls(OutcomeState.NOT_APPLICABLE, reason=reason, certainty=certainty)
+    def not_applicable(
+        cls, reason: str, *, certainty: float | None = None, **details
+    ) -> Outcome[T]:
+        """The classifier looked and said no. This is a real answer.
+
+        `**details` mirrors `classified`: a "no" is a decision the reader may
+        be shown (agents/campaign_airline.py writes a Turkish sentence
+        explaining why a page was not published as a campaign), and a decision
+        with no stated reasoning is one nobody can check. `reason` stays the
+        machine-readable slug; details carry everything else.
+        """
+        return cls(
+            OutcomeState.NOT_APPLICABLE, reason=reason, certainty=certainty, details=details
+        )
 
     @classmethod
     def failed(cls, reason: str) -> Outcome[T]:
