@@ -19,7 +19,7 @@ no start date at all becomes a point marker at `detected_at` rather than a bar.
 import uuid
 from datetime import date, datetime
 
-from sqlalchemy import Date, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -108,6 +108,118 @@ class Promotion(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # publication timestamp, and a news report's date is the reporter's, not
     # the campaign's. Indexed because every list query orders or filters on it.
     detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+    # --- campaign intelligence ----------------------------------------------
+    #
+    # Everything below is nullable and unwritten until the extraction chain
+    # lands. A legacy row -- the ~200 already in the table -- keeps every one of
+    # these NULL and keeps being served exactly as before; NULL here means "not
+    # classified", never "classified as nothing". Nothing gets a server default
+    # for the same reason: a default would make an untyped legacy row
+    # indistinguishable from a row the classifier actually looked at.
+    #
+    # Note what is *not* here: status. UPCOMING / ACTIVE_BOOKING /
+    # BOOKING_CLOSED_TRAVEL_ACTIVE / EXPIRED is a pure function of the date
+    # columns and today's date, so it is computed at read time. Stored, it would
+    # be wrong every morning until a cron caught up -- and this project's cron
+    # is measurably 2-3 hours late.
+
+    #: What kind of campaign it is (FLASH_SALE, SEASONAL, ROUTE_LAUNCH, ...).
+    #: The analyst table's primary filter dimension. Validated in the app layer
+    #: against app/taxonomy.py, not by a Postgres enum: the taxonomy will grow,
+    #: and growing it should be a code change rather than a migration holding a
+    #: lock on the table.
+    campaign_type: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+
+    #: The false-positive gate: ACTIVE_CAMPAIGN / EVERGREEN_OFFER / NEWS_ONLY /
+    #: PRODUCT_PROMOTION / LOYALTY_PROMOTION. 55% of what this table once
+    #: published was not a campaign at all, and the recurring shape of that
+    #: error was a standing offer (student discount, corporate rate) or a
+    #: product page (baggage, lounge) read as a limited-time sale. Separating
+    #: "is it a campaign" from "what kind of campaign" is what lets the page
+    #: show only the first class without deleting the rest.
+    business_class: Mapped[str | None] = mapped_column(String(30), nullable=True, index=True)
+
+    # --- route -------------------------------------------------------------
+    #
+    # How wide the campaign is matters more than which airports it names: a
+    # network-wide sale and a single-OND promo fare are different competitive
+    # events. Scope is recorded explicitly so a REGION campaign is never fanned
+    # out into invented city pairs -- "Türkiye'den Avrupa'ya" is not IST-LHR.
+
+    #: OND / CITY_PAIR / COUNTRY / REGION / NETWORK_WIDE.
+    route_scope: Mapped[str | None] = mapped_column(String(12), nullable=True)
+    #: "IST-LHR" -- the denormalised pair, set only when route_scope is OND.
+    #: Indexed because the analyst's most common question is per-route.
+    ond: Mapped[str | None] = mapped_column(String(9), nullable=True, index=True)
+    origin_code: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    dest_code: Mapped[str | None] = mapped_column(String(3), nullable=True)
+    #: The resolved detail behind the codes: {"origin": {airport, city, country,
+    #: region}, "dest": {...}}. Kept next to the flat columns rather than
+    #: replacing them, so a route filter never has to reach into JSON.
+    route_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
+    #: The long tail of campaign terms -- cabin, promo_code, currency,
+    #: price_floor, discount_type, sales_channel, eligibility, min/max stay,
+    #: blackout_dates. JSON rather than twelve more columns: they are read
+    #: together in the drawer, filtered on almost never, and the set of them
+    #: keeps changing as carriers invent new fine print.
+    attrs_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
+    #: Per-field provenance: {field: {value, source_text, confidence}}. The
+    #: drawer quotes source_text back at the reader, so "sale ends 30 Eylül" can
+    #: be checked against the sentence it was taken from instead of trusted.
+    #: This is the difference between a number and a citation.
+    evidence_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    #: Why the classifier landed on this business_class/campaign_type, in one
+    #: sentence. An unexplained rejection is unfixable.
+    classification_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    #: Flagged for a human because confidence fell short. Indexed -- the review
+    #: queue is a query. Nullable with no server default on purpose: a legacy
+    #: row was never reviewed *and* never queued, which is neither True nor
+    #: False.
+    review_required: Mapped[bool | None] = mapped_column(Boolean, nullable=True, index=True)
+    #: Two sources disagreed on a field and the more official one won. The
+    #: losing value survives in the version row; this is just the badge.
+    conflict_detected: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    #: What we had to guess about the dates, e.g. {"inferred_year": true} when
+    #: the page said "30 Eylül" with no year. Flagged rather than silently
+    #: assumed, because a guessed year draws the same bar as a stated one.
+    date_flags_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
+    #: The page's own dates, when it carries them -- distinct from detected_at,
+    #: which is ours. A campaign page updated yesterday is news; one published
+    #: in March and untouched since is an evergreen suspect.
+    page_published_at: Mapped[date | None] = mapped_column(Date, nullable=True)
+    page_updated_at: Mapped[date | None] = mapped_column(Date, nullable=True)
+
+    #: sha256 of the *extracted text*, not the raw HTML -- HTML churns on every
+    #: request (session ids, timestamps, ad slots) while the campaign copy does
+    #: not. This is the LLM budget: extraction only runs when the hash moves.
+    content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+
+    #: The observation lifecycle, separate from detected_at (which is frozen at
+    #: first sight and drives the "Yeni" badge). first_seen_at is backfilled
+    #: from detected_at for legacy rows; last_seen_at moves every time a scan
+    #: finds the campaign still on the page -- that is how an expiry is inferred
+    #: for a campaign whose page never said when it ends; last_changed_at moves
+    #: only when a field actually changed, so it is the version timeline's clock.
+    first_seen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_seen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_changed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    #: The extracted page text the whole classification was derived from. Kept
+    #: so a bad extraction can be re-run offline against the exact input,
+    #: without re-fetching a page that may since have changed or gone behind a
+    #: bot wall.
+    raw_text: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 # How recently-detected a campaign has to be to still count as "new" on the
