@@ -1,4 +1,5 @@
 from app.models.article import Article, ArticleEnrichment
+from app.models.campaign_alert import CampaignAlert
 from app.models.campaign_source import CampaignSource
 from app.models.campaign_version import CampaignVersion
 from app.models.curated import FxForecast, IataIndicator
@@ -21,6 +22,7 @@ __all__ = [
     "ArticleEnrichment",
     "ArticleEntity",
     "AviationEvent",
+    "CampaignAlert",
     "CampaignSource",
     "CampaignVersion",
     "Edition",

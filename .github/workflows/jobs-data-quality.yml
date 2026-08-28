@@ -35,6 +35,24 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      # Belt and braces against the scheduler. The deep-scan workflow already
+      # generates alerts at the end of each sweep, but GitHub's cron is
+      # measured 2-2.75h late on this repo and a workflow can be skipped
+      # outright during an incident -- and an EXPIRING warning that arrives
+      # after the campaign closed is worthless. Running it here too costs
+      # nothing when the deep scan already did the work: every alert's dedupe
+      # key is bucketed on a property of the campaign rather than on the run
+      # time, so this pass writes only what the earlier one missed.
+      #
+      # Before the quality check, not after: a red quality gate must not be
+      # able to swallow the day's alerts.
+      - name: Generate campaign alerts
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          alembic upgrade head
+          python -m app.cli generate-campaign-alerts
+
       - name: Check data quality
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}

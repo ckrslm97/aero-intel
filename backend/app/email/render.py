@@ -99,9 +99,20 @@ def render_edition_full_html(edition: Edition) -> str:
     )
 
 
-def render_newsletter_html(edition: Edition, digest: str | None = None) -> str:
+def render_newsletter_html(
+    edition: Edition,
+    digest: str | None = None,
+    alerts: list[dict] | None = None,
+) -> str:
     """`digest` is the İçgörüler page's "pattern of the day" paragraph. Optional
-    so the PDF path (which has no DB session at render time) can omit it."""
+    so the PDF path (which has no DB session at render time) can omit it.
+
+    `alerts` is the last 24 hours of CRITICAL/HIGH campaign alerts, as
+    `services/campaign_alerts.recent_alert_highlights()` returns them. Optional
+    for the same reason, and the section is omitted entirely when the list is
+    empty -- an empty "Kampanya Radarı" heading printed every quiet day is how
+    a reader learns to skip the section on the day it finally has something.
+    """
     by_section: dict[str, list] = {}
     for edition_article in sorted(edition.articles, key=lambda ea: (ea.section, ea.rank)):
         by_section.setdefault(edition_article.section, []).append(edition_article.article)
@@ -134,8 +145,10 @@ def render_newsletter_html(edition: Edition, digest: str | None = None) -> str:
         headlines=top_articles[1 : HEADLINE_LINK_COUNT + 1],
         sections=sections[:MAX_SECTIONS],
         digest=digest,
+        alerts=alerts or [],
         site_url=site_url,
         newspaper_url=f"{site_url}/newspaper/{edition.edition_date.isoformat()}",
+        campaigns_url=f"{site_url}/kampanyalar",
         insights_url=f"{site_url}/insights",
         biz_url=f"{site_url}/biz",
         archive_url=f"{site_url}/archive",
