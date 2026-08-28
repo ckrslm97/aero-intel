@@ -1,20 +1,36 @@
 import json
 from datetime import date
 
-from app.golden import GoldenRecord, campaign_records, news_records, risk_records
+from app.golden import (
+    SYNTHETIC_SOURCE,
+    GoldenRecord,
+    campaign_records,
+    news_records,
+    observed_campaign_records,
+    risk_records,
+    synthetic_campaign_records,
+)
 from app.services.golden_eval_service import (
+    EVALUATION_TODAY,
     _extract_stated_country,
     _parse_campaign_label,
+    evaluate_campaign_extraction,
     evaluate_campaign_guards,
     evaluate_full_pipeline,
     evaluate_risk_country_normalisation,
 )
+from app.taxonomy import (
+    CAMPAIGN_BUSINESS_CLASSES,
+    CAMPAIGN_STATUSES,
+    CAMPAIGN_TYPES,
+    ROUTE_SCOPES,
+)
 
 
-def _record(idx=1, title="t", system_label="", verdict="ok", reason="", url=None) -> GoldenRecord:
+def _record(idx=1, title="t", system_label="", verdict="ok", reason="", url=None, **extra) -> GoldenRecord:
     return GoldenRecord(
         idx=idx, title=title, system_label=system_label, verdict=verdict,
-        reason=reason, source="", url=url,
+        reason=reason, source="", url=url, **extra,
     )
 
 
@@ -22,15 +38,84 @@ def _record(idx=1, title="t", system_label="", verdict="ok", reason="", url=None
 
 
 def test_golden_set_loads_the_expected_counts():
+    """The campaign count moved from 131 to 173 in PR8: the 131 observed rows
+    are untouched (see the split assertion below) and 42 authored records were
+    added for the dimensions the 2025 snapshot has no examples of."""
     assert len(risk_records()) == 24
     assert len(news_records()) == 100
-    assert len(campaign_records()) == 131
+    assert len(campaign_records()) == 173
+
+
+def test_the_observed_campaign_snapshot_is_still_exactly_the_original_131():
+    """The regression that matters about the expansion: nothing was added to,
+    removed from or reclassified inside the production snapshot the earlier
+    phases were calibrated on."""
+    observed = observed_campaign_records()
+    assert len(observed) == 131
+    assert [r.verdict for r in observed].count("ok") == 2
+    assert [r.verdict for r in observed].count("bad") == 99
+    assert [r.verdict for r in observed].count("warn") == 30
+
+
+def test_observed_records_carry_none_of_the_authored_extensions():
+    """The schema grew additively: an observed row loads with every new field
+    at its default, so no existing check can accidentally read one."""
+    for record in observed_campaign_records():
+        assert record.is_synthetic is False
+        assert record.text is None
+        assert record.expected_business_class is None
+        assert record.expected_campaign_type is None
+        assert record.expected_route_scope is None
+        assert record.expected_dates() == {
+            "sale_starts": None, "sale_ends": None,
+            "travel_starts": None, "travel_ends": None,
+        }
 
 
 def test_golden_records_are_well_formed():
     for record in risk_records() + news_records() + campaign_records():
         assert record.verdict in ("ok", "bad", "warn")
         assert record.title
+
+
+def test_synthetic_campaign_records_are_labelled_and_in_taxonomy():
+    records = synthetic_campaign_records()
+    assert len(records) == 42
+    for record in records:
+        # Marked as authored on the row itself, and never live-fetchable --
+        # `evaluate_full_pipeline` must skip them rather than hit the network.
+        assert record.source == SYNTHETIC_SOURCE
+        assert record.url is None
+        assert record.text
+        assert record.reason
+        # Every expectation is a taxonomy slug, so a rename in taxonomy.py
+        # fails here instead of silently scoring zero forever.
+        if record.expected_campaign_type:
+            assert record.expected_campaign_type in CAMPAIGN_TYPES
+        if record.expected_business_class:
+            assert record.expected_business_class in CAMPAIGN_BUSINESS_CLASSES
+        if record.expected_route_scope:
+            assert record.expected_route_scope in ROUTE_SCOPES
+        if record.expected_status:
+            assert record.expected_status in CAMPAIGN_STATUSES
+
+
+def test_synthetic_set_covers_the_dimensions_it_was_written_for():
+    records = synthetic_campaign_records()
+    types = {r.expected_campaign_type for r in records}
+    classes = {r.expected_business_class for r in records}
+    assert {
+        "FLASH_SALE", "EARLY_BOOKING", "SEASONAL_PROMOTION", "PERCENT_DISCOUNT",
+        "FIXED_FARE", "NEW_ROUTE_PROMOTION", "BLACK_FRIDAY", "ROUND_TRIP_PROMOTION",
+    } <= types
+    assert {
+        "ACTIVE_CAMPAIGN", "EXPIRED_CAMPAIGN", "EVERGREEN_OFFER",
+        "PRODUCT_PROMOTION", "LOYALTY_PROMOTION", "NEWS_ONLY",
+    } <= classes
+    assert {r.expected_route_scope for r in records} >= {"OND", "CITY_PAIR", "COUNTRY", "REGION", "NETWORK_WIDE"}
+    # The near-duplicate pair: two framings of one campaign.
+    groups = [r.dedup_group for r in records if r.dedup_group]
+    assert len(groups) == 2 and len(set(groups)) == 1
 
 
 # --- campaign label parsing -------------------------------------------------
@@ -127,6 +212,198 @@ def test_the_real_golden_set_two_ok_campaigns_both_pass_the_guards():
     campaigns must never be rejected by these guards."""
     report = evaluate_campaign_guards(today=date(2026, 8, 25))
     assert report.ok_records_wrongly_rejected == 0
+
+
+# --- campaign extraction KPIs (PR8) -----------------------------------------
+
+
+_GOOD = "PC (Pegasus Airlines) · 30% · 2026-08-24→2026-08-31"
+
+
+def test_extraction_metrics_count_a_leaking_bad_record_as_a_false_positive():
+    records = [
+        _record(idx=1, title="Gerçek kampanya", system_label=_GOOD, verdict="ok"),
+        # Plausible window, no expiry marker, nothing in the rulepacks: this is
+        # the attribution-error shape the guards are documented as blind to.
+        _record(idx=2, title="Yanlış havayolu", system_label=_GOOD, verdict="bad"),
+    ]
+    report = evaluate_campaign_extraction(records, today=date(2026, 8, 25))
+    assert (report.true_positives, report.false_positives) == (1, 1)
+    assert report.false_negatives == 0 and report.true_negatives == 0
+    assert report.precision == 0.5
+    assert report.recall == 1.0
+    assert report.false_positive_rate == 1.0
+
+
+def test_extraction_metrics_count_a_rejected_ok_record_as_a_false_negative():
+    records = [
+        _record(
+            idx=1,
+            title="[Expired] gerçek kampanya",
+            system_label=_GOOD,
+            verdict="ok",
+        ),
+        _record(idx=2, title="Bagaj indirimi", system_label=_GOOD, verdict="bad"),
+    ]
+    report = evaluate_campaign_extraction(records, today=date(2026, 8, 25))
+    assert report.false_negatives == 1
+    assert report.true_negatives == 1
+    assert report.recall == 0.0
+    assert report.false_positive_rate == 0.0
+
+
+def test_extraction_metrics_exclude_warn_and_unparseable_records():
+    records = [
+        _record(idx=1, system_label=_GOOD, verdict="ok"),
+        _record(idx=2, system_label=_GOOD, verdict="warn"),
+        _record(idx=3, system_label="not a label", verdict="bad"),
+    ]
+    report = evaluate_campaign_extraction(records, today=date(2026, 8, 25))
+    assert report.graded == 1
+    assert report.warn_excluded == 1
+    assert report.unparseable == 1
+
+
+def test_extraction_metrics_are_none_rather_than_zero_with_nothing_to_divide_by():
+    """An empty denominator is "not measured", never 0.0 -- a fabricated zero
+    would read as a perfect false-positive rate."""
+    report = evaluate_campaign_extraction([], today=date(2026, 8, 25))
+    assert report.precision is None
+    assert report.recall is None
+    assert report.f1 is None
+    assert report.false_positive_rate is None
+    assert report.route_scope_accuracy is None
+
+
+def test_extraction_reads_dates_from_the_body_when_the_record_has_one():
+    record = _record(
+        idx=1,
+        title="Kampanya",
+        system_label="PC (Pegasus Airlines) · — · tarih yok",
+        verdict="ok",
+        text=(
+            "Satış dönemi 1 Eylül 2026 ile 10 Eylül 2026 tarihleri arasındadır. "
+            "Uçuş tarihleri 20 Eylül 2026 ile 30 Ekim 2026 arasındadır."
+        ),
+        expected_sale_starts="2026-09-01",
+        expected_sale_ends="2026-09-10",
+        expected_travel_starts="2026-09-20",
+        expected_travel_ends="2026-10-30",
+        expected_status="UPCOMING",
+    )
+    report = evaluate_campaign_extraction([record], today=date(2026, 8, 25))
+    assert report.date_fields_checked == 4
+    assert report.date_fields_correct == 4
+    assert report.date_corroboration == 1.0
+    assert report.status_correct == 1
+
+
+def test_extraction_grades_route_scope_through_the_real_resolver():
+    records = [
+        _record(
+            idx=1, system_label=_GOOD, verdict="ok",
+            expected_origin="Türkiye", expected_destination="Avrupa",
+            expected_route_scope="REGION",
+        ),
+        _record(
+            idx=2, system_label=_GOOD, verdict="ok",
+            expected_origin="IST", expected_destination="LHR",
+            expected_route_scope="CITY_PAIR",  # deliberately wrong: two airports are OND
+        ),
+    ]
+    report = evaluate_campaign_extraction(records, today=date(2026, 8, 25))
+    assert report.route_scope_checked == 2
+    assert report.route_scope_correct == 1
+
+
+def test_expired_records_are_graded_against_the_status_engine_not_the_class():
+    """agents/campaign_airline.py's date guards deliberately return
+    business_class=None -- EXPIRED is services/campaign_status.py's answer.
+    The breakdown has to grade them there or it fails them for being correct."""
+    record = _record(
+        idx=1,
+        title="Bahar kampanyası",
+        system_label="PC (Pegasus Airlines) · 25% · 2026-04-01→2026-04-20",
+        verdict="bad",
+        expected_business_class="EXPIRED_CAMPAIGN",
+    )
+    report = evaluate_campaign_extraction([record], today=date(2026, 8, 25))
+    row = report.by_business_class["EXPIRED_CAMPAIGN"]
+    assert row.published == 0
+    assert row.class_agreed == 1
+    assert report.results[0].detected_business_class is None
+    assert report.results[0].computed_status == "EXPIRED"
+
+
+def test_the_real_golden_set_produces_a_computable_false_positive_rate():
+    report = evaluate_campaign_extraction()
+    assert report.today == EVALUATION_TODAY
+    assert report.graded == 142
+    assert report.false_positive_rate is not None
+    assert 0.0 <= report.false_positive_rate <= 1.0
+    assert report.precision is not None and report.recall is not None
+    # Every non-fare class the rebuild exists to keep out has its own row.
+    assert {
+        "ACTIVE_CAMPAIGN", "EVERGREEN_OFFER", "EXPIRED_CAMPAIGN",
+        "LOYALTY_PROMOTION", "NEWS_ONLY", "PRODUCT_PROMOTION",
+    } <= set(report.by_business_class)
+
+
+def test_the_real_golden_set_never_rejects_a_true_campaign():
+    """Recall is the half of the gate that is not allowed to be bought: every
+    record the judge called a genuine campaign must still reach the timeline."""
+    report = evaluate_campaign_extraction()
+    assert report.false_negatives == 0
+    assert report.recall == 1.0
+
+
+def test_no_authored_non_campaign_leaks_through():
+    """The rulepacks' own regression lock. Every authored `bad` record --
+    evergreen, product, loyalty, news-only, expired -- must be rejected; the
+    observed snapshot's residual false positives are tracked separately and
+    are what the gate is currently failing on."""
+    report = evaluate_campaign_extraction(synthetic_campaign_records())
+    assert report.false_positives == 0
+    assert report.false_negatives == 0
+
+
+def test_the_real_golden_set_keeps_every_expected_campaign_type_in_the_taxonomy():
+    """Taxonomy-drift lock, not a model-accuracy number -- see the evaluator's
+    docstring. Goes red when a slug the golden set expects is renamed."""
+    report = evaluate_campaign_extraction()
+    assert report.campaign_type_checked > 0
+    assert report.campaign_type_valid == report.campaign_type_checked
+
+
+# --- the maintenance dispatch entry ------------------------------------------
+#
+# maintenance.yml has two lists that must agree: the dropdown a human picks
+# from, and the shell `case` that decides what actually runs. A task in the
+# dropdown but not the case block dispatches, prints "Unknown task" and exits
+# 1 -- a failure that only shows up when somebody tries to use it. Asserted as
+# text rather than parsed YAML so the check needs no new dependency.
+
+
+def test_evaluate_campaigns_is_dispatchable_from_the_maintenance_workflow():
+    from pathlib import Path
+
+    workflow = (
+        Path(__file__).resolve().parents[3] / ".github" / "workflows" / "maintenance.yml"
+    ).read_text(encoding="utf-8")
+
+    assert "          - evaluate-campaigns\n" in workflow
+    assert "            evaluate-campaigns)\n" in workflow
+    assert "python -m app.cli evaluate-campaigns ;;" in workflow
+
+
+def test_evaluate_campaigns_is_a_real_cli_command():
+    import app.cli as cli
+
+    assert hasattr(cli, "_evaluate_campaigns")
+    source = (
+        __import__("pathlib").Path(cli.__file__).read_text(encoding="utf-8")
+    )
+    assert '"evaluate-campaigns",' in source
 
 
 # --- risk country normalisation ---------------------------------------------

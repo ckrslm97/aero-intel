@@ -28,6 +28,7 @@ on:
           - translate-backlog
           - build-insight
           - evaluate-golden
+          - evaluate-campaigns
           - check-data-quality
           - mark-legacy-campaigns-superseded
       days:
@@ -140,6 +141,12 @@ jobs:
               else
                 python -m app.cli evaluate-golden
               fi ;;
+            evaluate-campaigns)
+              # PR8's campaign quality gate: precision / recall / false-positive
+              # rate over the golden campaign surface. Fully deterministic --
+              # no LLM, no network, no database -- so it costs nothing to run
+              # and its numbers are reproducible run to run.
+              python -m app.cli evaluate-campaigns ;;
             check-data-quality)
               python -m app.cli check-data-quality ;;
             mark-legacy-campaigns-superseded)

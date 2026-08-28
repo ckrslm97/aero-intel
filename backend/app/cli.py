@@ -479,6 +479,116 @@ async def _evaluate_golden(full_surface: str | None) -> None:
     )
 
 
+#: The plan's gate for turning `CAMPAIGN_V2_ENABLED` on for the article path:
+#: at most one in ten of the records the judge called wrong may still reach the
+#: timeline. Kept here rather than inside the evaluator because it is a product
+#: decision about what is good enough to ship, not a property of the
+#: measurement -- the report states the rate, this states the bar.
+CAMPAIGN_FP_RATE_GATE = 0.10
+
+
+def _pct(value: float | None) -> str:
+    return "—" if value is None else f"{100 * value:.1f}%"
+
+
+def _evaluate_campaigns() -> None:
+    """PR8's campaign quality gate: precision / recall / false-positive rate
+    over the golden campaign surface, plus the per-business-class breakdown
+    and the deterministic route/date/status checks.
+
+    No LLM, no network -- see evaluate_campaign_extraction()'s docstring for
+    what that means it can and cannot claim.
+    """
+    from app.golden import observed_campaign_records, synthetic_campaign_records
+    from app.services.golden_eval_service import (
+        EVALUATION_TODAY,
+        evaluate_campaign_extraction,
+    )
+
+    report = evaluate_campaign_extraction()
+
+    print(f"Kampanya çıkarım değerlendirmesi (referans gün: {EVALUATION_TODAY})")
+    print(
+        f"  Notlanan kayıt: {report.graded}  "
+        f"(TP {report.true_positives} / FP {report.false_positives} / "
+        f"FN {report.false_negatives} / TN {report.true_negatives}; "
+        f"{report.warn_excluded} 'warn' notlanmadı, "
+        f"{report.unparseable} etiket çözülemedi)"
+    )
+    print()
+    print("  KPI                         Değer")
+    print("  --------------------------- --------")
+    print(f"  Kesinlik (precision)        {_pct(report.precision)}")
+    print(f"  Duyarlılık (recall)         {_pct(report.recall)}")
+    print(f"  F1                          {_pct(report.f1)}")
+    print(f"  YANLIŞ POZİTİF ORANI        {_pct(report.false_positive_rate)}")
+    print()
+    print("  Beklenen sınıf         Toplam  Yayınlanan  Sınıf uyumu")
+    print("  ---------------------- ------  ----------  -----------")
+    for name, row in report.by_business_class.items():
+        print(f"  {name:<22} {row.total:>6}  {row.published:>10}  {row.class_agreed:>11}")
+    print(
+        "  (ACTIVE_CAMPAIGN için 'yayınlanan = toplam' doğru sonuçtur; "
+        "diğer her sınıfta sızıntıdır.)"
+    )
+    print()
+    print("  Deterministik alan kontrolleri")
+    print(
+        f"    route_scope       {report.route_scope_correct}/{report.route_scope_checked} "
+        f"({_pct(report.route_scope_accuracy)})"
+    )
+    print(
+        f"    tarih alanları    {report.date_fields_correct}/{report.date_fields_checked} "
+        f"({_pct(report.date_field_accuracy)})  — doğru sütuna (satış/seyahat) yazıldı mı"
+    )
+    print(
+        f"    tarih doğrulama   {report.date_values_found}/{report.date_values_checked} "
+        f"({_pct(report.date_corroboration)})  — regex katmanı metinde bulabildi mi"
+    )
+    print(
+        f"    durum (status)    {report.status_correct}/{report.status_checked} "
+        f"({_pct(report.status_accuracy)})"
+    )
+    print(
+        f"    campaign_type     {report.campaign_type_valid}/{report.campaign_type_checked} "
+        f"({_pct(report.campaign_type_accuracy)})  — taksonomi tutulumu, "
+        "model isabeti DEĞİL"
+    )
+    print()
+
+    # The two populations behave very differently and averaging them without
+    # saying so would hide which one the gate is actually failing on.
+    for label, subset in (
+        ("gözlemlenen (2025 üretim anlık görüntüsü)", observed_campaign_records()),
+        ("sentetik (PR8'de yazılan)", synthetic_campaign_records()),
+    ):
+        part = evaluate_campaign_extraction(subset)
+        print(
+            f"  Alt küme {label}: FP {part.false_positives}/"
+            f"{part.false_positives + part.true_negatives} "
+            f"= {_pct(part.false_positive_rate)}, kesinlik {_pct(part.precision)}"
+        )
+
+    rate = report.false_positive_rate
+    print()
+    if rate is not None and rate < CAMPAIGN_FP_RATE_GATE:
+        print(
+            f"KAPI: GEÇTİ — yanlış pozitif oranı {_pct(rate)} < "
+            f"{_pct(CAMPAIGN_FP_RATE_GATE)}"
+        )
+    else:
+        print(
+            f"KAPI: GEÇMEDİ — yanlış pozitif oranı {_pct(rate)} >= "
+            f"{_pct(CAMPAIGN_FP_RATE_GATE)}; makale yolunda campaign_v2 "
+            "açılmamalı."
+        )
+        print("  Hâlâ yayınlanacak 'bad' kayıtlar:")
+        for result in report.results:
+            if result.golden_verdict == "bad" and result.would_publish:
+                origin = "sentetik" if result.synthetic else "gözlemlenen"
+                print(f"    [{origin}] #{result.idx} {result.title[:88]}")
+
+
 async def _check_data_quality() -> None:
     """Faz 13's daily quality gate. Exits non-zero on any violation -- a
     failed step in the scheduled workflow run is the "task" this opens, see
@@ -606,6 +716,7 @@ def main() -> None:
             "daily-if-due",
             "pipeline-v2",
             "evaluate-golden",
+            "evaluate-campaigns",
             "check-data-quality",
             "mark-legacy-campaigns-superseded",
         ],
@@ -739,6 +850,9 @@ def main() -> None:
         asyncio.run(_pipeline_v2(args.limit))
     elif args.command == "evaluate-golden":
         asyncio.run(_evaluate_golden(args.full_surface))
+    elif args.command == "evaluate-campaigns":
+        # Deterministic and synchronous: no LLM, no network, no database.
+        _evaluate_campaigns()
     elif args.command == "check-data-quality":
         asyncio.run(_check_data_quality())
     elif args.command == "mark-legacy-campaigns-superseded":
