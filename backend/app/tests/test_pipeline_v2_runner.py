@@ -7,7 +7,7 @@ UI untranslated. classify_article is monkeypatched with recorded outcomes
 rather than calling a real model -- CI must not depend on a model being
 reachable or answering the same way twice.
 """
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
@@ -461,3 +461,155 @@ async def test_an_expired_titled_campaign_is_not_persisted(db_session, monkeypat
     # item -- and its not_applicable_reasons records why no campaign followed.
     event = (await db_session.execute(NewsEvent.__table__.select())).mappings().one()
     assert event["not_applicable_reasons"]["campaign"] == "expired_title"
+
+
+# --- CAMPAIGN_V2_ENABLED: the campaign-intelligence columns ----------------
+#
+# The flag is the whole contract here: off, this path has to behave exactly as
+# it did before the campaign rebuild (every test above is the proof), and on,
+# it fills the new columns and stops inserting a row the table already has.
+
+
+@pytest.fixture
+def campaign_v2(monkeypatch):
+    from app.core.config import get_settings
+
+    get_settings.cache_clear()
+    monkeypatch.setenv("CAMPAIGN_V2_ENABLED", "true")
+    yield
+    get_settings.cache_clear()
+
+
+def _campaign_result(**overrides) -> ClassificationResult:
+    campaign = dict(
+        airline_code="PC",
+        discount_pct=50,
+        sale_starts=date(2099, 8, 25),
+        sale_ends=date(2099, 8, 27),
+        travel_starts=None,
+        travel_ends=None,
+        markets={"regions": [], "countries": [], "cities": []},
+    )
+    campaign.update(overrides)
+    return ClassificationResult(
+        article=Outcome.classified(
+            Classification(
+                category="revenue_management",
+                subcategory="promotion",
+                title_tr="Balkanlar %50'ye Varan İndirimle!",
+                summary_tr="Pegasus, Balkanlar'a %50'ye varan indirim sunuyor.",
+                confidence=0.9,
+                airlines=[{"code": "PC", "name": "Pegasus Airlines", "role": "subject"}],
+                airports=[],
+                countries=[],
+            ),
+            certainty=0.9,
+        ),
+        risk=Outcome.not_applicable("not_a_risk"),
+        campaign=Outcome.classified(CampaignExtraction(**campaign), certainty=0.9),
+    )
+
+
+async def _seed_campaign_article(db) -> None:
+    source = await _source(db, name="Pegasus", trust=0.9)
+    await _article(
+        db,
+        source,
+        "https://a.example/balkanlar",
+        "Balkanlar %50'ye Varan İndirimle!",
+        content="Pegasus Balkanlar hattında indirim kampanyası başlattı.",
+    )
+    await db.commit()
+
+
+async def test_the_flag_asks_the_model_for_the_campaign_fields_and_stores_them(
+    db_session, monkeypatch, campaign_v2
+):
+    seen: dict = {}
+
+    async def _answer(title, content, *, topic_fragment=""):
+        seen["fragment"] = topic_fragment
+        return _campaign_result(
+            campaign_type="FLASH_SALE",
+            business_class_hint="ACTIVE_CAMPAIGN",
+            origin="İstanbul",
+            destination="Londra",
+        )
+
+    monkeypatch.setattr(runner_module, "classify_article", _answer)
+    await _seed_campaign_article(db_session)
+
+    stats = await run_pipeline_v2(db_session, limit=10)
+
+    assert stats["campaigns"] == 1
+    assert "business_class_hint" in seen["fragment"], "the topic hook carries the ask"
+
+    promotion = (await db_session.execute(Promotion.__table__.select())).mappings().one()
+    assert promotion["campaign_type"] == "FLASH_SALE"
+    # The rule layer's verdict, not the model's hint -- they agree here, and
+    # when they do not, validate_campaign wins.
+    assert promotion["business_class"] == "ACTIVE_CAMPAIGN"
+    assert promotion["classification_reason"]
+    assert promotion["route_scope"] == "CITY_PAIR", "two cities are not an OND"
+    assert promotion["ond"] is None
+    assert promotion["first_seen_at"] is not None
+    assert promotion["last_seen_at"] is not None
+
+
+async def test_a_campaign_the_table_already_has_is_merged_not_inserted_again(
+    db_session, monkeypatch, campaign_v2
+):
+    """The documented gap in this path: every other write path asked
+    promo_dedup before inserting and this one did not, so the airline's own
+    page and a news report about the same campaign each drew their own bar."""
+    async def _answer(title, content, *, topic_fragment=""):
+        return _campaign_result()
+
+    monkeypatch.setattr(runner_module, "classify_article", _answer)
+
+    existing = Promotion(
+        airline_code="PC",
+        airline_name="Pegasus Airlines",
+        title_tr="Balkanlar %50'ye Varan İndirimle!",
+        summary_tr="",
+        url="https://www.flypgs.com/kampanyalar/balkanlar",
+        source_name="Pegasus kampanya sayfası",
+        detected_at=datetime.now(timezone.utc) - timedelta(days=1),
+    )
+    db_session.add(existing)
+    await db_session.commit()
+    existing_id = existing.id
+
+    await _seed_campaign_article(db_session)
+    stats = await run_pipeline_v2(db_session, limit=10)
+
+    assert stats["campaigns"] == 1
+    rows = (await db_session.execute(Promotion.__table__.select())).mappings().all()
+    assert len(rows) == 1, "one campaign, one row"
+    assert rows[0]["id"] == existing_id
+    assert rows[0]["discount_pct"] == 50, "the article's reading enriched the row"
+    assert rows[0]["business_class"] == "ACTIVE_CAMPAIGN"
+    assert rows[0]["url"] == "https://www.flypgs.com/kampanyalar/balkanlar", (
+        "the airline's own page keeps its canonical URL"
+    )
+
+
+async def test_with_the_flag_off_the_new_columns_stay_null(db_session, monkeypatch):
+    """A legacy-shaped row: classified by the rules that predate the rebuild,
+    and carrying NULL in every column the rebuild added -- which is what "not
+    classified" has to look like, distinct from "classified as nothing"."""
+    async def _answer(title, content, *, topic_fragment=""):
+        assert topic_fragment == "", "flag off means the prompt is untouched"
+        return _campaign_result(campaign_type="FLASH_SALE", origin="İstanbul")
+
+    monkeypatch.setattr(runner_module, "classify_article", _answer)
+    await _seed_campaign_article(db_session)
+
+    await run_pipeline_v2(db_session, limit=10)
+
+    promotion = (await db_session.execute(Promotion.__table__.select())).mappings().one()
+    assert promotion["campaign_type"] is None
+    assert promotion["business_class"] is None
+    assert promotion["route_scope"] is None
+    assert promotion["classification_reason"] is None
+    assert promotion["first_seen_at"] is None

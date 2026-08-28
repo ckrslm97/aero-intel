@@ -76,6 +76,22 @@ class Settings(BaseSettings):
     # docs/ARCHITECTURE.md.
     pipeline_v2: bool = False
 
+    # --- Campaign intelligence v2 (the campaign-page rebuild) ---
+    # Off by default, and read in exactly two places: the deep-scan extraction
+    # hook (app/ingest/deep_scan.py) and the article path's campaign fields
+    # (app/agents/runner.py). Flag off means byte-for-byte the behaviour that
+    # shipped before it existed -- deep_scan records telemetry and extracts
+    # nothing, the runner writes the same Promotion columns it always did.
+    #
+    # It is set to true in .github/workflows/jobs-campaign-deepscan.yml (the
+    # official-page path, whose precision the extraction chain was built and
+    # measured for) and deliberately NOT in jobs-news.yml: the article path
+    # stays off until the golden-set false-positive gate in PR8 says it may be
+    # turned on. One flag rather than two because the two paths share the
+    # extraction chain, and a half-enabled chain would be a third behaviour
+    # nobody tested.
+    campaign_v2_enabled: bool = False
+
     # --- Email (optional; falls back to writing to ./outbox instead of sending) ---
     smtp_host: str | None = None
     smtp_port: int = 587

@@ -82,6 +82,18 @@ jobs:
       - name: Deep scan carrier campaign pages
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          # The extraction chain runs on this path and only this path. The
+          # article path (jobs-news.yml) stays off until PR8's golden-set
+          # false-positive gate says otherwise -- see app/core/config.py.
+          CAMPAIGN_V2_ENABLED: "true"
+          # The same Groq model and the same shared daily budget as
+          # jobs-news.yml. Without a live model every changed page is a FAILED
+          # extraction that correctly, and uselessly, keeps itself queued.
+          # --max-llm-calls below is what keeps this path's share small.
+          LLM_PROVIDER: openai_compat
+          LLM_BASE_URL: https://api.groq.com/openai/v1
+          LLM_MODEL: openai/gpt-oss-120b
+          LLM_API_KEY: ${{ secrets.GROQ_API_KEY }}
         # The `inputs` context (not `github.event.inputs`) is used so the
         # boolean stays a boolean: `github.event.inputs.dry_run` is the string
         # "true"/"false" and both are truthy. On a scheduled run `inputs` is
@@ -90,5 +102,6 @@ jobs:
         run: |
           alembic upgrade head
           python -m app.cli deep-scan \
+            --max-llm-calls 10 \
             ${{ inputs.dry_run && '--dry-run' || '' }} \
             ${{ inputs.carriers != '' && format('--carriers {0}', inputs.carriers) || '' }}

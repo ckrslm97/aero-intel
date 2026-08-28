@@ -86,7 +86,13 @@ class ConfidenceInput:
     required_fields_total: int
     #: Does the deterministic extractor agree with the model's answer? None when
     #: there is nothing to cross-check against.
-    signal_agreement: bool | None
+    #:
+    #: A float in [0, 1] is also accepted, and is what the campaign extraction
+    #: chain passes: it cross-checks up to four dates per campaign against the
+    #: regex layer, and "three of four" is a real answer that a boolean would
+    #: have to round to yes or no. `score()` reads it numerically either way --
+    #: `float(True)` is 1.0 -- so the two spellings agree by construction.
+    signal_agreement: bool | float | None
     #: How many distinct sources reported this event.
     source_count: int
 

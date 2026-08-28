@@ -332,7 +332,7 @@ async def _refresh_promotions() -> None:
         )
 
 
-async def _deep_scan(carriers: str | None, dry_run: bool) -> None:
+async def _deep_scan(carriers: str | None, dry_run: bool, max_llm_calls: int) -> None:
     """The 2x/day Playwright sweep of the bot-walled carrier campaign pages.
 
     The totals printed here are the summary; the answer the first dispatch is
@@ -344,12 +344,20 @@ async def _deep_scan(carriers: str | None, dry_run: bool) -> None:
     codes = [part for part in carriers.split(",") if part.strip()] if carriers else None
 
     async with AsyncSessionLocal() as db:
-        summary = await deep_scan(db, carriers=codes, dry_run=dry_run)
+        summary = await deep_scan(
+            db, carriers=codes, dry_run=dry_run, max_llm_calls=max_llm_calls
+        )
         print(
             f"Deep scan{' (dry run)' if dry_run else ''}: "
             f"{summary['scanned']} sayfa tarandı, {summary['changed']} değişti, "
             f"{summary['blocked']} bot duvarına takıldı, {summary['errors']} hata, "
-            f"{summary['skipped_static']} statik taşıyıcı atlandı"
+            f"{summary['skipped_static']} statik taşıyıcı atlandı. "
+            f"Çıkarım: {summary['llm_calls']} LLM çağrısı, "
+            f"{summary['campaigns_inserted']} yeni / "
+            f"{summary['campaigns_updated']} güncellenen / "
+            f"{summary['campaigns_merged']} birleştirilen kampanya, "
+            f"{summary['campaigns_dropped']} eleme, "
+            f"{summary['extraction_capped']} sayfa bütçe nedeniyle sonraki koşuya bırakıldı"
         )
 
 
@@ -537,6 +545,12 @@ async def _daily_if_due() -> None:
 
 
 def main() -> None:
+    # Imported here rather than at module scope for the same reason every
+    # command's own imports are lazy: `python -m app.cli ingest` should not pay
+    # for the ingest package. The default has to be readable at parse time, so
+    # this is the one value that comes in early.
+    from app.ingest.deep_scan import DEFAULT_MAX_LLM_CALLS
+
     parser = argparse.ArgumentParser(description="AeroIntel pipeline CLI")
     parser.add_argument(
         "command",
@@ -625,6 +639,18 @@ def main() -> None:
             "log is written either way, which is what makes the gate readable."
         ),
     )
+    parser.add_argument(
+        "--max-llm-calls",
+        type=int,
+        default=DEFAULT_MAX_LLM_CALLS,
+        help=(
+            "deep-scan: how many campaign-extraction LLM calls this sweep may "
+            f"spend in total (default: {DEFAULT_MAX_LLM_CALLS}). Pages beyond the "
+            "cap keep their previous content hash, so the next run still sees "
+            "them as changed and extracts them then -- the cap defers work, it "
+            "does not drop it."
+        ),
+    )
     args = parser.parse_args()
 
     if args.command == "ingest":
@@ -672,7 +698,7 @@ def main() -> None:
     elif args.command == "refresh-promotions":
         asyncio.run(_refresh_promotions())
     elif args.command == "deep-scan":
-        asyncio.run(_deep_scan(args.carriers, args.dry_run))
+        asyncio.run(_deep_scan(args.carriers, args.dry_run, args.max_llm_calls))
     elif args.command == "dedupe-promotions":
         asyncio.run(_dedupe_promotions())
     elif args.command == "prune-kpi-duplicates":

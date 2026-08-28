@@ -21,11 +21,37 @@ the hash narrows further, to just those blocks.
 **A changed page is recorded, not stored.** `scrape_runs` has no text column,
 by design -- it is a run log, two rows per carrier per day, and hanging a full
 page body off every row would make the cheapest table in the schema the
-largest. PR4 therefore re-fetches the pages whose last run was ok+changed at
-extraction time. That is deliberately paying for one extra page load per
-changed page: at two scans a day, across seven carriers, that is a handful of
-loads against a Text column on every row we will ever write, and the schema
-merged in PR1 stays as merged.
+largest. Extraction therefore runs *inside* this sweep, against the text this
+run already has in memory, and never re-fetches within a run. Only a re-run
+across days would have to load the page again, which is the trade-off the
+schema was merged with.
+
+That reverses this module's original note that an LLM call does not belong in
+the courtesy loop, and the reversal is deliberate: the call does hold a browser
+context open for a second or two, and the alternative was a second page load
+per changed page on origins that barely tolerate the first one. A context
+sitting idle costs us memory; a duplicate fetch costs the carrier -- and the
+2-4s courtesy pause between pages already dwarfs the call anyway.
+
+**A page is only baselined once its campaigns are in the table.** The change
+detection above is a ledger with one entry per URL: `latest_ok_hash` reads the
+newest `ok` run that carries a hash, and `decide_changed` compares against it.
+So writing this run's hash means "everything this page now says has been dealt
+with". When extraction is enabled and a changed page is *not* dealt with --
+the LLM budget ran out, the model returned unparseable JSON, no model is
+configured -- the run is still recorded, still `ok`, still `changed=True`, but
+its `content_hash` is withheld and the reason goes in `error`. The next run
+then compares against the older baseline, finds the page changed again, and
+retries. Without that, a page whose extraction was capped would be marked
+unchanged forever and its campaigns would never be read at all.
+
+The converse case is left alone on purpose: with extraction disabled (the flag
+off, or `--dry-run`) this module is in pure telemetry mode and records hashes
+exactly as it did before, because the change counters are what the bot-wall
+go/no-go gate is read from. The cost is stated rather than hidden: the first
+run after the flag is turned on adopts the baselines telemetry-only runs left
+behind, so it extracts the pages that change from then on rather than
+everything standing.
 
 **A dry run still writes telemetry.** `--dry-run` suppresses the hand-off to
 extraction, not the run log -- the point of the first dispatch is to read
@@ -49,7 +75,7 @@ import hashlib
 import random
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -110,6 +136,56 @@ _BLOCKED_ERROR_MARKERS: tuple[str, ...] = (
 )
 
 _WHITESPACE = re.compile(r"\s+")
+
+#: Default per-run ceiling on extraction calls. The Groq free tier is a shared
+#: product-wide budget (~260 calls/day already committed), and a first run
+#: where every page's hash is "changed" would spend seven of these in one
+#: sweep. Ten is above the steady-state need -- fourteen page loads a day, of
+#: which a handful actually change -- and low enough that a pathological run
+#: cannot starve the news pipeline.
+DEFAULT_MAX_LLM_CALLS = 10
+
+
+@dataclass
+class ExtractionBudget:
+    """How many LLM calls this sweep may still spend, and what it did.
+
+    Mutable and passed down rather than returned up, because the cap has to
+    hold across carriers: seven carriers each allowed ten calls is not a cap
+    of ten.
+    """
+
+    remaining: int = DEFAULT_MAX_LLM_CALLS
+    spent: int = 0
+    capped_pages: int = 0
+    inserted: int = 0
+    updated: int = 0
+    merged: int = 0
+    dropped: int = 0
+    failed_pages: int = 0
+
+    @property
+    def exhausted(self) -> bool:
+        return self.remaining <= 0
+
+    def as_summary(self) -> dict:
+        return {
+            "llm_calls": self.spent,
+            "campaigns_inserted": self.inserted,
+            "campaigns_updated": self.updated,
+            "campaigns_merged": self.merged,
+            "campaigns_dropped": self.dropped,
+            "extraction_capped": self.capped_pages,
+            "extraction_failed": self.failed_pages,
+        }
+
+
+@dataclass(frozen=True)
+class ExtractionOutcome:
+    """Whether this page's content may be baselined, and why not if not."""
+
+    accounted_for: bool
+    note: str | None = None
 
 
 @dataclass(frozen=True)
@@ -332,6 +408,67 @@ async def _fetch_page(context, carrier_page: CarrierPage) -> FetchResult:
         await page.close()
 
 
+async def extract_changed_page(
+    db: AsyncSession,
+    *,
+    carrier: Carrier,
+    carrier_page: CarrierPage,
+    text: str,
+    hash_value: str,
+    budget: ExtractionBudget,
+    now: datetime,
+    today: date,
+) -> ExtractionOutcome:
+    """Run the extraction chain over the text this scan just read.
+
+    The text is passed in, not re-fetched: within one run the page is already
+    in memory, and spending a second page load on an origin that is only
+    tolerating the first one would be both slower and ruder.
+
+    Returns whether this page's content may be baselined. Anything short of a
+    completed extraction -- capped, failed, no model configured -- comes back
+    `accounted_for=False`, which is what keeps the page queued for the next
+    run. A page the model read and found no campaigns on IS accounted for: the
+    answer "there are no campaigns here" is a real answer, and re-asking it
+    twice a day forever would spend the budget on it.
+    """
+    if budget.exhausted:
+        budget.capped_pages += 1
+        logger.info(
+            "deep_scan_extraction_capped", carrier=carrier.code, url=carrier_page.url
+        )
+        return ExtractionOutcome(False, "extraction_capped")
+
+    from app.pipeline.campaign_extract import extract_campaigns_from_page, persist_extracted
+
+    budget.remaining -= 1
+    result = await extract_campaigns_from_page(
+        text,
+        carrier=carrier,
+        page_url=carrier_page.url,
+        source_quality=carrier.source_quality,
+        detected_at=now,
+        today=today,
+        content_hash=hash_value,
+    )
+    budget.spent += result.llm_calls
+    budget.dropped += len(result.dropped)
+
+    if not result.succeeded:
+        budget.failed_pages += 1
+        return ExtractionOutcome(False, f"extraction_failed:{result.reason}")
+
+    for extracted in result.campaigns:
+        written = await persist_extracted(db, extracted)
+        if written == "inserted":
+            budget.inserted += 1
+        elif written == "merged":
+            budget.merged += 1
+        else:
+            budget.updated += 1
+    return ExtractionOutcome(True)
+
+
 async def _scan_carrier_page(
     db: AsyncSession,
     context,
@@ -339,16 +476,42 @@ async def _scan_carrier_page(
     carrier_page: CarrierPage,
     summary: dict,
     dry_run: bool,
+    *,
+    budget: ExtractionBudget | None = None,
+    extraction_enabled: bool = False,
 ) -> None:
     started_at = datetime.now(timezone.utc)
     fetch = await _fetch_page(context, carrier_page)
     outcome, error = classify_outcome(fetch)
 
+    normalized = ""
     hash_value = None
     if outcome == "ok":
-        hash_value = content_hash(normalize(fetch.text))
+        normalized = normalize(fetch.text)
+        hash_value = content_hash(normalized)
     previous = await latest_ok_hash(db, carrier_page.url) if hash_value else None
     changed = decide_changed(previous, hash_value)
+
+    recorded_hash = hash_value
+    if changed and extraction_enabled and budget is not None:
+        extraction = await extract_changed_page(
+            db,
+            carrier=carrier,
+            carrier_page=carrier_page,
+            text=normalized,
+            hash_value=hash_value,
+            budget=budget,
+            now=started_at,
+            today=started_at.date(),
+        )
+        if not extraction.accounted_for:
+            # Withhold the hash so the next run still sees this page as
+            # changed -- see the module docstring. The row stays `ok` and
+            # `changed`: the fetch genuinely succeeded, and pretending
+            # otherwise would corrupt the bot-wall telemetry to carry an
+            # extraction fact.
+            recorded_hash = None
+            error = extraction.note
 
     finished_at = datetime.now(timezone.utc)
     await record_run(
@@ -359,7 +522,7 @@ async def _scan_carrier_page(
         finished_at=finished_at,
         outcome=outcome,
         http_status=fetch.http_status,
-        hash_value=hash_value,
+        hash_value=recorded_hash,
         changed=changed,
         error=error,
     )
@@ -371,12 +534,6 @@ async def _scan_carrier_page(
         summary["errors"] += 1
     if changed:
         summary["changed"] += 1
-        # TODO(PR4): the extraction seam, gated on `not dry_run`. PR4 owns the
-        # LLM chain, and the schema has nowhere to put this page's text (see
-        # the module docstring), so the hand-off is the row just written: PR4
-        # queries the latest ok+changed run per URL, re-fetches it and runs
-        # campaign_extract. Nothing more belongs *here* -- an LLM call inside
-        # the courtesy loop would hold a browser context open across it.
 
     logger.info(
         "deep_scan_page",
@@ -396,19 +553,32 @@ async def deep_scan(
     *,
     carriers: list[str] | None = None,
     dry_run: bool = False,
+    max_llm_calls: int = DEFAULT_MAX_LLM_CALLS,
 ) -> dict:
-    """Load every browser-carrier's campaign pages and record what happened.
+    """Load every browser-carrier's campaign pages, record what happened, and
+    extract the campaigns off the ones that changed.
 
-    Returns counters, but the real output is in `scrape_runs`: per-carrier
-    ok/blocked telemetry is what the carrier list is maintained from, and what
-    the first dispatch of this job exists to produce.
+    Returns counters, but the real output is two-fold: `scrape_runs` carries
+    the per-carrier ok/blocked telemetry the carrier list is maintained from,
+    and `promotions` carries whatever the extraction chain could verify.
 
-    `dry_run` changes nothing yet beyond the log line -- there is no extraction
-    to suppress until PR4 fills the seam in `_scan_carrier_page`. It exists now
-    so the go/no-go dispatch is spelled the way it will keep being spelled, and
-    so the telemetry the gate reads is written either way.
+    `dry_run` suppresses extraction and nothing else -- the run log is written
+    either way, which is what makes the bot-wall go/no-go gate readable. So
+    does an unset `CAMPAIGN_V2_ENABLED`: with the flag off this is exactly the
+    telemetry-only sweep that shipped before the chain existed.
+
+    `max_llm_calls` caps extraction for the whole sweep, not per carrier. Pages
+    that hit the cap keep their previous baseline and are picked up by the next
+    run (see the module docstring), so the cap defers work rather than
+    discarding it.
     """
     summary = {"scanned": 0, "changed": 0, "blocked": 0, "errors": 0, "skipped_static": 0}
+
+    from app.core.config import get_settings
+
+    extraction_enabled = get_settings().campaign_v2_enabled and not dry_run
+    budget = ExtractionBudget(remaining=max(0, max_llm_calls))
+    summary.update(budget.as_summary())
 
     selected = resolve_carriers(carriers)
     targets = [c for c in selected if c.fetch_method == "browser"]
@@ -445,13 +615,23 @@ async def deep_scan(
                             await asyncio.sleep(random.uniform(*DELAY_RANGE_S))
                         first = False
                         await _scan_carrier_page(
-                            db, context, carrier, carrier_page, summary, dry_run
+                            db,
+                            context,
+                            carrier,
+                            carrier_page,
+                            summary,
+                            dry_run,
+                            budget=budget,
+                            extraction_enabled=extraction_enabled,
                         )
                 finally:
                     await context.close()
         finally:
             await browser.close()
 
+    summary.update(budget.as_summary())
     await db.commit()
-    logger.info("deep_scan_complete", dry_run=dry_run, **summary)
+    logger.info(
+        "deep_scan_complete", dry_run=dry_run, extraction=extraction_enabled, **summary
+    )
     return summary

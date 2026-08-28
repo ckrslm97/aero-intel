@@ -29,6 +29,8 @@ in a comparison table, and an LNG pricing story to Emirates.
 from __future__ import annotations
 
 from app.taxonomy import (
+    CAMPAIGN_BUSINESS_CLASSES,
+    CAMPAIGN_TYPES,
     CATEGORY_SLUGS,
     RISK_CATEGORY_SLUGS,
     RISK_SEVERITIES,
@@ -46,6 +48,39 @@ def _subcategory_lines() -> str:
         f"  {category}: {', '.join(sorted(subs))}"
         for category, subs in sorted(SUBCATEGORY_KEYWORDS.items())
     )
+
+
+def campaign_topic_fragment() -> str:
+    """The campaign section's extra fields, for the `topic_fragment` hook.
+
+    Passed by agents/runner.py when `CAMPAIGN_V2_ENABLED` is set, and by
+    nothing else. It rides the hook rather than being written into the schema
+    above for one reason: with the flag off the prompt has to be byte-for-byte
+    what it was, because the golden-set regression grades the current one and a
+    silently widened prompt would change every answer it grades.
+
+    Same four fields the official-page prompt asks for (llm/campaign_prompt.py)
+    and the same refusals: an article that does not say which route is on sale
+    gets null, not the reporter's illustrative example.
+    """
+    return f"""Kampanya alanları (yalnızca is_campaign=true ise):
+
+  "campaign" nesnesine şu alanları da EKLE:
+    "campaign_type": null | {" | ".join(CAMPAIGN_TYPES)}
+    "business_class_hint": null | {" | ".join(CAMPAIGN_BUSINESS_CLASSES)}
+    "origin": null | "haberde YAZDIĞI gibi kalkış yeri"
+    "destination": null | "haberde YAZDIĞI gibi varış yeri"
+
+  - campaign_type: listedeki değerlerden biri; hiçbiri uymuyorsa "OTHER".
+  - business_class_hint: Bu bir bilet ücreti kampanyası mı, yoksa bagaj/lounge
+    gibi bir ürün kampanyası (PRODUCT_PROMOTION), mil/puan kampanyası
+    (LOYALTY_PROMOTION), öğrenci/kurumsal gibi SÜREKLİ geçerli bir standart
+    teklif (EVERGREEN_OFFER) ya da sadece kampanyayı anlatan bir haber mi
+    (NEWS_ONLY)? Gerçek, süreli bir ücret kampanyası ise "ACTIVE_CAMPAIGN".
+  - origin/destination: Havaalanı kodu ("IST"), şehir ("İstanbul"), ülke
+    ("Türkiye") veya bölge ("Avrupa") olabilir — haberde nasıl yazıyorsa öyle.
+    Haber rotadan söz etmiyorsa null bırak; örnek olarak geçen bir şehri rota
+    sanma."""
 
 
 def build_prompt(title: str, content: str, *, topic_fragment: str = "") -> str:

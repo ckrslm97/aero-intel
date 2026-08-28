@@ -34,6 +34,8 @@ from app.taxonomy import (
     GENERAL_CATEGORY,
     RISK_SEVERITIES,
     SUBCATEGORY_KEYWORDS,
+    is_valid_business_class,
+    is_valid_campaign_type,
     is_valid_risk_category,
 )
 
@@ -100,6 +102,16 @@ class CampaignExtraction:
     travel_starts: date | None
     travel_ends: date | None
     markets: dict
+    #: The campaign-intelligence fields, asked for only when the runner passes
+    #: `classify_prompt.campaign_topic_fragment()` (i.e. CAMPAIGN_V2_ENABLED).
+    #: Optional with None defaults so every existing construction of this
+    #: dataclass -- the tests, the golden-set evaluator, the heuristic path --
+    #: keeps working unchanged, and so a model that ignores the fragment
+    #: produces a row with these columns null rather than a failed parse.
+    campaign_type: str | None = None
+    business_class_hint: str | None = None
+    origin: str | None = None
+    destination: str | None = None
 
 
 @dataclass(frozen=True)
@@ -348,6 +360,19 @@ def _parse_campaign(payload: dict) -> Outcome[CampaignExtraction]:
         for key in ("regions", "countries", "cities")
     }
 
+    # Off-taxonomy campaign_type/business_class_hint are dropped rather than
+    # failing the call, the same way an off-parent subcategory is above: the
+    # campaign itself is still usable, and the alternative is losing a correct
+    # extraction over a vocabulary slip in a field the row can carry as null.
+    campaign_type = (_clean_str(campaign.get("campaign_type")) or "").upper() or None
+    if campaign_type and not is_valid_campaign_type(campaign_type):
+        logger.info("classify_campaign_type_dropped", campaign_type=campaign_type)
+        campaign_type = None
+    business_class = (_clean_str(campaign.get("business_class_hint")) or "").upper() or None
+    if business_class and not is_valid_business_class(business_class):
+        logger.info("classify_business_class_dropped", business_class=business_class)
+        business_class = None
+
     return Outcome.classified(
         CampaignExtraction(
             airline_code=airline_code.upper(),
@@ -357,6 +382,10 @@ def _parse_campaign(payload: dict) -> Outcome[CampaignExtraction]:
             travel_starts=_clean_date(campaign.get("travel_starts")),
             travel_ends=_clean_date(campaign.get("travel_ends")),
             markets=normalized_markets,
+            campaign_type=campaign_type,
+            business_class_hint=business_class,
+            origin=_clean_str(campaign.get("origin")),
+            destination=_clean_str(campaign.get("destination")),
         ),
         certainty=certainty,
     )
