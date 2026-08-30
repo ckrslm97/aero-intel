@@ -186,7 +186,11 @@ def _first_match(pattern, text: str) -> str | None:
 
 
 def _business_class(
-    text: str, campaign: CampaignExtraction
+    text: str,
+    *,
+    has_sale_window: bool,
+    has_any_date: bool,
+    has_discount: bool,
 ) -> tuple[str, str | None] | None:
     """The non-fare class this page belongs to, or None if it is a fare campaign.
 
@@ -196,6 +200,12 @@ def _business_class(
     vocabulary is unambiguous; EVERGREEN needs a second condition and so comes
     after the two that do not; NEWS_ONLY is last because it is defined by
     absence and everything positive should get its say first.
+
+    Takes the three date/rate facts as booleans rather than a
+    `CampaignExtraction`, so the same rulepack can be asked about a stored
+    `Promotion` row -- which has the same four date columns and the same
+    `discount_pct` but is not an extraction -- without a second copy of the
+    keyword tables (see `detect_business_class`).
     """
     product = _first_match(_PRODUCT, text)
     if product:
@@ -208,23 +218,13 @@ def _business_class(
     # Evergreen needs the vocabulary AND no sale window: a student fare that
     # runs for three days in September is a real campaign that happens to
     # target students, and rejecting it would be the rulepack overreaching.
-    has_sale_window = campaign.sale_starts is not None or campaign.sale_ends is not None
     evergreen = _first_match(_EVERGREEN, text)
     if evergreen and not has_sale_window:
         return "EVERGREEN_OFFER", evergreen
 
     # Nothing to book, nothing to book it by, and nothing off the price: an
     # article about the campaign surface rather than a campaign.
-    has_any_date = any(
-        value is not None
-        for value in (
-            campaign.sale_starts,
-            campaign.sale_ends,
-            campaign.travel_starts,
-            campaign.travel_ends,
-        )
-    )
-    if not has_any_date and campaign.discount_pct is None and not _BOOKING_CTA.search(text):
+    if not has_any_date and not has_discount and not _BOOKING_CTA.search(text):
         return "NEWS_ONLY", None
 
     return None
@@ -255,6 +255,50 @@ def _rejection_reason(business_class: str, evidence: str | None) -> str:
     if evidence:
         return f"{base} (\"{evidence}\" geçiyor)."
     return f"{base}."
+
+
+#: The four classes the rulepack can return -- everything that is *not* a fare
+#: campaign. ACTIVE_CAMPAIGN is deliberately absent: it is the verdict when
+#: none of these matched, never something detected in its own right.
+NON_FARE_CLASSES: tuple[str, ...] = tuple(_CLASS_REASONS)
+
+
+def detect_business_class(
+    title: str,
+    text: str | None = None,
+    *,
+    sale_starts: date | None = None,
+    sale_ends: date | None = None,
+    travel_starts: date | None = None,
+    travel_ends: date | None = None,
+    discount_pct: int | None = None,
+) -> tuple[str, str] | None:
+    """`(business_class, classification_reason)`, or None for a fare campaign.
+
+    The rulepack without the Outcome ceremony around it, for the callers that
+    have text and dates but no `CampaignExtraction` -- specifically
+    pipeline/campaign_backfill.py, which re-asks the question of rows written
+    before these rules existed, off `title_tr`/`summary_tr` and the row's own
+    date columns.
+
+    Exposed rather than reimplemented on purpose: the keyword tables above are
+    the single definition of what a loyalty or product page looks like, and a
+    backfill that carried its own copy would start disagreeing with the live
+    pipeline on the first term either side added.
+    """
+    detected = _business_class(
+        fold_text(f"{title}\n{text or ''}"),
+        has_sale_window=sale_starts is not None or sale_ends is not None,
+        has_any_date=any(
+            value is not None
+            for value in (sale_starts, sale_ends, travel_starts, travel_ends)
+        ),
+        has_discount=discount_pct is not None,
+    )
+    if detected is None:
+        return None
+    business_class, evidence = detected
+    return business_class, _rejection_reason(business_class, evidence)
 
 
 def _acceptance_reason(campaign: CampaignExtraction) -> str:
@@ -346,13 +390,21 @@ def validate_campaign(
             ),
         )
 
-    detected = _business_class(fold_text(f"{title}\n{text or ''}"), campaign)
+    detected = detect_business_class(
+        title,
+        text,
+        sale_starts=campaign.sale_starts,
+        sale_ends=campaign.sale_ends,
+        travel_starts=campaign.travel_starts,
+        travel_ends=campaign.travel_ends,
+        discount_pct=campaign.discount_pct,
+    )
     if detected is not None:
-        business_class, evidence = detected
+        business_class, reason = detected
         return Outcome.not_applicable(
             f"business_class:{business_class}",
             business_class=business_class,
-            classification_reason=_rejection_reason(business_class, evidence),
+            classification_reason=reason,
         )
 
     return Outcome.classified(

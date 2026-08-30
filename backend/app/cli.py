@@ -407,6 +407,28 @@ async def _mark_legacy_campaigns_superseded() -> None:
         print(f"Marked {result['marked_superseded']} legacy campaign rows as superseded")
 
 
+async def _backfill_campaign_classes() -> None:
+    """Re-run today's business-class rules over the rows the old pipeline
+    published: loyalty/product/evergreen/news rows are retired (superseded,
+    never deleted), genuine fare campaigns keep their place. No LLM calls."""
+    from app.pipeline.campaign_backfill import backfill_campaign_classes
+
+    async with AsyncSessionLocal() as db:
+        result = await backfill_campaign_classes(db)
+        retired = result["retired_by_class"]
+        breakdown = ", ".join(
+            f"{name}: {count}" for name, count in sorted(retired.items()) if count
+        )
+        print(
+            f"Taranan kampanya satırı: {result['scanned']} — "
+            f"yayından kaldırılan {sum(retired.values())}"
+            + (f" ({breakdown})" if breakdown else "")
+            + f", iş-sınıfı işlenen {result['enriched']}, "
+            f"değişmeyen {result['unchanged']}, "
+            f"okundu işaretlenen uyarı {result['alerts_acknowledged']}"
+        )
+
+
 async def _seed_kpi_history() -> None:
     from app.ingest.historical_seed import seed_kpi_history
 
@@ -719,6 +741,7 @@ def main() -> None:
             "evaluate-campaigns",
             "check-data-quality",
             "mark-legacy-campaigns-superseded",
+            "backfill-campaign-classes",
         ],
     )
     parser.add_argument(
@@ -857,6 +880,8 @@ def main() -> None:
         asyncio.run(_check_data_quality())
     elif args.command == "mark-legacy-campaigns-superseded":
         asyncio.run(_mark_legacy_campaigns_superseded())
+    elif args.command == "backfill-campaign-classes":
+        asyncio.run(_backfill_campaign_classes())
 
 
 if __name__ == "__main__":
