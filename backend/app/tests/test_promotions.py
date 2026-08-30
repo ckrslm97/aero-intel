@@ -24,6 +24,7 @@ from sqlalchemy import select
 from app.api.v1.promotions import count_new_promotions, list_promotions
 from app.core.tr_dates import format_optional_range
 from app.ingest import promo_scrape
+from app.ingest.carriers import CARRIER_MASTER
 from app.ingest.promo_scrape import SOURCE_NAME as SCRAPE_SOURCE
 from app.ingest.promo_scrape import ScrapedPromo, scrape_promotions
 from app.models.campaign_source import CampaignSource
@@ -44,6 +45,7 @@ from app.pipeline.promotions import (
     heuristic_extract,
     parse_llm_payload,
 )
+from app.taxonomy import RIVAL_CODES
 
 NOW = datetime.now(timezone.utc)
 
@@ -176,12 +178,24 @@ def test_unusable_llm_output_falls_through_rather_than_writing_an_empty_row(raw)
     assert parse_llm_payload(raw) is None
 
 
-def test_tracked_airlines_match_the_frontend_tab_set():
-    # A code drifting out of sync here means a campaign with no lane, no brand
-    # colour and no logo on the timeline.
-    assert set(TRACKED_AIRLINES) == {
-        "AF", "BA", "EK", "EY", "KL", "LH", "QR", "PC", "VF", "TK",
-    }
+def test_every_scanned_carrier_can_be_drawn():
+    # This used to be a hand-copied literal, and it is why Singapore Airlines
+    # shipped as the bare string "SQ" in the default accent colour: SQ was added
+    # to the carrier master, started producing campaigns, and the literal still
+    # said ten. Asserting the relation instead of the list means the next
+    # carrier added to CARRIER_MASTER fails here until it has a lane -- and,
+    # because nav.ts is generated from this same set, a brand hex too.
+    missing = set(CARRIER_MASTER) - set(TRACKED_AIRLINES)
+    assert not missing, (
+        f"carriers scanned but not drawable: {sorted(missing)} -- a campaign by one "
+        "has no lane, no brand colour and no logo on the timeline"
+    )
+
+
+def test_rivals_are_carriers_we_can_draw():
+    # The Gazete's "Ana Rakipler" chip row is airlineTabs filtered by these, so
+    # a rival with no brand entry would simply vanish from the row.
+    assert set(RIVAL_CODES) <= set(TRACKED_AIRLINES)
 
 
 # --- Turkish range formatting ------------------------------------------

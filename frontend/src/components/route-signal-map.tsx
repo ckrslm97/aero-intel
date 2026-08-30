@@ -45,7 +45,11 @@ const CARRIER_HUB: Record<string, { code: string; coord: [number, number] }> = {
   QR: { code: "DOH", coord: [51.61, 25.27] },
 };
 
-const AIRLINE_BY_CODE = new Map(airlineTabs.map((a) => [a.code, a]));
+// Keyed by plain string: the codes looked up here come off the API's signal
+// rows, which the gazetteer can name a carrier we do not brand.
+const AIRLINE_BY_CODE = new Map<string, (typeof airlineTabs)[number]>(
+  airlineTabs.map((a) => [a.code, a]),
+);
 
 /** The lit-chip pattern shared with the signal ledger below and with
  * Gazete/Öneriler. */

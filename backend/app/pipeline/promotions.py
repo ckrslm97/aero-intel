@@ -46,25 +46,18 @@ from app.models.article import Article, ArticleEnrichment
 from app.models.entity import ArticleEntity, Entity
 from app.models.promotion import Promotion
 from app.pipeline.promo_dedup import PromoCandidate, find_duplicate, merge_candidate
+from app.taxonomy import TRACKED_AIRLINES as _TRACKED_AIRLINES
 
 logger = get_logger(__name__)
 
-# The competitive set the whole product is scoped to -- the same ten carriers
-# as frontend/src/lib/nav.ts `airlineTabs`, which is where each one's brand hex
-# and logo come from. A campaign by a carrier outside this set has no lane to
-# draw itself in, so it is left as the article it already is.
-TRACKED_AIRLINES: dict[str, str] = {
-    "AF": "Air France",
-    "BA": "British Airways",
-    "EK": "Emirates",
-    "EY": "Etihad Airways",
-    "KL": "KLM",
-    "LH": "Lufthansa",
-    "QR": "Qatar Airways",
-    "PC": "Pegasus Airlines",
-    "VF": "AJet",
-    "TK": "Turkish Airlines",
-}
+# The competitive set the whole product is scoped to. Defined in app/taxonomy.py
+# and re-exported here, where the pipeline reads it: the frontend's copy is
+# generated from the same constant (taxonomy.gen.ts -> nav.ts `airlineTabs`,
+# which is where each carrier's brand hex and logo come from), so the two sides
+# can no longer disagree about which carriers exist. A campaign by a carrier
+# outside this set has no lane to draw itself in, so it is left as the article
+# it already is.
+TRACKED_AIRLINES = _TRACKED_AIRLINES
 
 # app/taxonomy.py revenue_management subcategories. "pricing" is in because a
 # fare move announced as a price change rather than as a branded campaign is

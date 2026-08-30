@@ -142,6 +142,37 @@ export const RISK_TYPES: readonly RiskTypeDef[] = [
   { slug: "unrest", family: "conflict", labelTr: "Toplumsal Gerginlik" },
 ] as const;
 
+/** Every carrier the pipeline can attribute a campaign to. */
+export type CarrierCode =
+  | "AF"
+  | "BA"
+  | "EK"
+  | "EY"
+  | "KL"
+  | "LH"
+  | "QR"
+  | "SQ"
+  | "PC"
+  | "VF"
+  | "TK";
+
+export const CARRIER_CODES: readonly CarrierCode[] = ["AF", "BA", "EK", "EY", "KL", "LH", "QR", "SQ", "PC", "VF", "TK"] as const;
+
+
+export const CARRIER_NAMES: Record<CarrierCode, string> = {
+  "AF": "Air France",
+  "BA": "British Airways",
+  "EK": "Emirates",
+  "EY": "Etihad Airways",
+  "KL": "KLM",
+  "LH": "Lufthansa",
+  "QR": "Qatar Airways",
+  "SQ": "Singapore Airlines",
+  "PC": "Pegasus Airlines",
+  "VF": "AJet",
+  "TK": "Turkish Airlines",
+};
+
 export type RivalCode =
   | "AF"
   | "BA"

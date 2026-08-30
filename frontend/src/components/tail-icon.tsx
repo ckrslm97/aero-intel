@@ -22,6 +22,9 @@ const TAILS: Record<string, TailColors> = {
   KL: { fin: "#00a1de", accent: "#ffffff" },
   LH: { fin: "#05164d", accent: "#f9ba00" },
   QR: { fin: "#5c0632", accent: "#ffffff" },
+  // The gold is the point of SQ's livery -- the bird on the fin is gold on
+  // blue, so it is the accent that carries the recognition here.
+  SQ: { fin: "#1d4886", accent: "#fcb130" },
   PC: { fin: "#fdb913", accent: "#e2231a" },
   VF: { fin: "#f26722", accent: "#ffffff" },
 };

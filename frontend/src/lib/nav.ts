@@ -9,7 +9,14 @@ import {
   Star,
 } from "lucide-react";
 
-import { REGION_LABELS_TR, REGION_SLUGS, type RegionSlug } from "@/lib/taxonomy.gen";
+import {
+  CARRIER_CODES,
+  CARRIER_NAMES,
+  REGION_LABELS_TR,
+  REGION_SLUGS,
+  type CarrierCode,
+  type RegionSlug,
+} from "@/lib/taxonomy.gen";
 
 export interface NavItem {
   href: string;
@@ -41,18 +48,47 @@ export const primaryNav: NavItem[] = [
   { href: "/biz", label: "Biz", icon: Star },
 ];
 
-export const airlineTabs = [
-  { code: "AF", name: "Air France", color: "#002157" },
-  { code: "BA", name: "British Airways", color: "#075aaa" },
-  { code: "EK", name: "Emirates", color: "#d71921" },
-  { code: "EY", name: "Etihad Airways", color: "#bd8b13" },
-  { code: "KL", name: "KLM", color: "#00a1de" },
-  { code: "LH", name: "Lufthansa", color: "#05164d" },
-  { code: "QR", name: "Qatar Airways", color: "#5c0632" },
-  { code: "PC", name: "Pegasus Airlines", color: "#fdb913" },
-  { code: "VF", name: "AJet", color: "#f26722" },
-  { code: "TK", name: "Turkish Airlines", color: "#c70a20" },
+// Every carrier the system can serve, with the identity it is drawn with: the
+// name comes from the backend (CARRIER_NAMES, generated from taxonomy.py, the
+// same string the API puts on each row), the hex is ours. The logo is not
+// listed because it does not need to be -- components/airline-logo.tsx keys the
+// carrier's real logo off the IATA code alone, falling back to the drawn tail
+// fin in components/tail-icon.tsx, which is where a new carrier's second colour
+// goes.
+//
+// Order is display order: the foreign carriers alphabetically, then the three
+// Turkish ones, the home carrier last.
+export const airlineTabs: { code: CarrierCode; name: string; color: string }[] = [
+  { code: "AF", name: CARRIER_NAMES["AF"], color: "#002157" },
+  { code: "BA", name: CARRIER_NAMES["BA"], color: "#075aaa" },
+  { code: "EK", name: CARRIER_NAMES["EK"], color: "#d71921" },
+  { code: "EY", name: CARRIER_NAMES["EY"], color: "#bd8b13" },
+  { code: "KL", name: CARRIER_NAMES["KL"], color: "#00a1de" },
+  { code: "LH", name: CARRIER_NAMES["LH"], color: "#05164d" },
+  { code: "QR", name: CARRIER_NAMES["QR"], color: "#5c0632" },
+  // Singapore Airlines' logo blue, not its corporate Pantone 289 navy
+  // (#00205b): 289 is four points of blue away from Air France's #002157 and
+  // the two lanes would be the same colour on the timeline. #1d4886 is the
+  // blue the SIA wordmark and bird are actually drawn in, and it reads as SQ
+  // next to AF instead of as a second Air France. The gold half of the
+  // identity is the tail fin's accent band (tail-icon.tsx).
+  { code: "SQ", name: CARRIER_NAMES["SQ"], color: "#1d4886" },
+  { code: "PC", name: CARRIER_NAMES["PC"], color: "#fdb913" },
+  { code: "VF", name: CARRIER_NAMES["VF"], color: "#f26722" },
+  { code: "TK", name: CARRIER_NAMES["TK"], color: "#c70a20" },
 ];
+
+// The same guard the regions get below, for the same reason and after the same
+// bug: Singapore Airlines was added to the backend's carrier master, started
+// producing campaigns, and drew itself on the Kampanyalar timeline as the bare
+// string "SQ" in the default accent colour, because nothing checked. A carrier
+// the pipeline can attribute a campaign to and nobody gave a brand hex to now
+// fails the build instead of the page.
+for (const code of CARRIER_CODES) {
+  if (!airlineTabs.some((airline) => airline.code === code)) {
+    throw new Error(`nav.ts: backend carrier "${code}" has no brand entry.`);
+  }
+}
 
 // Slugs come from backend/app/taxonomy.py COUNTRY_TO_REGION, via taxonomy.gen.ts.
 // The RegionSlug type means a renamed region fails `tsc`; the check below means a

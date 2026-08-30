@@ -48,6 +48,7 @@ from app.taxonomy import (  # noqa: E402
     RIVAL_CODES,
     ROUTE_SCOPE_LABELS_TR,
     ROUTE_SCOPES,
+    TRACKED_AIRLINES,
 )
 
 OUTPUT = Path(__file__).resolve().parents[2] / "frontend" / "src" / "lib" / "taxonomy.gen.ts"
@@ -131,6 +132,23 @@ def render() -> str:
             f'  {{ slug: "{risk.slug}", family: "{risk.family}", labelTr: "{risk.label_tr}" }},'
         )
     parts.append("] as const;\n")
+
+    # --- carriers -----------------------------------------------------------
+    #
+    # Which airlines exist, and what each is called. The brand hex and the logo
+    # are frontend concerns and stay in nav.ts -- but the *set* is the backend's,
+    # so a carrier added to the pipeline without a brand entry fails the build
+    # instead of rendering as a bare IATA code in the default accent colour.
+    carrier_codes = list(TRACKED_AIRLINES)
+    parts.append("/** Every carrier the pipeline can attribute a campaign to. */")
+    parts.append(_ts_string_union("CarrierCode", carrier_codes))
+    parts.append(_ts_const_array("CARRIER_CODES", "CarrierCode", carrier_codes))
+    parts.append("")
+
+    parts.append("export const CARRIER_NAMES: Record<CarrierCode, string> = {")
+    for code in carrier_codes:
+        parts.append(f'  "{code}": "{TRACKED_AIRLINES[code]}",')
+    parts.append("};\n")
 
     parts.append(_ts_string_union("RivalCode", list(RIVAL_CODES)))
     parts.append(_ts_const_array("RIVAL_CODES", "RivalCode", list(RIVAL_CODES)))
