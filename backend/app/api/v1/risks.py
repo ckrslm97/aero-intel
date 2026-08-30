@@ -103,7 +103,22 @@ async def list_risks(
     # /hubs, not a raw article list, and it changes only when the enrichment
     # cron reclassifies something.
     public_cache(response, AGGREGATES)
+    return await aggregate_risks(db, days=days)
 
+
+async def aggregate_risks(db: AsyncSession, days: int = 14) -> RiskRadarOut:
+    """The rollup itself, split out from the endpoint so a second caller can
+    reuse it rather than re-deriving severity counts from a cheaper query.
+
+    Kokpit's "Risk Radarı" signal tile does exactly that (see
+    app/services/cockpit_signals_service.py). The tile states a high-severity
+    count and names the worst country, and the page it links to states the same
+    two things -- a second, simpler `SELECT count(*) ... WHERE risk_severity =
+    'high'` would have been faster and would have disagreed, because it would
+    count three outlets covering one eruption as three signals where this
+    function clusters them into one. Same reasoning as the module docstring's:
+    compute it once, so every surface agrees.
+    """
     now = datetime.now(timezone.utc)
     since = now - timedelta(days=days)
 

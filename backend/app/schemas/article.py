@@ -33,6 +33,13 @@ class ArticleEnrichmentOut(BaseModel):
     headline_tr: str | None
     summary_tr: str | None
     translated_at: datetime | None
+    #: low | medium | high, or None for a story the classifier read as carrying
+    #: no risk at all. Exposed so a feed row can flag a high-severity story
+    #: without a second request to /risks -- Kokpit's "Havacılık Akışı" is the
+    #: caller. Null on the great majority of rows and must stay optional to
+    #: read: it is a badge a row may earn, never a field a row is expected to
+    #: have.
+    risk_severity: str | None = None
 
     @computed_field  # type: ignore[prop-decorator]
     @property
