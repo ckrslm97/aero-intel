@@ -22,6 +22,24 @@ unusable word. Failing the item instead would throw away the model's correct
 work over its vocabulary, and llm/classify.py already settled that trade the
 same way for subcategories.
 
+**Lenient about the packaging, strict about the answer.** Those two policies
+are about the *content* of a response. How the response is wrapped is a third
+question, and the first Azure run of the deep scan settled it the expensive
+way: TK's page was fetched, the model answered, and the page was failed with
+`schema_error:campaign payload must be a JSON object` because the answer was
+not shaped the way the prompt drew it. A model that lists the campaigns as a
+bare `[...]`, fences its JSON in a code block or writes a sentence before it
+has answered the question asked -- it has simply not typed the wrapper. So
+`extract_campaign_json` reads all of those (the same leniency
+llm/classify.py's `_extract_json` has always applied to the article path) and
+`parse_campaign_payload` wraps a bare list into the object shape.
+
+That is a loosening of the parser, not of the contract: llm/campaign_prompt.py
+still asks for `{"campaigns": [...]}` and nothing here invents, reorders or
+merges what it finds. Anything that is not JSON at all, and any object without
+a usable `campaigns` list, still fails the page exactly as before -- and each
+item inside the list is still judged on its own.
+
 Nothing here decides whether a campaign is real, whether its dates are true or
 where it flies: that is the rule/date/entity half of the chain. This layer only
 guarantees that what reaches those layers is typed, in range, and honest about
@@ -29,6 +47,8 @@ what it had to throw away.
 """
 from __future__ import annotations
 
+import json
+import re
 from datetime import date
 
 from pydantic import BaseModel, ConfigDict, model_validator
@@ -294,6 +314,61 @@ class RawCampaignPage(BaseModel):
     invalid_items: int = 0
 
 
+#: Models fence their output however firmly they are asked not to. Same pattern
+#: as llm/classify.py's, kept here rather than imported for the same reason
+#: `_NULL_WORDS` is duplicated: a schema module importing from the llm package
+#: to share one regex would couple them for nothing.
+_FENCE = re.compile(r"```(?:json)?\s*(.*?)```", re.S)
+
+
+def _json_candidates(text: str):
+    """The substrings of a model answer that might be the JSON it was asked for.
+
+    The whole string first -- a model that answered cleanly is the common case
+    and must not be re-parsed out of a slice. Then the outermost bracketed span
+    of each kind, in the order the brackets actually open, so a stray `{` in a
+    sentence of preamble cannot outrank the `[` that starts the real answer.
+    """
+    yield text
+    openers = sorted(
+        (text.find(opener), opener, closer)
+        for opener, closer in (("{", "}"), ("[", "]"))
+        if text.find(opener) != -1
+    )
+    for start, _opener, closer in openers:
+        end = text.rfind(closer)
+        if end > start:
+            yield text[start : end + 1]
+
+
+def extract_campaign_json(raw: str) -> object | None:
+    """One model answer's raw text -> the JSON in it, or None.
+
+    The counterpart of `llm/classify._extract_json` for the campaign-page
+    prompt, and lenient in the same two ways (fenced blocks, prose around the
+    JSON) plus one this path needs: it returns a top-level list as readily as an
+    object, because "the campaigns" is a list and models write it as one. What
+    that list *means* is `parse_campaign_payload`'s question, not this one's.
+
+    None means "there is no JSON here", which the caller turns into a failed
+    page. It is never an empty result: a page the model did not answer for and
+    a page with no campaigns on it are opposite facts.
+    """
+    text = (raw or "").strip()
+    fenced = _FENCE.search(text)
+    if fenced:
+        text = fenced.group(1).strip()
+
+    for candidate in _json_candidates(text):
+        try:
+            parsed = json.loads(candidate)
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if isinstance(parsed, (dict, list)):
+            return parsed
+    return None
+
+
 def parse_campaign_payload(payload: object) -> RawCampaignPage:
     """Type one model answer, or raise.
 
@@ -301,7 +376,15 @@ def parse_campaign_payload(payload: object) -> RawCampaignPage:
     list -- the FAILED case, which the chain never falls back from. Items
     inside that list are individually forgiving: one unusable card does not
     cost the other twenty-one.
+
+    A bare list is read as that list of campaigns. It is the same answer with
+    the envelope left off, and failing a page whose campaigns we are holding --
+    then re-fetching and re-asking for them twice a day -- would be a protocol
+    complaint dressed up as a data-quality rule. `[]` therefore means what
+    `{"campaigns": []}` means: the model looked and there was nothing.
     """
+    if isinstance(payload, list):
+        payload = {"campaigns": payload}
     if not isinstance(payload, dict):
         raise ValueError("campaign payload must be a JSON object")
     raw_items = payload.get("campaigns")

@@ -358,6 +358,13 @@ async def _deep_scan(carriers: str | None, dry_run: bool, max_llm_calls: int) ->
             f"{summary['campaigns_merged']} birleştirilen kampanya, "
             f"{summary['campaigns_dropped']} eleme, "
             f"{summary['extraction_capped']} sayfa bütçe nedeniyle sonraki koşuya bırakıldı"
+            # Ayrı yazılıyor: bu sayı taşıyıcının değil bizim hatamız — telemetri
+            # satırı yazılamamış demektir ve sıfır olmadığı her koşu incelenmeli.
+            + (
+                f". UYARI: {summary['record_errors']} sayfanın kaydı yazılamadı"
+                if summary.get("record_errors")
+                else ""
+            )
         )
 
 

@@ -75,6 +75,16 @@ from a residential IP also works from GitHub's Azure ranges (app/ingest/fetch.py
 states that caveat in full). A dry run that recorded nothing could not answer
 either question.
 
+**One unwritable row is one page's loss, not the sweep's.** Every page's
+persistence -- its extraction and its `scrape_runs` row -- runs inside a
+savepoint (`_record_attempt_guarded`), because the first scheduled Azure run
+proved the fetch layer's care was only half the job: TK came back 200 through
+the impersonated GET, and the INSERT recording that fact was refused by a
+column too narrow for the word `impersonate`. The error escaped the sweep, the
+CLI exited 1, and six carriers were never tried. The column is wider now
+(migration d7c4e1b90a83); the guard is what makes the next such failure cost
+one row instead of a run.
+
 Robots courtesy: this fetches one to two first-party sources per carrier, twice
 a day, sequentially, with a 2-4s pause between browser page loads (0.5-1.5s
 between the JSON calls, which cost the other end far less) and one browser
@@ -660,6 +670,55 @@ async def _record_attempt(
     )
 
 
+async def _record_attempt_guarded(
+    db: AsyncSession,
+    carrier: Carrier,
+    carrier_page: CarrierPage,
+    fetch: FetchResult,
+    summary: dict,
+    **kwargs,
+) -> None:
+    """`_record_attempt` inside a savepoint: one unwritable page, not a dead sweep.
+
+    Everything above this line already refuses to let one carrier's website
+    cost the others their run -- `_fetch_page` never raises, the direct
+    harvesters are wrapped, and every failure mode of someone else's server is
+    a row rather than an exception. The *writing* of that row had no such
+    guard, and the first real Azure run found the gap: `scrape_runs.method` was
+    ten characters wide, PR51's `impersonate` is eleven, and the truncation
+    error propagated out of the sweep and killed the CLI process. TK's fetch
+    had succeeded. Six carriers had not been tried yet. Nothing was committed.
+
+    The width is fixed (migration d7c4e1b90a83), but the shape of that failure
+    is what this function is for: a page whose telemetry cannot be persisted is
+    one page's loss, and the sweep continues to the next carrier.
+
+    A savepoint rather than a bare try/except, because a failed statement
+    poisons the whole Postgres transaction -- after it, every later carrier's
+    INSERT would fail too, on an error none of them caused. `begin_nested`
+    rolls back to the point this page started and leaves the transaction usable,
+    so the carriers already scanned keep their rows and the ones still to come
+    get their turn. The cost is that this page's extraction is rolled back with
+    it, which is correct: a campaign row whose `scrape_runs` provenance was
+    never written is a row nobody can audit.
+    """
+    try:
+        async with db.begin_nested():
+            await _record_attempt(db, carrier, carrier_page, fetch, summary, **kwargs)
+    except Exception as exc:  # noqa: BLE001 -- the whole point is not to raise
+        # Counted with `.get` because the summary dict is built by callers (the
+        # CLI, the tests) and a key they never heard of must not be the new way
+        # this loop crashes.
+        summary["record_errors"] = summary.get("record_errors", 0) + 1
+        logger.error(
+            "deep_scan_record_failed",
+            carrier=carrier.code,
+            url=carrier_page.fetch_url,
+            method=kwargs.get("method"),
+            error=f"{type(exc).__name__}: {exc}"[:500],
+        )
+
+
 async def _scan_carrier_page(
     db: AsyncSession,
     context,
@@ -673,7 +732,7 @@ async def _scan_carrier_page(
 ) -> None:
     started_at = datetime.now(timezone.utc)
     fetch = await _fetch_page(context, carrier_page)
-    await _record_attempt(
+    await _record_attempt_guarded(
         db,
         carrier,
         carrier_page,
@@ -778,7 +837,7 @@ async def _scan_direct_carriers(
                 harvested = DirectHarvest(
                     fetch=FetchResult(text=None, error=f"{type(exc).__name__}: {exc}")
                 )
-            await _record_attempt(
+            await _record_attempt_guarded(
                 db,
                 carrier,
                 carrier_page,
@@ -824,7 +883,18 @@ async def deep_scan(
     run (see the module docstring), so the cap defers work rather than
     discarding it.
     """
-    summary = {"scanned": 0, "changed": 0, "blocked": 0, "errors": 0, "skipped_static": 0}
+    summary = {
+        "scanned": 0,
+        "changed": 0,
+        "blocked": 0,
+        "errors": 0,
+        "skipped_static": 0,
+        # Pages whose row could not be written at all. Separate from `errors`,
+        # which counts pages whose *fetch* failed: this one is our fault, not
+        # the carrier's, and the two must not be added together in the workflow
+        # log the carrier list is maintained from.
+        "record_errors": 0,
+    }
 
     from app.core.config import get_settings
 
