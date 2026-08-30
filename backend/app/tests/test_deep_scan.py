@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from sqlalchemy import select
 
+from app.ingest import deep_scan as deep_scan_module
 from app.ingest.carriers import (
     CARRIER_MASTER,
     FETCH_METHODS,
@@ -315,6 +316,123 @@ async def test_a_very_long_error_is_truncated_rather_than_failing_the_insert(db_
         await db_session.execute(select(ScrapeRun).where(ScrapeRun.carrier_code == "QR"))
     ).scalar_one()
     assert len(run.error) == 2000
+
+
+async def test_the_method_column_holds_the_name_of_every_fetch_method(db_session):
+    """The regression the first Azure run of this sweep found. `impersonate` is
+    eleven characters and the column was ten wide, so the row recording TK's
+    first successful fetch is what killed the run."""
+    for index, method in enumerate(sorted(FETCH_METHODS)):
+        await record_run(
+            db_session,
+            carrier_code="TK",
+            url=f"https://www.turkishairlines.com/tr-tr/kampanyalar/?{index}",
+            started_at=NOW,
+            finished_at=NOW,
+            outcome="ok",
+            method=method,
+        )
+    await db_session.commit()
+
+    runs = (await db_session.execute(select(ScrapeRun))).scalars().all()
+    assert {run.method for run in runs} == set(FETCH_METHODS)
+
+
+# --- one unwritable row is not a dead sweep -------------------------------
+
+
+async def test_a_row_that_cannot_be_written_does_not_cost_the_other_carriers(
+    db_session, monkeypatch
+):
+    """The shape of the Azure failure, reproduced against a real database.
+
+    Not a raised Python exception -- a rejected INSERT, which is the harder
+    case: it aborts the Postgres transaction, so without a savepoint every
+    later carrier's write would fail too, on an error none of them caused. TK
+    here is unwritable; AJet and SQ must still come back with rows, and the
+    sweep must still commit.
+    """
+    from app.ingest.deep_scan import DirectHarvest, ExtractionBudget, _scan_direct_carriers
+
+    monkeypatch.setattr(deep_scan_module, "DIRECT_DELAY_RANGE_S", (0.0, 0.0))
+
+    async def harvest(_carrier_page) -> DirectHarvest:
+        return DirectHarvest(fetch=FetchResult(text=CAMPAIGN_TEXT, http_status=200))
+
+    monkeypatch.setattr(
+        deep_scan_module,
+        "DIRECT_HARVESTERS",
+        {code: harvest for code in ("TK", "VF", "SQ")},
+    )
+
+    real_record_run = deep_scan_module.record_run
+
+    async def record(db, **kwargs):
+        if kwargs["carrier_code"] == "TK":
+            # Longer than the column is wide, whatever that width is: the point
+            # is a database refusing the row, not this particular overflow.
+            kwargs["method"] = "impersonate" * 4
+        return await real_record_run(db, **kwargs)
+
+    monkeypatch.setattr(deep_scan_module, "record_run", record)
+
+    summary = {"scanned": 0, "changed": 0, "blocked": 0, "errors": 0, "record_errors": 0}
+    carriers = [CARRIER_MASTER[code] for code in ("TK", "VF", "SQ")]
+    await _scan_direct_carriers(
+        db_session,
+        carriers,
+        summary,
+        budget=ExtractionBudget(remaining=0),
+        extraction_enabled=False,
+    )
+    await db_session.commit()
+
+    assert summary["record_errors"] == 1, "the unwritable page is counted, not raised"
+    assert summary["scanned"] == 2, "the two carriers after it still ran"
+
+    runs = (await db_session.execute(select(ScrapeRun))).scalars().all()
+    assert sorted(run.carrier_code for run in runs) == ["SQ", "VF"]
+    assert all(run.outcome == "ok" for run in runs)
+
+
+async def test_a_failing_record_leaves_the_session_usable_for_the_next_page(
+    db_session, monkeypatch
+):
+    """The same guard against a plain exception -- a bug in our own code on the
+    way to the row, rather than the database refusing it."""
+    from app.ingest.deep_scan import DirectHarvest, ExtractionBudget, _scan_direct_carriers
+
+    monkeypatch.setattr(deep_scan_module, "DIRECT_DELAY_RANGE_S", (0.0, 0.0))
+
+    async def harvest(_carrier_page) -> DirectHarvest:
+        return DirectHarvest(fetch=FetchResult(text=CAMPAIGN_TEXT, http_status=200))
+
+    monkeypatch.setattr(
+        deep_scan_module, "DIRECT_HARVESTERS", {code: harvest for code in ("TK", "VF")}
+    )
+
+    real_record_run = deep_scan_module.record_run
+
+    async def record(db, **kwargs):
+        if kwargs["carrier_code"] == "TK":
+            raise RuntimeError("kayıt yazılamadı")
+        return await real_record_run(db, **kwargs)
+
+    monkeypatch.setattr(deep_scan_module, "record_run", record)
+
+    summary = {"scanned": 0, "changed": 0, "blocked": 0, "errors": 0, "record_errors": 0}
+    await _scan_direct_carriers(
+        db_session,
+        [CARRIER_MASTER[code] for code in ("TK", "VF")],
+        summary,
+        budget=ExtractionBudget(remaining=0),
+        extraction_enabled=False,
+    )
+    await db_session.commit()
+
+    assert summary["record_errors"] == 1
+    runs = (await db_session.execute(select(ScrapeRun))).scalars().all()
+    assert [run.carrier_code for run in runs] == ["VF"]
 
 
 # --- carrier registry -----------------------------------------------------

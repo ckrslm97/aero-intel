@@ -24,7 +24,11 @@ from app.pipeline.campaign_extract import (
     resolve_route,
     slugify_campaign,
 )
-from app.schemas.campaign import RawCampaignItem, parse_campaign_payload
+from app.schemas.campaign import (
+    RawCampaignItem,
+    extract_campaign_json,
+    parse_campaign_payload,
+)
 
 EK = CARRIER_MASTER["EK"]
 NOW = datetime(2026, 8, 28, 5, 0, tzinfo=timezone.utc)
@@ -397,6 +401,92 @@ async def test_a_campaigns_key_that_is_not_a_list_is_a_failed_page():
     assert result.succeeded is False
 
 
+# --- the shapes a real model actually answers in --------------------------
+#
+# The first Azure run of the deep scan got HTTP 200 out of turkishairlines.com
+# through the impersonated fetch, called the model, and then threw the whole
+# page away with `schema_error:campaign payload must be a JSON object`. The
+# campaigns were in the answer; the envelope was not. Each of these is a
+# wrapper a model puts around the right answer, and none of them is a reason to
+# re-fetch a carrier's page twice a day forever.
+
+
+async def test_a_bare_list_is_the_same_answer_with_the_envelope_left_off():
+    result = await _extract(json.dumps([SUMMER, ISTANBUL]))
+
+    assert result.succeeded is True
+    assert [c.campaign_name for c in result.campaigns] == [
+        "Summer fares to Europe",
+        "Dubai to Istanbul offer",
+    ]
+
+
+async def test_a_fenced_json_block_is_read_not_failed():
+    result = await _extract(f"```json\n{json.dumps({'campaigns': [SUMMER]})}\n```")
+
+    assert result.succeeded is True
+    assert result.count == 1
+
+
+async def test_a_fenced_bare_list_is_read_too():
+    result = await _extract(f"```\n{json.dumps([SUMMER])}\n```")
+
+    assert result.succeeded is True
+    assert result.count == 1
+
+
+async def test_prose_around_the_json_does_not_cost_the_page():
+    result = await _extract(
+        "Sayfada iki kampanya buldum, JSON olarak veriyorum:\n"
+        f"{json.dumps({'campaigns': [SUMMER, ISTANBUL]})}\n"
+        "Başka bir kampanya göremedim."
+    )
+
+    assert result.succeeded is True
+    assert result.count == 2
+
+
+async def test_prose_before_a_bare_list_still_finds_the_list():
+    """The preamble carries a `{` of its own -- the brace that opens first is
+    not the JSON, and picking it would be the failure this test is named for."""
+    result = await _extract(
+        'Cevap şu biçimde {"kampanya": ...} değil, düz liste olarak:\n'
+        f"{json.dumps([SUMMER])}"
+    )
+
+    assert result.succeeded is True
+    assert result.count == 1
+
+
+async def test_an_empty_bare_list_is_an_empty_page_not_a_failure():
+    """`[]` says exactly what `{"campaigns": []}` says. Failing it would keep
+    the page queued and re-ask a settled question on every scan."""
+    result = await _extract("[]")
+
+    assert result.succeeded is True
+    assert result.count == 0
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "",
+        "Bu sayfada kampanya yok.",
+        "```json\n{\"campaigns\": [\n```",  # fenced and truncated mid-answer
+        "<html><body>Access denied</body></html>",
+    ],
+)
+def test_text_with_no_json_in_it_is_still_nothing(raw):
+    """The leniency is about wrappers, not about guessing. Anything that is not
+    JSON comes back None and fails the page."""
+    assert extract_campaign_json(raw) is None
+
+
+def test_a_clean_object_is_read_whole_rather_than_out_of_a_slice():
+    payload = extract_campaign_json(json.dumps({"campaigns": [], "note": "yok"}))
+    assert payload == {"campaigns": [], "note": "yok"}
+
+
 async def test_no_model_configured_is_a_failed_page_not_a_heuristic_pass(monkeypatch):
     monkeypatch.setattr("app.llm.factory.get_raw_generator", lambda: None)
     result = await extract_campaigns_from_page(
@@ -502,10 +592,22 @@ def test_a_nameless_card_is_dropped_without_costing_the_page():
     assert page.invalid_items == 2
 
 
-@pytest.mark.parametrize("payload", [None, [], {"items": []}, {"campaigns": "Yaz"}])
+@pytest.mark.parametrize(
+    "payload", [None, "Yaz", 42, {"items": []}, {"campaigns": "Yaz"}]
+)
 def test_a_malformed_payload_raises_rather_than_being_half_believed(payload):
     with pytest.raises(ValueError):
         parse_campaign_payload(payload)
+
+
+def test_a_bare_list_is_wrapped_rather_than_refused():
+    """`[]` used to be in the list above. It is not malformed -- it is the
+    campaigns, unwrapped -- and the parser now says so; the prompt still asks
+    for the object shape."""
+    assert parse_campaign_payload([]).campaigns == []
+    page = parse_campaign_payload([{"campaign_name": "Yaz"}, {"discount_pct": 40}])
+    assert [c.campaign_name for c in page.campaigns] == ["Yaz"]
+    assert page.invalid_items == 1
 
 
 # --- the prompt -----------------------------------------------------------

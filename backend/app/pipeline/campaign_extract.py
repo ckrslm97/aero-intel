@@ -77,6 +77,7 @@ from app.schemas.campaign import (
     DATE_FIELDS,
     EVIDENCE_FIELDS,
     RawCampaignItem,
+    extract_campaign_json,
     parse_campaign_payload,
 )
 from app.taxonomy import COUNTRY_TO_REGION, REGION_LABELS_TR
@@ -838,12 +839,12 @@ async def extract_campaigns_from_page(
         )
         return PageExtraction(succeeded=False, reason="llm_call_error", llm_calls=1)
 
-    # The same JSON extractor the article path uses: models fence their output
-    # however firmly they are asked not to, and one page's formatting habit
-    # must not read as a different failure here than it does there.
-    from app.llm.classify import _extract_json
-
-    payload = _extract_json(response or "")
+    # The same leniency the article path has always had -- models fence their
+    # output however firmly they are asked not to, and one page's formatting
+    # habit must not read as a different failure here than it does there --
+    # plus the shape that habit takes on this prompt: the campaigns as a bare
+    # top-level list. See schemas/campaign.extract_campaign_json.
+    payload = extract_campaign_json(response or "")
     try:
         page = parse_campaign_payload(payload)
     except ValueError as exc:

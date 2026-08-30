@@ -35,9 +35,19 @@ class ScrapeRun(UUIDPrimaryKeyMixin, Base):
 
     carrier_code: Mapped[str] = mapped_column(String(6), index=True)
     url: Mapped[str] = mapped_column(String(500))
-    #: static | browser -- an httpx GET or a real chromium page load. Recorded
-    #: because the interesting comparison is which method got through.
-    method: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    #: static | api | impersonate | browser -- the four values of
+    #: `carriers.FETCH_METHODS`. Recorded because the interesting comparison is
+    #: which method got through: TK answers 200 to a curl_cffi handshake and
+    #: resets the connection for anything else.
+    #:
+    #: Widened from String(10) to String(20): the column was sized when the only
+    #: two values were `static` and `browser`, and the first real Azure run of
+    #: the deep scan died writing "impersonate" (11 chars) -- an INSERT that
+    #: took the whole sweep down with it. 20 is not a prediction that no method
+    #: will ever be longer; it is the width at which the name of a fetch method
+    #: stops being the constraint, and `deep_scan` no longer lets one failed row
+    #: abort the run either way.
+    method: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
     started_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
