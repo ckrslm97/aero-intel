@@ -33,6 +33,9 @@ export default defineConfig({
         // here -- it is a pixel-geometry surface, checked in a browser.
         "src/components/campaign-alert-strip.tsx",
         "src/components/campaign-analyst-table.tsx",
+        // The swimlane's clustered marker: geometry stays out of the runner,
+        // but the count, the list it opens and its keyboard exits do not.
+        "src/components/campaign-cluster-marker.tsx",
         "src/hooks/*.ts",
         "src/lib/campaigns.ts",
         "src/lib/format.ts",

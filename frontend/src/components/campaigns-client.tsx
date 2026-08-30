@@ -15,6 +15,10 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { AirlineLogo } from "@/components/airline-logo";
 import { CampaignAlertStrip } from "@/components/campaign-alert-strip";
 import { CampaignAnalystTable } from "@/components/campaign-analyst-table";
+import {
+  CampaignClusterMarker,
+  NewCampaignBadge,
+} from "@/components/campaign-cluster-marker";
 import { CampaignDrawer } from "@/components/campaign-drawer";
 import {
   DataSourceError,
@@ -32,6 +36,7 @@ import {
   confidenceBandLabel,
   EMPTY_CAMPAIGN_FILTERS,
   filterCampaigns,
+  groupDatelessCampaigns,
   hasActiveCampaignFilter,
   reviewRequiredCount,
   type CampaignFilters,
@@ -109,15 +114,31 @@ function labelFor(day: number): string {
 
 type Status = "live" | "upcoming" | "expired";
 
-/** What a campaign becomes on the grid. The three shapes are the three states
- * the data can actually be in, not three visual variants of one thing:
- *   bar   -- both sale dates known;
- *   open  -- a start but no published end, so the bar fades out;
- *   point -- no start date at all, so there is nothing to draw a bar *along*
- *            and the only honest mark is where we first saw it. */
+/** What a campaign becomes on the grid. The shapes are the states the data can
+ * actually be in, not visual variants of one thing:
+ *   bar     -- both sale dates known;
+ *   open    -- a start but no published end, so the bar fades out;
+ *   point   -- no start date at all, so there is nothing to draw a bar *along*
+ *              and the only honest mark is where we first saw it;
+ *   cluster -- several points that would land on the same day in the same
+ *              lane. One day is one column, and a column holds one mark. */
 type Placement =
   | { kind: "bar" | "open"; promo: PromotionOut; start: number; end: number; status: Status }
-  | { kind: "point"; promo: PromotionOut; at: number; status: Status };
+  | { kind: "point"; promo: PromotionOut; at: number; status: Status }
+  | { kind: "cluster"; key: string; day: string; items: PromotionOut[]; at: number };
+
+/** Which side of a mark the "Yeni" badge hangs off. Right by default; left for
+ * the last few columns, where the timeline card's `overflow-hidden` would cut
+ * a right-hand badge in half. */
+function badgeSideFor(lastColumn: number): "after" | "before" {
+  return lastColumn >= DAY_COUNT - 3 ? "before" : "after";
+}
+
+/** The column a placement starts in, whatever its shape. */
+function placementStart(placement: Placement): number {
+  if (placement.kind === "point" || placement.kind === "cluster") return placement.at;
+  return placement.start;
+}
 
 /** Deliberately NOT `promo.status` from the API.
  *
@@ -293,13 +314,36 @@ export function CampaignsClient() {
    * the footer says the second thing in words. */
   const lanes = useMemo(() => {
     const byCarrier = new Map<string, Placement[]>();
-    for (const promo of filtered) {
+    const push = (code: string, placed: Placement) => {
+      const bucket = byCarrier.get(code);
+      if (bucket) bucket.push(placed);
+      else byCarrier.set(code, [placed]);
+    };
+
+    // Dateless campaigns are bucketed by (carrier, detection day) BEFORE they
+    // are placed, because that bucket is exactly one column of this grid and a
+    // column can hold one mark. Bars and open bars go through `place`
+    // untouched -- see groupDatelessCampaigns.
+    const { dated, singles, clusters } = groupDatelessCampaigns(filtered);
+    for (const promo of [...dated, ...singles]) {
       const placed = place(promo, windowStart, today);
       if (!placed) continue;
-      const bucket = byCarrier.get(promo.airline_code);
-      if (bucket) bucket.push(placed);
-      else byCarrier.set(promo.airline_code, [placed]);
+      push(promo.airline_code, placed);
     }
+    for (const cluster of clusters) {
+      // Every item shares the day, so the whole cluster is inside the window
+      // or outside it together.
+      const at = parseDay(cluster.day) - windowStart;
+      if (Number.isNaN(at) || at < 0 || at >= DAY_COUNT) continue;
+      push(cluster.airlineCode, {
+        kind: "cluster",
+        key: cluster.key,
+        day: cluster.day,
+        items: cluster.items,
+        at,
+      });
+    }
+
     return [...byCarrier.entries()]
       .map(([code, items]) => ({
         code,
@@ -307,7 +351,7 @@ export function CampaignsClient() {
         color: BRAND[code]?.color ?? "var(--primary)",
         // Sorted by start so CSS grid's auto-placement packs overlapping
         // campaigns into stacked rows instead of interleaving them.
-        items: items.sort((a, b) => (a.kind === "point" ? a.at : a.start) - (b.kind === "point" ? b.at : b.start)),
+        items: items.sort((a, b) => placementStart(a) - placementStart(b)),
       }))
       // TK first, always: this is a Turkish Airlines desk's page, and its own
       // lane is the baseline every rival lane is read against.
@@ -924,6 +968,13 @@ function Legend() {
         <span className="size-3 rotate-45 rounded-[2px] bg-foreground" />
         Tarihi açıklanmayan kampanya, tespit gününde
       </span>
+      <span className="flex items-center gap-1.5">
+        <span className="flex items-center gap-1 rounded-full border border-border bg-card px-1.5 py-0.5">
+          <span className="size-2.5 rotate-45 rounded-[2px] bg-foreground" />
+          <span className="text-[10px] font-bold leading-none tabular-nums">3</span>
+        </span>
+        Aynı gün açıklanan birden çok tarihsiz kampanya — listeyi açmak için tıklayın
+      </span>
       <span>Renk taşıyıcının kendi markasıdır; durumu ışık anlatır.</span>
     </div>
   );
@@ -971,7 +1022,20 @@ function Lane({
         }}
       >
         {lane.items.map((item) =>
-          item.kind === "point" ? (
+          item.kind === "cluster" ? (
+            <CampaignClusterMarker
+              key={item.key}
+              items={item.items}
+              day={item.day}
+              airlineCode={lane.code}
+              airlineName={lane.name}
+              color={lane.color}
+              gridColumn={`${item.at + 1} / ${item.at + 2}`}
+              badgeSide={badgeSideFor(item.at)}
+              isNew={isNew}
+              onSelect={onSelect}
+            />
+          ) : item.kind === "point" ? (
             <PointMarker
               key={item.promo.id}
               item={item}
@@ -1047,7 +1111,11 @@ function Bar({
       onClick={() => onSelect(promo)}
       style={style}
       className={cn(
-        "relative h-6 self-center rounded-md px-2 text-left text-[10px] font-medium truncate transition-all duration-200 hover:-translate-y-0.5 hover:glow-soft motion-reduce:transform-none motion-reduce:transition-none",
+        // NOT `truncate`: that put `overflow-hidden` on the button, which
+        // clipped its own "Yeni" badge back inside the bar and onto the title.
+        // The title span below truncates itself instead, which is the only
+        // thing that ever needed clipping.
+        "relative flex h-6 items-center self-center rounded-md px-2 text-left text-[10px] font-medium transition-all duration-200 hover:-translate-y-0.5 hover:glow-soft motion-reduce:transform-none motion-reduce:transition-none",
         open && "rounded-l-md rounded-r-none",
         status === "upcoming" && !open && "border",
         status === "expired" && !open && "opacity-40",
@@ -1059,7 +1127,7 @@ function Bar({
       {span >= LABEL_MIN_SPAN && (
         <span
           className={cn(
-            "truncate",
+            "min-w-0 truncate",
             // White survives PC's yellow and EY's gold; a 15% wash does not
             // survive white, so an outlined upcoming bar keeps body text.
             status === "upcoming" && !open
@@ -1070,18 +1138,17 @@ function Bar({
           {promo.title_tr}
         </span>
       )}
-      {fresh && (
-        <span className="absolute -top-2 right-0 rounded-full bg-signal px-1.5 py-px text-[9px] font-bold uppercase text-white">
-          Yeni
-        </span>
-      )}
+      {fresh && <NewCampaignBadge side={badgeSideFor(end)} />}
     </button>
   );
 }
 
 /** A campaign whose start date nobody published. There is no window to draw,
  * so it is marked at the only day we can stand behind -- the day we saw it --
- * and shaped differently from every bar so it is never read as a one-day sale. */
+ * and shaped differently from every bar so it is never read as a one-day sale.
+ *
+ * Only when it is alone on its day in its lane. Two or more become one
+ * `CampaignClusterMarker`, because the column they share can hold one mark. */
 function PointMarker({
   item,
   color,
@@ -1109,11 +1176,7 @@ function PointMarker({
         className={cn("size-3 rotate-45 rounded-[2px]", fresh && "glow animate-pulse-once")}
         style={{ backgroundColor: color }}
       />
-      {fresh && (
-        <span className="absolute -top-2 -right-1 rounded-full bg-signal px-1.5 py-px text-[9px] font-bold uppercase text-white">
-          Yeni
-        </span>
-      )}
+      {fresh && <NewCampaignBadge side={badgeSideFor(item.at)} />}
     </button>
   );
 }
