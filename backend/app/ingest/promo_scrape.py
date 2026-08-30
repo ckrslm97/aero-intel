@@ -11,23 +11,25 @@ only the carrier that actually serves campaign data is scraped:
     an airline stating its own sale window, which is strictly better than
     anything an extractor can recover from a news report about it.
 
-Deliberately NOT scraped, because they cannot be:
+Not scraped here, and no longer for the reason this docstring used to give:
 
-  * Turkish Airlines (TK) -- https://www.turkishairlines.com/tr-tr/ucus-firsatlari/
-    BOT-WALLED. Over HTTP/2 the connection is reset mid-stream
-    (`INTERNAL_ERROR`, 0 bytes); forced to HTTP/1.1 with full browser headers
-    it accepts the connection and then never responds (20s timeout, 0 bytes).
-    That is TLS/behavioural fingerprinting, not a missing header -- no
-    combination of User-Agent, Accept or Accept-Language gets past it. Same
-    result on the alternate /tr-tr/promosyonlar/ path.
-  * AJet (VF) -- https://www.ajet.com/tr/kampanyalar (and /tr/firsatlar)
-    BOT-WALLED, identically: HTTP/2 stream reset, HTTP/1.1 hang.
+  * Turkish Airlines (TK) -- BOT-WALLED to httpx, as recorded below: HTTP/2
+    stream reset (`INTERNAL_ERROR`, 0 bytes), and a 20s hang when forced to
+    HTTP/1.1 with full browser headers. The conclusion drawn from that -- "TLS
+    fingerprinting, so it needs a real headless browser" -- was half right. It
+    is TLS fingerprinting, and a browser is not what fixes it: a plain GET
+    carrying Chrome's TLS handshake gets HTTP 200 and a fully server-rendered
+    campaign list. See app/ingest/fetch.py and app/ingest/tk_campaigns.py.
+  * AJet (VF) -- BOT-WALLED identically on www.ajet.com, and irrelevant: the
+    CMS gateway behind that site answers an unauthenticated JSON POST with
+    every campaign and its ticketing and travel windows as separate fields.
+    See app/ingest/ajet_campaigns.py.
 
-Both would need a real headless browser. Shipping a requests-based scraper for
-them would produce a module that returns zero rows forever while looking like
-working coverage, which is worse than not having one -- so TK and AJet reach
-the campaign timeline through the article-derived path
-(app/pipeline/promotions.py), which is the backbone for exactly this reason.
+Both now reach the campaign timeline through app/ingest/deep_scan.py rather
+than only through the article-derived path (app/pipeline/promotions.py). This
+module stays Pegasus-only because its parser is tuned to flypgs markup and
+running one carrier through two modules would be duplicate load for identical
+rows -- not because the other two cannot be read.
 
 Also checked and skipped: Pegasus's press room
 (https://www.flypgs.com/basin-odasi/duyurular) is equally server-rendered, but

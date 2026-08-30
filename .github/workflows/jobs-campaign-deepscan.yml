@@ -1,20 +1,25 @@
 name: Campaign deep scan
 
-# Playwright sweep of the carrier campaign pages that a plain GET cannot read
-# (app/ingest/carriers.py: TK, AJet, QR, EK, EY, BA -- Pegasus is static and
-# stays with jobs-promotions.yml). Loads each page in a real Chromium, hashes
-# the extracted text, and writes one scrape_runs row per attempt. No LLM call
-# is made here.
+# Sweep of every carrier campaign source that a plain httpx GET cannot read
+# (app/ingest/carriers.py -- Pegasus is static and stays with
+# jobs-promotions.yml). Three fetch methods, cheapest first:
+#   * api          AJet's CMS gateway and SQ's fare-deal endpoint. Plain httpx,
+#                  structured JSON, no browser and no LLM call at all.
+#   * impersonate  TK, via curl_cffi with Chrome's TLS fingerprint. No browser.
+#   * browser      QR, EK, EY, BA -- their offer cards are JS-rendered, so the
+#                  bytes are not enough even once they arrive.
+# Each source is hashed and written to scrape_runs; changed ones are handed to
+# the extraction chain in the same run.
 #
 # Twice a day, and deliberately not more, for three separate reasons that all
 # point the same way:
-#   * LLM budget. Every page whose hash moves becomes an extraction call on the
-#     shared Groq free tier. Two scans a day across seven carriers is a ceiling
-#     of ~14 change events; a 30-minute cadence like jobs-promotions.yml would
-#     be ~670, and campaign pages do not change 670 times a day.
-#   * Site courtesy. These are first-party marketing pages on origins that
-#     already treat us as suspicious. Fourteen page views a day is less than
-#     one interested customer generates.
+#   * LLM budget. Every LLM-backed page whose hash moves becomes a call on the
+#     shared Groq free tier. Two scans a day across the five such pages is a
+#     ceiling of ~10 change events; a 30-minute cadence like jobs-promotions.yml
+#     would be ~480, and campaign pages do not change 480 times a day.
+#   * Site courtesy. These are first-party marketing pages and content APIs on
+#     origins that already treat us as suspicious. A dozen requests a day is
+#     less than one interested customer generates.
 #   * Cron delay tolerance. This repo measures GitHub's scheduler at 2-2.75h
 #     late (see jobs-daily-edition.yml). 05:00 and 15:00 UTC are twelve hours
 #     apart precisely so a two-hour drift on either entry still leaves the two
