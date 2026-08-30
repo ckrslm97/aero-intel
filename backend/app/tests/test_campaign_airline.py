@@ -167,6 +167,14 @@ def test_a_product_promotion_is_never_published_as_a_fare_campaign(title, text):
         ("Skywards statü eşitleme", "Status match başvuruları başladı."),
         ("Puan transferi kampanyası", "Kredi kartı puanlarınızı mil'e çevirin."),
         ("Double miles this autumn", "Earn bonus miles on every flight."),
+        # The live QR leak: neither headline contains a single term the list
+        # knew before -- no miles, no points, no programme the rulepack had
+        # heard of. "Privilege Club" and the member-audience dative are what
+        # decide it, in whichever language the source wrote it.
+        ("Qatar Airways, Privilege Club üyelerine 10% indirim sunuyor", ""),
+        ("Qatar Airways Offering 10% Discount To Privilege Club Members", ""),
+        ("Etihad Guest ile tanışın", "Programa katılım ücretsiz."),
+        ("Üyelere özel %15 indirim", "Programa katılan herkes yararlanır."),
     ],
 )
 def test_a_loyalty_promotion_is_never_published_as_a_fare_campaign(title, text):
@@ -175,6 +183,21 @@ def test_a_loyalty_promotion_is_never_published_as_a_fare_campaign(title, text):
     result = validate_campaign(title, _campaign(), today=TODAY, text=text)
     assert result.state is OutcomeState.NOT_APPLICABLE
     assert result.reason == "business_class:LOYALTY_PROMOTION"
+
+
+def test_alliance_membership_prose_is_not_member_discount_vocabulary():
+    """"Star Alliance üyesi Lufthansa" is how aviation prose names a carrier,
+    and it appears on genuine fare campaigns. The member-audience terms are
+    exact dative-plural forms ("üyelerine") rather than a "üye" stem precisely
+    so this sentence survives them."""
+    result = validate_campaign(
+        "Star Alliance üyesi LOT, Varşova hattında %25 indirim başlattı",
+        _campaign(),
+        today=TODAY,
+        text="Kampanya 25-27 Ağustos arasında satışta.",
+    )
+    assert result.state is OutcomeState.CLASSIFIED
+    assert result.details["business_class"] == "ACTIVE_CAMPAIGN"
 
 
 @pytest.mark.parametrize(
