@@ -277,6 +277,97 @@ FREE_RSS_SOURCES: list[SourceSeed] = [
     SourceSeed("Turizm Günlüğü", "https://www.turizmgunlugu.com/feed/", "rss", "other", 0.6, language="tr"),
     # Small volume, analytical -- demand and market-shift pieces.
     SourceSeed("Turizm DataBank", "https://www.turizmdatabank.com/feed/", "rss", "other", 0.6, language="tr"),
+    # ---------------------------------------------------------------------
+    # Round-9: fare-campaign radars. Every desk above is a general aviation
+    # desk that happens to mention a sale now and then; these were selected
+    # the other way round -- fetched live on 2026-08-30, then *sampled*, and
+    # kept only when the majority of recent items were actual fare campaigns
+    # (a sale, a discount, a booking window) rather than loyalty news, fleet
+    # news or product launches. The measured ratio is recorded per source
+    # below, because it is the number that decides whether a feed is earning
+    # its place in the enrichment budget, and it is the number nobody can
+    # reconstruct six months from now without re-doing the sampling.
+    #
+    # These flow through the existing article pipeline (ingest -> enrich ->
+    # pipeline/promotions.py). They are the *corroboration* half of campaign
+    # detection: the carrier pages in app/ingest/carriers.py are the official
+    # statement, and a trade desk reporting the same sale is the second source
+    # that promo_dedup.rescore_for_corroboration counts.
+    #
+    # NOTE on the Google News queries: news.google.com answers HTTP 400 to a
+    # raw non-ASCII `q`. Every query below is percent-encoded for that reason,
+    # not for tidiness -- decoding one "to make it readable" breaks the feed.
+    # ---------------------------------------------------------------------
+    # Turkish carrier campaign radars. ~95% / ~100% / ~90% fare content in the
+    # 2026-08-30 sample -- by a distance the densest campaign sources this
+    # product has, because a Turkish "kampanya" headline is almost always a
+    # fare sale rather than a loyalty promotion.
+    SourceSeed(
+        "Google News · AJet Kampanya",
+        "https://news.google.com/rss/search?q=AJet+kampanya&hl=tr&gl=TR&ceid=TR:tr",
+        "rss", "airline", 0.5, tier="aggregator", language="tr",
+    ),
+    SourceSeed(
+        "Google News · Pegasus Kampanya",
+        "https://news.google.com/rss/search?q=Pegasus+kampanya+bilet&hl=tr&gl=TR&ceid=TR:tr",
+        "rss", "airline", 0.5, tier="aggregator", language="tr",
+    ),
+    SourceSeed(
+        "Google News · THY Kampanya",
+        "https://news.google.com/rss/search?q=%22THY%22+kampanya&hl=tr&gl=TR&ceid=TR:tr",
+        "rss", "airline", 0.5, tier="aggregator", language="tr",
+    ),
+    # Turkish aviation desks, queried for campaigns rather than read whole.
+    # WordPress's `?s=<term>&feed=rss2` search feed is the mechanism: it turns
+    # a general desk into a campaign radar without adding its whole output to
+    # the ingest budget. AirlineHaber and Air News Times are already seeded
+    # above as full feeds; these are the *campaign* slices of the same desks,
+    # which is why both entries can coexist -- the dedupe layer collapses an
+    # item that arrives through both.
+    # ~80% / ~80% / ~60% fare content, sampled 2026-08-30.
+    SourceSeed(
+        "Hava Sosyal Medya · Kampanya",
+        "https://havasosyalmedya.com/?s=kampanya&feed=rss2",
+        "rss", "other", 0.55, language="tr",
+    ),
+    SourceSeed(
+        "AirlineHaber · Kampanya",
+        "https://www.airlinehaber.com/?s=kampanya&feed=rss2",
+        "rss", "other", 0.6, language="tr",
+    ),
+    SourceSeed(
+        "Air News Times · Kampanya",
+        "https://www.airnewstimes.com/?s=kampanya&feed=rss2",
+        "rss", "other", 0.45, language="tr",
+    ),
+    # Gulf-carrier sale coverage. Live and Let's Fly, Head for Points, One Mile
+    # at a Time and View from the Wing were all sampled for this beat and
+    # rejected at 97-100% loyalty content -- award charts and status runs, not
+    # fares. Live from a Lounge is the one that came back the other way: ~80%
+    # fare content, with Etihad and Qatar sale windows in the headlines
+    # themselves, which is exactly what pipeline/promotions.py reads.
+    SourceSeed(
+        "Live from a Lounge · Sale Fares",
+        "https://livefromalounge.com/?s=sale+fares&feed=rss2",
+        "rss", "airline", 0.55,
+    ),
+    # English-language carrier radars. Lower ratios and lower trust to match:
+    # the Etihad query samples ~75%, and the Qatar one ~50% because
+    # "Qatar Airways sale" is a promo-code SEO term and half the results are
+    # coupon-farm rewrites. Kept because the relevance gate and the confidence
+    # scorer are the right filters for that, and because QR/EY are the two
+    # carriers whose own pages this product still cannot read without a
+    # browser.
+    SourceSeed(
+        "Google News · Etihad Flash Sale",
+        "https://news.google.com/rss/search?q=%22Etihad%22+flash+sale&hl=en-US&gl=US&ceid=US:en",
+        "rss", "airline", 0.5, tier="aggregator",
+    ),
+    SourceSeed(
+        "Google News · Qatar Airways Sale Fares",
+        "https://news.google.com/rss/search?q=%22Qatar+Airways%22+sale+fares&hl=en-US&gl=US&ceid=US:en",
+        "rss", "airline", 0.45, tier="aggregator",
+    ),
 ]
 
 # Documented drops -- candidates fetched at round-7 build time that failed the
@@ -354,9 +445,19 @@ FREE_RSS_SOURCES: list[SourceSeed] = [
 #   DHMİ                  no feed published (HTML newsroom only)
 #   SHGM                  https://web.shgm.gov.tr/tr/rss            200 but the BODY is a 404 page
 #                                                                   (text/html) -- status code lies
-#   THY / Pegasus / AJet  no RSS at all. Their campaign pages are plain HTML, so the campaign
-#                         tracking feature will have to scrape them directly -- Air News Times
-#                         above is the interim proxy for TR campaign announcements.
+#   THY / Pegasus / AJet  no RSS at all. Their campaign pages are read directly instead --
+#                         see app/ingest/carriers.py, which as of round 9 reaches all three.
+# Fare-deal candidates sampled at round 9 (2026-08-30) and dropped:
+#   secretflying.com/feed           403 (Cloudflare)
+#   executivetraveller.com/feed     403 (Cloudflare)
+#   ucuzabilet.com/blog/feed        403 (Cloudflare)
+#   Head for Points                 200, real feed, ~100% loyalty content -- Avios and status,
+#                                   not fares. Rejected on content, not reachability.
+#   One Mile at a Time / Live and Let's Fly (already seeded above as general desks)
+#                                   sampled at ~97% loyalty for the fare beat; kept where they
+#                                   are, not promoted into the campaign radars.
+#   Simple Flying / AeroTime / AirlineGeeks  ~0% fare-campaign content when sampled for it.
+#   Lufthansa, KLM English RSS      0 bytes. The endpoint answers, with nothing in it.
 # Off-topic / too broad to be worth the ingest budget: Economist Business,
 # BBC Business, MercoPress, Flying Magazine, Rotor & Wing, Aerospace Testing
 # International, Aerospace Manufacturing & Design -- all returned valid feeds

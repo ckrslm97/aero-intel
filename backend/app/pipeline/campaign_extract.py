@@ -656,15 +656,43 @@ def _summary_for(item: RawCampaignItem, values: dict[str, date | None]) -> str:
     clause here is a field that survived validation, so the summary cannot say
     anything the row does not.
     """
+    return compose_summary(
+        discount_pct=item.discount_pct,
+        price_floor=item.price_floor,
+        currency=item.currency,
+        promo_code=item.promo_code,
+        values=values,
+    )
+
+
+def compose_summary(
+    *,
+    discount_pct: int | None,
+    price_floor: float | None,
+    currency: str | None,
+    promo_code: str | None,
+    values: dict[str, date | None],
+    extra: str | None = None,
+) -> str:
+    """The summary sentence, from fields rather than from a RawCampaignItem.
+
+    Shared with the structured path (`build_structured_campaign`), which has
+    the same fields and no model answer to carry them in. `extra` is one
+    leading clause a structured source can state that no prose has -- SQ's
+    cabin, for instance -- and it goes first because it qualifies everything
+    after it.
+    """
     parts: list[str] = []
-    if item.discount_pct is not None:
-        parts.append(f"%{item.discount_pct} indirim")
-    if item.price_floor is not None and item.currency:
-        parts.append(f"{item.price_floor:g} {item.currency} taban fiyat")
+    if extra:
+        parts.append(extra)
+    if discount_pct is not None:
+        parts.append(f"%{discount_pct} indirim")
+    if price_floor is not None and currency:
+        parts.append(f"{price_floor:g} {currency} taban fiyat")
     parts.extend(_window_phrase("Satış", values.get("booking_start"), values.get("booking_end")))
     parts.extend(_window_phrase("Seyahat", values.get("travel_start"), values.get("travel_end")))
-    if item.promo_code:
-        parts.append(f"promosyon kodu {item.promo_code}")
+    if promo_code:
+        parts.append(f"promosyon kodu {promo_code}")
     if not parts:
         return ""
     # Not capitalised: the first clause is usually "%30 indirim", and
@@ -944,6 +972,295 @@ async def extract_campaigns_from_page(
         succeeded=True,
         dropped=tuple(dropped),
         llm_calls=1,
+    )
+
+
+# --- the structured path: same chain, no model -------------------------------
+#
+# Two carriers publish their campaigns as JSON with the windows in their own
+# labelled fields (app/ingest/ajet_campaigns.py, app/ingest/sq_campaigns.py).
+# For those, links 1 and 2 of the chain -- the LLM and the schema -- have
+# nothing to do: there is no prose to read and no answer to validate the shape
+# of. What is left is links 3 to 5, which is exactly what this function runs.
+#
+# It is not a shortcut around the rule layer. `validate_campaign` still decides
+# whether each item is a fare campaign, the deterministic date parser still
+# reads every window, and `resolve_route` still refuses to invent a scope. The
+# only thing removed is the guess, and with it the LLM call.
+
+#: "30-31 Mart 2026" -- a two-day ticketing window written with one month and
+#: one year, which is AJet's single most common shape. `find_dates_flagged`
+#: reads it as one date (the 31st) because the leading "30-" is not a date on
+#: its own, and taking only that would publish a one-day window for a two-day
+#: sale. Narrow on purpose: both numbers, one month name, one 4-digit year,
+#: anchored at the start of the field. Anything else falls through to the
+#: general parser.
+_TR_SHORT_DAY_RANGE = re.compile(
+    r"^\s*(\d{1,2})\s*[-–—]\s*(\d{1,2})\s+([^\W\d_]+)\s+(\d{4})", re.UNICODE
+)
+
+
+def parse_window(raw: str | None, *, default_year: int) -> tuple[date | None, date | None, bool]:
+    """A carrier's own date-range field -> (start, end, year_was_inferred).
+
+    Same reading as `promo_scrape.parse_validity`, and deliberately so: two
+    dates are a range in whatever order they appear, and ONE date alone is the
+    END of an open-ended run ("30 Kasım'a kadar"), because guessing a start
+    would put a bar somewhere the carrier never said it was.
+
+    The one addition is `_TR_SHORT_DAY_RANGE` -- see above.
+    """
+    if not raw or not raw.strip():
+        return None, None, False
+
+    short = _TR_SHORT_DAY_RANGE.match(raw)
+    if short is not None:
+        first_day, last_day, month_word, year = short.groups()
+        expanded = f"{first_day} {month_word} {year} - {last_day} {month_word} {year}"
+        parsed = find_dates_flagged(expanded, default_year)
+        if len(parsed) >= 2:
+            return parsed[0][1], parsed[1][1], False
+
+    parsed = find_dates_flagged(raw, default_year)
+    inferred = any(flag for _offset, _value, flag in parsed)
+    if len(parsed) >= 2:
+        first, second = parsed[0][1], parsed[1][1]
+        return (first, second, inferred) if second >= first else (second, first, inferred)
+    if len(parsed) == 1:
+        return None, parsed[0][1], inferred
+    return None, None, False
+
+
+@dataclass(frozen=True)
+class StructuredCampaign:
+    """One campaign as a structured carrier feed states it.
+
+    Every field is either copied verbatim from a labelled field of the
+    carrier's own API or left None. Nothing here is inferred from prose, which
+    is the whole difference between this and `RawCampaignItem`.
+    """
+
+    campaign_name: str
+    #: The row's own URL. Unlike the page path this is already unique per
+    #: campaign (a CMS detail link, a fare deal's share URL), so it is not run
+    #: through `campaign_url` a second time by the builder.
+    url: str
+    #: What the rule layer reads and what the dates are quoted against. For a
+    #: JSON source this is the carrier's own description text, tags stripped.
+    body_text: str = ""
+    booking_text: str | None = None
+    travel_text: str | None = None
+    discount_pct: int | None = None
+    price_floor: float | None = None
+    currency: str | None = None
+    cabin: str | None = None
+    promo_code: str | None = None
+    origin: str | None = None
+    destination: str | None = None
+    campaign_type: str | None = None
+    #: Stated rather than judged, for a feed whose shape settles the question.
+    #: `None` means "ask `validate_campaign`", which is what a prose-carrying
+    #: source like AJet does.
+    business_class: str | None = None
+    #: One extra clause for the summary sentence; see `compose_summary`.
+    summary_prefix: str | None = None
+    extra_attrs: dict = field(default_factory=dict)
+
+
+def build_structured_campaign(
+    entry: StructuredCampaign,
+    *,
+    carrier,
+    detected_at: datetime,
+    today: date,
+    source_name: str,
+    source_quality: float = 1.0,
+    content_hash: str | None = None,
+) -> tuple[ExtractedCampaign | None, str | None]:
+    """Links 3-5 of the chain over one structured record.
+
+    Returns `(campaign, None)` when it survives, `(None, reason)` when the rule
+    layer drops it -- the same two outcomes `extract_campaigns_from_page`
+    produces per item, so both paths feed `deep_scan`'s counters identically.
+
+    **On the confidence inputs**, because two of the five are judgement calls
+    that a reader deserves to see argued rather than assumed:
+
+    `classifier_certainty` is 1.0. In the LLM path that component is
+    `_citation_ratio` -- how much of what the model asserted it was willing to
+    quote the page for. Here every asserted value *is* a quote: it was copied
+    out of a field the carrier labelled `TicketingDates` or
+    `faredealOriginAirportCode`. There is no interpretation step to be
+    uncertain about, so claiming less would understate what we know.
+
+    `signal_agreement` is None, which the scorer reads as neutral rather than
+    as disagreement. That component measures the deterministic parser agreeing
+    with the model, and here there is no model to agree with. Feeding it 1.0
+    would be counting one signal twice.
+    """
+    default_year = detected_at.year
+    booking_start, booking_end, booking_inferred = parse_window(
+        entry.booking_text, default_year=default_year
+    )
+    travel_start, travel_end, travel_inferred = parse_window(
+        entry.travel_text, default_year=default_year
+    )
+    values: dict[str, date | None] = {
+        "booking_start": booking_start,
+        "booking_end": booking_end,
+        "travel_start": travel_start,
+        "travel_end": travel_end,
+    }
+
+    rule_input = CampaignExtraction(
+        airline_code=carrier.code,
+        discount_pct=entry.discount_pct,
+        sale_starts=booking_start,
+        sale_ends=booking_end,
+        travel_starts=travel_start,
+        travel_ends=travel_end,
+        markets={},
+    )
+    judged_text = f"{entry.campaign_name}\n{entry.body_text}".strip()
+    business_class = entry.business_class
+    if business_class is None:
+        verdict = validate_campaign(
+            entry.campaign_name, rule_input, today=today, text=judged_text
+        )
+        if not verdict.is_classified:
+            return None, verdict.reason or "rejected"
+        business_class = verdict.details.get("business_class") or "ACTIVE_CAMPAIGN"
+        classification_reason = verdict.details.get("classification_reason") or ""
+    else:
+        # A feed whose shape answers the question the rulepacks ask of prose.
+        # Stated here rather than inferred, and the reason says which feed and
+        # why, so it reads the same way in the drawer as a rule verdict does.
+        classification_reason = (
+            f"{carrier.display_name} yapılandırılmış kaynağından doğrudan alındı; "
+            f"iş sınıfı kaynağın veri şeklinden belirlendi ({business_class})."
+        )
+
+    route = resolve_route(entry.origin, entry.destination, text=judged_text)
+
+    evidence: dict = {}
+    for name, raw_text, resolved, inferred in (
+        ("booking_start", entry.booking_text, booking_start, booking_inferred),
+        ("booking_end", entry.booking_text, booking_end, booking_inferred),
+        ("travel_start", entry.travel_text, travel_start, travel_inferred),
+        ("travel_end", entry.travel_text, travel_end, travel_inferred),
+    ):
+        if resolved is None:
+            continue
+        evidence[name] = {
+            "value": resolved.isoformat(),
+            "source_text": raw_text,
+            "confidence": 0.7 if inferred else 1.0,
+            **({"inferred_year": True} if inferred else {}),
+        }
+    for name, value in (
+        ("discount_pct", entry.discount_pct),
+        ("price_floor", entry.price_floor),
+        ("currency", entry.currency),
+        ("cabin", entry.cabin),
+        ("promo_code", entry.promo_code),
+    ):
+        if value is None:
+            continue
+        evidence[name] = {
+            "value": value,
+            "source_text": entry.campaign_name,
+            "confidence": 1.0,
+        }
+
+    flags: dict = {}
+    inferred_fields = [
+        name
+        for name, inferred in (
+            ("booking_start", booking_inferred and booking_start is not None),
+            ("booking_end", booking_inferred and booking_end is not None),
+            ("travel_start", travel_inferred and travel_start is not None),
+            ("travel_end", travel_inferred and travel_end is not None),
+        )
+        if inferred
+    ]
+    if inferred_fields:
+        flags["inferred_year"] = True
+        flags["inferred_year_fields"] = inferred_fields
+
+    completeness = 0
+    if booking_start or booking_end:
+        completeness += 1
+    if route.scope:
+        completeness += 1
+    if entry.discount_pct is not None or entry.price_floor is not None or entry.promo_code:
+        completeness += 1
+
+    confidence = score(
+        ConfidenceInput(
+            source_tier="official" if source_quality >= 0.9 else "trade",
+            classifier_certainty=1.0,
+            required_fields_present=completeness,
+            required_fields_total=len(REQUIRED_FIELDS),
+            signal_agreement=None,
+            source_count=1,
+        )
+    )
+
+    attrs = {
+        key: value
+        for key, value in {
+            "cabin": entry.cabin,
+            "promo_code": entry.promo_code,
+            "currency": entry.currency,
+            "price_floor": entry.price_floor,
+            "source_quality": source_quality,
+            # The one attribute the LLM path can never carry: this row was not
+            # read by a model at all. Worth being able to filter on when the
+            # two paths' precision is compared.
+            "extraction_method": "structured",
+            **entry.extra_attrs,
+        }.items()
+        if value is not None
+    }
+
+    return (
+        ExtractedCampaign(
+            campaign_name=entry.campaign_name,
+            url=entry.url,
+            carrier_code=carrier.code,
+            carrier_name=carrier.display_name,
+            summary_tr=compose_summary(
+                discount_pct=entry.discount_pct,
+                price_floor=entry.price_floor,
+                currency=entry.currency,
+                promo_code=entry.promo_code,
+                values=values,
+                extra=entry.summary_prefix,
+            ),
+            campaign_type=entry.campaign_type,
+            business_class=business_class,
+            classification_reason=_reason_with_evidence(
+                classification_reason, route, DateVerdict()
+            ),
+            discount_pct=entry.discount_pct,
+            sale_starts=booking_start,
+            sale_ends=booking_end,
+            travel_starts=travel_start,
+            travel_ends=travel_end,
+            route=route,
+            attrs_json=attrs,
+            evidence_json=evidence,
+            date_flags_json=flags or None,
+            confidence_score=confidence.score,
+            confidence_band=confidence.band,
+            confidence_detail=confidence.as_detail(),
+            review_required=confidence.score < HIGH_THRESHOLD,
+            raw_text=judged_text[:2000],
+            content_hash=content_hash,
+            source_name=source_name,
+            detected_at=detected_at,
+        ),
+        None,
     )
 
 

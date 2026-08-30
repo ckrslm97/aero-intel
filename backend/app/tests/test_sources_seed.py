@@ -17,7 +17,11 @@ from app.repositories.source_repository import SourceRepository
 
 VALID_CATEGORIES = {"org", "airline", "airport", "financial", "other"}
 VALID_SOURCE_TYPES = {"rss", "premium"}
-MIN_LIVE_RSS_SOURCES = 55
+# Raised from 55 at round 9, which added nine fare-campaign radars. The floor
+# is a ratchet on purpose: a future edit that quietly shrinks the feed list back
+# down is the failure this guards against, and the only way to lower it is to
+# say so in a diff.
+MIN_LIVE_RSS_SOURCES = 70
 
 
 def test_urls_are_unique():

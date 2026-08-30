@@ -1,13 +1,27 @@
-"""Browser-fetches the carrier campaign pages that a plain GET cannot reach,
-and answers one question per page: has this page changed since we last read it?
+"""Fetches every carrier campaign source that `promo_scrape.py` cannot, by
+whatever means each one needs, and answers one question per source: has it
+changed since we last read it?
 
-Nothing is extracted here. This module's whole job is to spend a page load so
-that PR4 does not have to spend an LLM call: six of the seven carriers in
-app/ingest/carriers.py sit behind bot walls, the Groq free tier is a shared
-ceiling across the whole product, and a campaign page that has not changed
-since this morning has nothing new to extract from it. So each page is loaded,
-reduced to text, hashed, and compared against the last successful hash for that
-URL; `scrape_runs.changed` is the ledger the extraction step will read.
+Three fetch methods now, not one, and the split is the point (see
+app/ingest/carriers.py for which carrier uses which):
+
+  * **api** -- AJet and Singapore Airlines publish structured JSON. One httpx
+    call, campaigns already in labelled fields, and no model call at all.
+  * **impersonate** -- TK's page is server-rendered and was never unreadable;
+    it was refusing our TLS fingerprint. One curl_cffi call, then the LLM chain
+    over the parsed campaign blocks.
+  * **browser** -- QR, EY, EK and BA render their offer cards client-side, so
+    the bytes are not enough even when they arrive. Chromium, then the chain.
+
+The cheap two run first and unconditionally: a runner that cannot install a
+browser still comes back with three carriers' campaigns.
+
+The change-detection ledger is what keeps the LLM budget honest. The Groq free
+tier is a shared ceiling across the whole product, and a campaign page that has
+not changed since this morning has nothing new to extract from it. So every
+source is reduced to text, hashed, and compared against the last successful
+hash for its URL; `scrape_runs.changed` is what decides whether extraction runs
+at all.
 
 Three decisions worth knowing before reading the code:
 
@@ -54,15 +68,19 @@ behind, so it extracts the pages that change from then on rather than
 everything standing.
 
 **A dry run still writes telemetry.** `--dry-run` suppresses the hand-off to
-extraction, not the run log -- the point of the first dispatch is to read
-`scrape_runs` and find out which of the six walls a real Chromium gets through,
-and a dry run that recorded nothing could not answer that.
+extraction, not the run log -- the point of the first dispatch was to read
+`scrape_runs` and find out which walls a real Chromium gets through, and the
+point of the next one is to find out whether the TLS fingerprint that works
+from a residential IP also works from GitHub's Azure ranges (app/ingest/fetch.py
+states that caveat in full). A dry run that recorded nothing could not answer
+either question.
 
-Robots courtesy: this fetches one to two first-party marketing pages per
-carrier, twice a day, sequentially, with a 2-4s pause between loads and one
-browser context per carrier. That is roughly fourteen page views a day across
-seven airlines -- below what a single interested customer generates, and far
-below any threshold a crawl-delay is meant to protect.
+Robots courtesy: this fetches one to two first-party sources per carrier, twice
+a day, sequentially, with a 2-4s pause between browser page loads (0.5-1.5s
+between the JSON calls, which cost the other end far less) and one browser
+context per carrier. That is roughly a dozen requests a day across eight
+airlines -- below what a single interested customer generates, and far below
+any threshold a crawl-delay is meant to protect.
 
 Playwright is a dev-only dependency (backend/requirements-dev.txt); it is
 installed on the Actions runner that runs the deep-scan workflow and is not
@@ -81,7 +99,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
-from app.ingest.carriers import Carrier, CarrierPage, resolve_carriers
+from app.ingest.carriers import (
+    DIRECT_FETCH_METHODS,
+    Carrier,
+    CarrierPage,
+    resolve_carriers,
+)
+from app.ingest.fetch import FetchResult
 from app.models.scrape_run import ScrapeRun
 
 logger = get_logger(__name__)
@@ -94,9 +118,13 @@ METHOD = "browser"
 PAGE_TIMEOUT_MS = 30_000
 VIEWPORT = {"width": 1440, "height": 900}
 #: Courtesy pause between page loads, jittered. Sequential by construction:
-#: seven carriers hitting seven origins in parallel would be faster and would
+#: eight carriers hitting eight origins in parallel would be faster and would
 #: also be the traffic shape every bot detector is tuned for.
 DELAY_RANGE_S = (2.0, 4.0)
+#: The same courtesy, scaled to what a JSON request costs the other end. These
+#: are single API calls to three unrelated origins, not page loads with fifty
+#: sub-resources each.
+DIRECT_DELAY_RANGE_S = (0.5, 1.5)
 
 #: A body this short is not a campaign page. A challenge interstitial, an empty
 #: JS shell or an error stub all land here, and all of them mean "we did not
@@ -139,10 +167,11 @@ _WHITESPACE = re.compile(r"\s+")
 
 #: Default per-run ceiling on extraction calls. The Groq free tier is a shared
 #: product-wide budget (~260 calls/day already committed), and a first run
-#: where every page's hash is "changed" would spend seven of these in one
-#: sweep. Ten is above the steady-state need -- fourteen page loads a day, of
-#: which a handful actually change -- and low enough that a pathological run
-#: cannot starve the news pipeline.
+#: where every page's hash is "changed" would spend one of these per LLM-backed
+#: page in a single sweep. Ten is above the steady-state need -- and the need
+#: shrank at round 9, because AJet and SQ moved to the structured path and now
+#: cost nothing from this budget at all, leaving five LLM-backed pages (TK's
+#: one, QR's two, EY's one, EK's one, BA's one).
 DEFAULT_MAX_LLM_CALLS = 10
 
 
@@ -151,7 +180,7 @@ class ExtractionBudget:
     """How many LLM calls this sweep may still spend, and what it did.
 
     Mutable and passed down rather than returned up, because the cap has to
-    hold across carriers: seven carriers each allowed ten calls is not a cap
+    hold across carriers: eight carriers each allowed ten calls is not a cap
     of ten.
     """
 
@@ -188,19 +217,12 @@ class ExtractionOutcome:
     note: str | None = None
 
 
-@dataclass(frozen=True)
-class FetchResult:
-    """What the browser driver got back, before anything is decided about it.
-
-    Separated from classification so the whole outcome/hash/change-detection
-    half of this module is testable without a browser -- which is the only way
-    it can be tested at all, since CI has no route to these origins.
-    """
-
-    text: str | None
-    http_status: int | None = None
-    error: str | None = None
-    timed_out: bool = False
+# `FetchResult` used to be defined here. It moved to app/ingest/fetch.py when
+# the impersonated GET and the JSON API paths started producing one too: it is
+# the shared currency of all three fetch methods now, not just the browser's.
+# It is imported (not re-declared) above, so `from app.ingest.deep_scan import
+# FetchResult` still resolves and this module's classifier still owns what a
+# result *means*.
 
 
 def normalize(raw: str | None) -> str:
@@ -469,19 +491,93 @@ async def extract_changed_page(
     return ExtractionOutcome(True)
 
 
-async def _scan_carrier_page(
+async def extract_structured_entries(
     db: AsyncSession,
-    context,
+    *,
+    carrier: Carrier,
+    page_url: str,
+    entries,
+    hash_value: str,
+    budget: ExtractionBudget,
+    now: datetime,
+    today: date,
+    source_name: str,
+) -> ExtractionOutcome:
+    """Persist a structured carrier feed's campaigns. No LLM call, no budget.
+
+    The counterpart to `extract_changed_page` for the two carriers that publish
+    JSON (app/ingest/ajet_campaigns.py, app/ingest/sq_campaigns.py). It shares
+    that function's counters and its return type so `deep_scan`'s summary and
+    hash-withholding logic do not need to know which path produced a row -- but
+    it does not touch `budget.remaining`, because there is nothing to ration:
+    the work is a dictionary lookup and a date regex, and it costs the shared
+    Groq tier exactly nothing.
+
+    Always `accounted_for=True` when it runs at all. A deterministic mapping
+    has no partial failure mode: it either produced the campaigns the feed
+    stated, or the harvest never got a readable body and `classify_outcome`
+    already recorded that as a failed fetch.
+    """
+    from app.pipeline.campaign_extract import build_structured_campaign, persist_extracted
+
+    for entry in entries:
+        extracted, drop_reason = build_structured_campaign(
+            entry,
+            carrier=carrier,
+            detected_at=now,
+            today=today,
+            source_name=source_name,
+            source_quality=carrier.source_quality,
+            content_hash=hash_value,
+        )
+        if extracted is None:
+            budget.dropped += 1
+            logger.info(
+                "deep_scan_structured_rejected",
+                carrier=carrier.code,
+                campaign=entry.campaign_name,
+                reason=drop_reason,
+            )
+            continue
+
+        written = await persist_extracted(db, extracted)
+        if written == "inserted":
+            budget.inserted += 1
+        elif written == "merged":
+            budget.merged += 1
+        else:
+            budget.updated += 1
+
+    return ExtractionOutcome(True)
+
+
+async def _record_attempt(
+    db: AsyncSession,
     carrier: Carrier,
     carrier_page: CarrierPage,
+    fetch: FetchResult,
     summary: dict,
-    dry_run: bool,
     *,
-    budget: ExtractionBudget | None = None,
-    extraction_enabled: bool = False,
+    started_at: datetime,
+    method: str,
+    budget: ExtractionBudget | None,
+    extraction_enabled: bool,
+    structured_entries=None,
+    structured_source_name: str | None = None,
 ) -> None:
-    started_at = datetime.now(timezone.utc)
-    fetch = await _fetch_page(context, carrier_page)
+    """Everything between a fetch and its `scrape_runs` row.
+
+    Split out of the browser scan when the impersonated and JSON paths started
+    producing `FetchResult`s too. Classification, hashing, change detection,
+    extraction hand-off and the run log are identical for all three methods --
+    only the way the bytes were obtained differs -- so this is the one place
+    that decides what a fetch meant, and adding a fourth fetch method adds no
+    branch here.
+
+    `structured_entries` is the fork: when a carrier's feed already carries
+    parsed campaigns, they are persisted directly; when it does not, the page
+    text goes to the LLM chain under the shared call budget.
+    """
     outcome, error = classify_outcome(fetch)
 
     normalized = ""
@@ -489,21 +585,35 @@ async def _scan_carrier_page(
     if outcome == "ok":
         normalized = normalize(fetch.text)
         hash_value = content_hash(normalized)
-    previous = await latest_ok_hash(db, carrier_page.url) if hash_value else None
+    run_url = carrier_page.fetch_url
+    previous = await latest_ok_hash(db, run_url) if hash_value else None
     changed = decide_changed(previous, hash_value)
 
     recorded_hash = hash_value
     if changed and extraction_enabled and budget is not None:
-        extraction = await extract_changed_page(
-            db,
-            carrier=carrier,
-            carrier_page=carrier_page,
-            text=normalized,
-            hash_value=hash_value,
-            budget=budget,
-            now=started_at,
-            today=started_at.date(),
-        )
+        if structured_entries is not None:
+            extraction = await extract_structured_entries(
+                db,
+                carrier=carrier,
+                page_url=carrier_page.url,
+                entries=structured_entries,
+                hash_value=hash_value,
+                budget=budget,
+                now=started_at,
+                today=started_at.date(),
+                source_name=structured_source_name or f"{carrier.display_name} kampanya sayfası",
+            )
+        else:
+            extraction = await extract_changed_page(
+                db,
+                carrier=carrier,
+                carrier_page=carrier_page,
+                text=normalized,
+                hash_value=hash_value,
+                budget=budget,
+                now=started_at,
+                today=started_at.date(),
+            )
         if not extraction.accounted_for:
             # Withhold the hash so the next run still sees this page as
             # changed -- see the module docstring. The row stays `ok` and
@@ -517,7 +627,7 @@ async def _scan_carrier_page(
     await record_run(
         db,
         carrier_code=carrier.code,
-        url=carrier_page.url,
+        url=run_url,
         started_at=started_at,
         finished_at=finished_at,
         outcome=outcome,
@@ -525,6 +635,7 @@ async def _scan_carrier_page(
         hash_value=recorded_hash,
         changed=changed,
         error=error,
+        method=method,
     )
 
     summary["scanned"] += 1
@@ -538,7 +649,8 @@ async def _scan_carrier_page(
     logger.info(
         "deep_scan_page",
         carrier=carrier.code,
-        url=carrier_page.url,
+        url=run_url,
+        method=method,
         kind=carrier_page.kind,
         outcome=outcome,
         changed=changed,
@@ -548,6 +660,140 @@ async def _scan_carrier_page(
     )
 
 
+async def _scan_carrier_page(
+    db: AsyncSession,
+    context,
+    carrier: Carrier,
+    carrier_page: CarrierPage,
+    summary: dict,
+    dry_run: bool,
+    *,
+    budget: ExtractionBudget | None = None,
+    extraction_enabled: bool = False,
+) -> None:
+    started_at = datetime.now(timezone.utc)
+    fetch = await _fetch_page(context, carrier_page)
+    await _record_attempt(
+        db,
+        carrier,
+        carrier_page,
+        fetch,
+        summary,
+        started_at=started_at,
+        method=METHOD,
+        budget=budget,
+        extraction_enabled=extraction_enabled,
+    )
+
+
+# --- the browserless carriers ------------------------------------------------
+#
+# A table, not a branch. carriers.py's promise is that adding a carrier is
+# adding a registry entry, and the two carriers whose campaigns arrive as JSON
+# genuinely do need code of their own -- an endpoint shape is not something a
+# URL can describe. So the code they need is named here, once, keyed by the
+# carrier it belongs to, and the scan loop below stays free of `if code ==`.
+#
+# Every handler returns the same triple: the `FetchResult` the classifier
+# reads, the structured campaigns (empty when the carrier's page has to go
+# through the LLM chain), and the source name for provenance rows.
+
+
+@dataclass(frozen=True)
+class DirectHarvest:
+    fetch: FetchResult
+    entries: tuple = ()
+    source_name: str | None = None
+
+    @property
+    def is_structured(self) -> bool:
+        return bool(self.entries)
+
+
+async def _harvest_tk(carrier_page: CarrierPage) -> DirectHarvest:
+    from app.ingest.tk_campaigns import SOURCE_NAME, fetch_campaign_page
+
+    return DirectHarvest(
+        fetch=await fetch_campaign_page(carrier_page.url), source_name=SOURCE_NAME
+    )
+
+
+async def _harvest_ajet(carrier_page: CarrierPage) -> DirectHarvest:
+    from app.ingest.ajet_campaigns import SOURCE_NAME, harvest
+
+    result = await harvest(carrier_page.url)
+    return DirectHarvest(fetch=result.fetch, entries=result.entries, source_name=SOURCE_NAME)
+
+
+async def _harvest_sq(carrier_page: CarrierPage) -> DirectHarvest:
+    from app.ingest.sq_campaigns import SOURCE_NAME, harvest
+
+    result = await harvest(carrier_page.fetch_url)
+    return DirectHarvest(fetch=result.fetch, entries=result.entries, source_name=SOURCE_NAME)
+
+
+DIRECT_HARVESTERS = {
+    "TK": _harvest_tk,
+    "VF": _harvest_ajet,
+    "SQ": _harvest_sq,
+}
+
+
+async def _scan_direct_carriers(
+    db: AsyncSession,
+    carriers: list[Carrier],
+    summary: dict,
+    *,
+    budget: ExtractionBudget,
+    extraction_enabled: bool,
+) -> None:
+    """The httpx/curl_cffi carriers, before any browser is launched.
+
+    First for two reasons. They are the cheapest requests in the sweep -- one
+    HTTP round trip each, no Chromium, and for AJet and SQ no LLM call either
+    -- so a runner that cannot install a browser, or a Chromium that wedges,
+    still leaves this product with three carriers' campaigns. And the courtesy
+    pause between them is smaller than the browser loop's for the same reason
+    the browser loop has one: three JSON requests to three unrelated origins is
+    not a traffic shape anything is tuned to notice.
+    """
+    for carrier in carriers:
+        handler = DIRECT_HARVESTERS.get(carrier.code)
+        if handler is None:
+            # A registry entry declaring a direct method with nothing to fetch
+            # it. Logged rather than raised: one misconfigured carrier must not
+            # cost the sweep, and the missing row is the signal.
+            logger.warning(
+                "deep_scan_no_direct_handler",
+                carrier=carrier.code,
+                method=carrier.fetch_method,
+            )
+            continue
+
+        for carrier_page in carrier.pages:
+            started_at = datetime.now(timezone.utc)
+            try:
+                harvested = await handler(carrier_page)
+            except Exception as exc:  # noqa: BLE001 -- every failure becomes a row
+                harvested = DirectHarvest(
+                    fetch=FetchResult(text=None, error=f"{type(exc).__name__}: {exc}")
+                )
+            await _record_attempt(
+                db,
+                carrier,
+                carrier_page,
+                harvested.fetch,
+                summary,
+                started_at=started_at,
+                method=carrier.fetch_method,
+                budget=budget,
+                extraction_enabled=extraction_enabled,
+                structured_entries=harvested.entries if harvested.is_structured else None,
+                structured_source_name=harvested.source_name,
+            )
+            await asyncio.sleep(random.uniform(*DIRECT_DELAY_RANGE_S))
+
+
 async def deep_scan(
     db: AsyncSession,
     *,
@@ -555,8 +801,14 @@ async def deep_scan(
     dry_run: bool = False,
     max_llm_calls: int = DEFAULT_MAX_LLM_CALLS,
 ) -> dict:
-    """Load every browser-carrier's campaign pages, record what happened, and
-    extract the campaigns off the ones that changed.
+    """Read every non-static carrier's campaign source, record what happened,
+    and extract the campaigns off the ones that changed.
+
+    Two phases. The browserless carriers (`api`, `impersonate`) go first and
+    commit before Chromium is even imported; the browser carriers follow. Only
+    the LLM-backed pages draw on `max_llm_calls` -- AJet's and SQ's structured
+    feeds cost nothing from that budget, which is most of why they were worth
+    finding.
 
     Returns counters, but the real output is two-fold: `scrape_runs` carries
     the per-carrier ok/blocked telemetry the carrier list is maintained from,
@@ -581,12 +833,27 @@ async def deep_scan(
     summary.update(budget.as_summary())
 
     selected = resolve_carriers(carriers)
+    direct = [c for c in selected if c.fetch_method in DIRECT_FETCH_METHODS]
     targets = [c for c in selected if c.fetch_method == "browser"]
     # Pegasus is read by app/ingest/promo_scrape.py with a parser tuned to its
     # markup; loading it again here would be duplicate traffic for worse data.
-    summary["skipped_static"] = len(selected) - len(targets)
+    summary["skipped_static"] = len([c for c in selected if c.fetch_method == "static"])
+
+    # Cheapest first, and unconditionally: these need neither Chromium nor (for
+    # the two JSON carriers) a model, so a runner with no browser still comes
+    # back with campaigns.
+    if direct:
+        await _scan_direct_carriers(
+            db, direct, summary, budget=budget, extraction_enabled=extraction_enabled
+        )
+        summary.update(budget.as_summary())
+        await db.commit()
+
     if not targets:
         logger.info("deep_scan_no_browser_carriers", requested=carriers)
+        logger.info(
+            "deep_scan_complete", dry_run=dry_run, extraction=extraction_enabled, **summary
+        )
         return summary
 
     try:

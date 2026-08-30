@@ -19,6 +19,7 @@ from app.ingest.carriers import (
     FETCH_METHODS,
     PAGE_KINDS,
     browser_carriers,
+    direct_carriers,
     resolve_carriers,
 )
 from app.ingest.deep_scan import (
@@ -341,15 +342,40 @@ def test_every_carrier_resolves_to_the_same_airline_the_gazetteer_knows():
         assert AIRLINE_ALIASES[carrier.alias][1] == carrier.code
 
 
-def test_browser_carriers_have_a_campaign_page_and_pegasus_stays_static():
-    """The split deep_scan depends on: Pegasus is promo_scrape's, everything
-    else needs a browser."""
+def test_the_fetch_method_split_deep_scan_depends_on():
+    """Pegasus is promo_scrape's; three carriers are reachable without a
+    browser; only the four that render their offers client-side need one.
+
+    Written as an exact partition rather than a membership check: moving a
+    carrier between methods changes what the sweep costs and what it can still
+    do when Chromium is unavailable, so it should never happen silently."""
     assert CARRIER_MASTER["PC"].fetch_method == "static"
 
+    assert {c.code for c in direct_carriers()} == {"TK", "VF", "SQ"}
     browsers = browser_carriers()
-    assert {c.code for c in browsers} == {"TK", "VF", "QR", "EK", "EY", "BA"}
-    for carrier in browsers:
+    assert {c.code for c in browsers} == {"QR", "EK", "EY", "BA"}
+    for carrier in browsers + direct_carriers():
         assert any(page.kind == "campaign" for page in carrier.pages)
+
+
+def test_every_direct_carrier_has_something_to_fetch_it_with():
+    """`_scan_direct_carriers` looks the handler up by code rather than
+    branching on it, so a registry entry with no handler is a carrier that
+    silently scans nothing."""
+    from app.ingest.deep_scan import DIRECT_HARVESTERS
+
+    assert {c.code for c in direct_carriers()} == set(DIRECT_HARVESTERS)
+
+
+def test_an_api_carrier_records_the_endpoint_it_actually_fetched():
+    """AJet's campaigns come from a CMS gateway on another host. Change
+    detection has to key on what was requested, not on the page a human would
+    open, or the run log would claim we read a DataDome-walled page."""
+    page = CARRIER_MASTER["VF"].pages[0]
+    assert page.url.startswith("https://www.ajet.com/tr/kesfet/kampanyalar/")
+    assert page.fetch_url.startswith("https://gatewaycmsint.cloud.ajet.com/")
+    # And a page with no separate endpoint fetches itself.
+    assert CARRIER_MASTER["TK"].pages[0].fetch_url == CARRIER_MASTER["TK"].pages[0].url
 
 
 def test_no_two_carriers_claim_the_same_url():

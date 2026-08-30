@@ -9,6 +9,13 @@ email-validator==2.2.0
 structlog==24.4.0
 feedparser==6.0.11
 httpx==0.28.1
+# libcurl built against BoringSSL with Chrome's TLS handshake. It is here for
+# exactly one reason: Turkish Airlines' campaign page (and Qatar's and
+# Etihad's) refuse Python's TLS fingerprint and accept Chrome's, which is what
+# every "bot-walled, needs a browser" note in app/ingest/ turned out to mean.
+# See app/ingest/fetch.py. Imported lazily there, so an environment whose wheel
+# did not install degrades to a logged no-op rather than an ImportError.
+curl_cffi==0.16.2
 beautifulsoup4==4.12.3
 lxml==5.3.0
 datasketch==1.6.5
