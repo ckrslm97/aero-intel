@@ -3,6 +3,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field
 
+from app.taxonomy import effective_source_tier
+
 _WORDS_PER_MINUTE = 200
 
 
@@ -14,6 +16,27 @@ class SourceOut(BaseModel):
     url: str
     category: str
     trust_weight: float
+    #: The declared column, kept off the wire: `tier` below is what callers
+    #: read, and shipping both would invite a client to pick the wrong one.
+    declared_tier: str | None = Field(
+        default=None, validation_alias="tier", exclude=True, repr=False
+    )
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def tier(self) -> str:
+        """Which rung of the source ladder this outlet sits on -- one of
+        app.taxonomy.SOURCE_TIERS.
+
+        The EFFECTIVE tier, not the raw column: `Source.tier` is nullable, and
+        a source seeded before that column existed falls back to its
+        trust_weight bucket exactly the way the Risk Radarı's publication
+        chronology already resolves it (app/pipeline/clustering.py
+        tier_for_source, same helper). Never null, so a caller badging a card
+        with it needs no fallback of its own -- and never silently "official",
+        which only a declared tier can be.
+        """
+        return effective_source_tier(self.declared_tier, self.trust_weight)
 
 
 class ArticleEnrichmentOut(BaseModel):
@@ -40,6 +63,13 @@ class ArticleEnrichmentOut(BaseModel):
     #: read: it is a badge a row may earn, never a field a row is expected to
     #: have.
     risk_severity: str | None = None
+    #: "Neden önemli?" -- one or two Turkish sentences written by the LLM about
+    #: what this story means for a revenue-management desk. Null on nearly
+    #: every row by design (see app/models/article.py): it costs a second model
+    #: call, so only the day's few highest-scoring stories earn one. The drawer
+    #: renders the block when it is present and omits it entirely otherwise --
+    #: this is never a field a row is expected to have.
+    why_important_tr: str | None = None
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -110,3 +140,28 @@ class ArticleOut(BaseModel):
 class ArticleListOut(BaseModel):
     total: int
     items: list[ArticleOut]
+
+
+class ArticleSourceOut(BaseModel):
+    """One telling of a story: the canonical article, or one of its duplicates.
+
+    This is what `corroborating_source_count` has always been counting and
+    never showed. app/pipeline/verify.py computes confidence from the distinct
+    sources across {article} ∪ {its duplicates}, and the drawer printed the
+    resulting integer with nothing behind it -- "3 kaynak" that a reader could
+    neither check nor open.
+
+    No new data and no new model call: the duplicate group is already stored
+    (Article.duplicate_of_id), and this is that group, serialised.
+    """
+
+    source_name: str
+    #: Effective tier, resolved the same way SourceOut.tier is.
+    source_tier: str
+    trust_weight: float
+    url: str
+    published_at: datetime | None
+    title: str
+    #: True for the canonical article the group is keyed on -- the one the
+    #: Gazete actually publishes. The others are the corroboration.
+    is_primary: bool

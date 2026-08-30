@@ -30,6 +30,7 @@ from app.llm.prompts import (
     summary_prompt,
     translate_pair_prompt,
     translate_prompt,
+    why_important_prompt,
 )
 from app.taxonomy import SUBCATEGORY_KEYWORDS, is_valid_risk_type
 
@@ -202,6 +203,28 @@ class OpenAICompatProvider:
             clean_translation(headline, parsed_headline),
             clean_translation(summary, parsed_summary) if parsed_summary else None,
         )
+
+    async def why_important(self, title: str, content: str, category: str) -> str | None:
+        """One or two Turkish sentences on why this story matters to an RM desk.
+
+        An optional capability, like translate_pair and classify_risk: a
+        provider without it simply has no assessment, and the column stays
+        NULL. Only the caller decides which articles are worth the call (see
+        app/pipeline/enrich.py) -- this method never gates itself, so the
+        budget lives in one place instead of two.
+
+        Length is capped here rather than trusted: the panel renders this as a
+        pull quote, so a model that starts writing an essay is a layout bug as
+        well as a token bill. An answer that comes back empty (the prompt says
+        that is allowed) is None, never "".
+        """
+        raw = (await self._generate(why_important_prompt(title, content, category))).strip()
+        # Small models like to restate the label they were given.
+        raw = re.sub(r"^\s*(?:Değerlendirme|Neden önemli)\s*[:\-]\s*", "", raw, count=1)
+        raw = raw.strip().strip('"').strip()
+        if not raw or len(raw) < 20:
+            return None
+        return raw[:600]
 
     async def sentiment(self, title: str, content: str) -> str:
         result = (await self._generate(sentiment_prompt(title, content))).strip().lower()

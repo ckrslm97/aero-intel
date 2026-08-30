@@ -11,6 +11,12 @@ export interface SourceOut {
   url: string;
   category: string;
   trust_weight: number;
+  /** official | regulator | agency | trade | aggregator -- the EFFECTIVE tier,
+   * never null. The backend resolves an undeclared `Source.tier` through its
+   * trust_weight the same way the Risk Radarı's chronology does, so a card and
+   * that drawer can never badge the same outlet differently. Never "official"
+   * unless a source declared it. */
+  tier: string;
 }
 
 export interface ArticleEnrichmentOut {
@@ -33,6 +39,12 @@ export interface ArticleEnrichmentOut {
    * no risk. Null on the great majority of rows: a badge a row may earn, never
    * a field a row is expected to have. */
   risk_severity: string | null;
+  /** "Neden önemli?" -- one or two Turkish sentences the LLM wrote about what
+   * this story means for a revenue-management desk. Null on nearly every row
+   * by design: it costs a second model call, so only the day's few
+   * highest-scoring stories earn one. The drawer renders the block when it is
+   * there and omits it entirely otherwise. */
+  why_important_tr: string | null;
 }
 
 /** A named entity the story mentions. `code` is IATA where there is one. */
@@ -59,6 +71,23 @@ export interface ArticleOut {
 export interface ArticleListOut {
   total: number;
   items: ArticleOut[];
+}
+
+/** `GET /articles/{id}/sources` -- every outlet that ran this story, oldest
+ * first. This is the list behind `corroborating_source_count`: the same
+ * duplicate group backend/app/pipeline/verify.py counts to produce that
+ * number, so the two can never disagree. Fetched lazily, per article opened. */
+export interface ArticleSourceOut {
+  source_name: string;
+  /** official | regulator | agency | trade | aggregator. Never null. */
+  source_tier: string;
+  trust_weight: number;
+  url: string;
+  published_at: string | null;
+  title: string;
+  /** The canonical article -- the one the Gazete publishes. The rest are the
+   * corroboration. */
+  is_primary: boolean;
 }
 
 export interface HubOut {

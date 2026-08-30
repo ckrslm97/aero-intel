@@ -7,7 +7,8 @@ from sqlalchemy.orm import defer, selectinload
 
 from app.models.article import Article, ArticleEnrichment
 from app.models.entity import ArticleEntity, Entity
-from app.taxonomy import FOCUS_BONUS, RIVAL_CODES
+from app.models.source import Source
+from app.taxonomy import DEFAULT_UNDECLARED_TIER, FOCUS_BONUS, RIVAL_CODES, TRUST_WEIGHT_TIERS
 
 # Articles are timestamped in UTC but published_at can be missing for feeds
 # that omit dates -- day-based views (the archive) fall back to fetched_at so
@@ -37,6 +38,28 @@ def _focus_weighted_importance():
     """
     bonus = case(FOCUS_BONUS, value=ArticleEnrichment.category, else_=0.0)
     return func.coalesce(ArticleEnrichment.importance_score, 0.0) + bonus
+
+
+def _sources_in_tiers(tiers: list[str]):
+    """Source ids whose EFFECTIVE tier is one of `tiers`.
+
+    The same ladder app.taxonomy.effective_source_tier walks in Python, written
+    once as SQL from the same table -- a hand-typed CASE here would be a second
+    copy of the thresholds, and the two would disagree the first time one was
+    tuned. `Source.tier` is nullable, so the trust_weight buckets are not an
+    edge case: they are what every source seeded before that column existed
+    still resolves through.
+
+    A semi-join rather than a join, for the reason the airline filter is one:
+    the source list is short (tens of rows), and IN (subquery) cannot multiply
+    an article across the LIMIT the way a join can.
+    """
+    ladder = case(
+        *[(Source.trust_weight >= floor, name) for floor, name in TRUST_WEIGHT_TIERS],
+        else_=DEFAULT_UNDECLARED_TIER,
+    )
+    effective = case((Source.tier.isnot(None), Source.tier), else_=ladder)
+    return select(Source.id).where(effective.in_(tiers))
 
 
 def _entity_mentions(entity_type: str, value: str, *, by_code: bool = True):
@@ -98,6 +121,7 @@ class ArticleRepository:
         translated_only: bool = False,
         exclude_categories: list[str] | None = None,
         min_importance: float | None = None,
+        tiers: list[str] | None = None,
     ):
         """Shared filter clause for list_recent and count, so the "load more"
         pagination in the newspaper can trust that total counts the same rows
@@ -177,6 +201,13 @@ class ArticleRepository:
             query = query.where(Article.id.in_(_entity_mentions("country", country, by_code=False)))
         if airport:
             query = query.where(Article.id.in_(_entity_mentions("airport", airport)))
+        if tiers:
+            # Source authority as a filter -- "official and regulator only" is a
+            # different reading of the same day than "everything the wires ran".
+            # Server-side rather than a pass over the loaded page, because the
+            # list is paginated: filtering 30 rows client-side would leave page
+            # 2 holding stories page 1's filter should have shown.
+            query = query.where(Article.source_id.in_(_sources_in_tiers(tiers)))
         return query
 
     async def list_recent(
@@ -194,6 +225,7 @@ class ArticleRepository:
         translated_only: bool = False,
         exclude_categories: list[str] | None = None,
         min_importance: float | None = None,
+        tiers: list[str] | None = None,
     ) -> list[Article]:
         query = (
             select(Article)
@@ -222,6 +254,7 @@ class ArticleRepository:
             translated_only=translated_only,
             exclude_categories=exclude_categories,
             min_importance=min_importance,
+            tiers=tiers,
         )
         result = await self.db.execute(query)
         return list(result.scalars().unique().all())
@@ -239,6 +272,7 @@ class ArticleRepository:
         translated_only: bool = False,
         exclude_categories: list[str] | None = None,
         min_importance: float | None = None,
+        tiers: list[str] | None = None,
     ) -> int:
         # Plain COUNT, not COUNT(DISTINCT): the airline filter is a semi-join
         # now, so no clause can multiply rows, and COUNT(DISTINCT uuid) forces
@@ -256,6 +290,7 @@ class ArticleRepository:
             translated_only=translated_only,
             exclude_categories=exclude_categories,
             min_importance=min_importance,
+            tiers=tiers,
         )
         result = await self.db.execute(query)
         return int(result.scalar_one())
@@ -319,6 +354,27 @@ class ArticleRepository:
             .where(Article.id == article_id)
         )
         return result.scalar_one_or_none()
+
+    async def list_duplicate_group(self, article_id: uuid.UUID) -> list[Article]:
+        """The canonical article and every duplicate filed under it, oldest
+        publication first.
+
+        Exactly the set app/pipeline/verify.py counts to produce
+        `corroborating_source_count` -- deliberately the same `id == x OR
+        duplicate_of_id == x` predicate, so the list a reader opens can never
+        disagree with the number the drawer printed. One indexed lookup plus
+        the FK index on duplicate_of_id; no aggregation, no second pass.
+
+        Ordered by publication so the result reads as a chronology: who ran it
+        first, who followed. Undated rows sort last rather than being dropped.
+        """
+        result = await self.db.execute(
+            select(Article)
+            .options(selectinload(Article.source), defer(Article.raw_content))
+            .where((Article.id == article_id) | (Article.duplicate_of_id == article_id))
+            .order_by(Article.published_at.asc().nulls_last(), Article.fetched_at.asc())
+        )
+        return list(result.scalars().unique().all())
 
     async def list_by_status(self, status: str, limit: int = 200) -> list[Article]:
         result = await self.db.execute(
