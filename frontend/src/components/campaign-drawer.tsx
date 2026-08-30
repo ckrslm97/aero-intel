@@ -11,7 +11,7 @@ import {
   TriangleAlert,
   X,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { AirlineLogo } from "@/components/airline-logo";
 import { CampaignStatusPill, ConfidencePill } from "@/components/campaign-analyst-table";
@@ -107,6 +107,27 @@ export function CampaignDrawer({
     };
   }, [promotion, onClose]);
 
+  const panelRef = useRef<HTMLElement>(null);
+  const open = promotion !== null;
+
+  /** Same focus contract as the cluster popover: the panel takes focus when it
+   * opens -- without this, Tab keeps walking the page behind the overlay -- and
+   * hands it back to whatever opened it on close. Keyed on `open`, not on
+   * `[promotion, onClose]` like the listener above: `onClose` is a fresh arrow
+   * on every parent render, and refocusing the panel each time would fight the
+   * reader for the caret while they scroll the drawer. */
+  useEffect(() => {
+    if (!open) return;
+    const trigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    panelRef.current?.focus();
+    return () => {
+      // The trigger can be gone by now -- a cluster popover row unmounts the
+      // moment it hands over to this drawer. Focus is only returned somewhere
+      // that still exists; the browser's default beats focusing a corpse.
+      if (trigger?.isConnected) trigger.focus();
+    };
+  }, [open]);
+
   const promotionId = promotion?.id ?? null;
   useEffect(() => {
     // Lazy, and per campaign: history is read one campaign at a time, so
@@ -164,9 +185,11 @@ export function CampaignDrawer({
           />
           <motion.aside
             key="campaign-drawer-panel"
+            ref={panelRef}
             role="dialog"
             aria-modal="true"
             aria-label="Kampanya ayrıntısı"
+            tabIndex={-1}
             variants={reduceMotion ? reduceVariants(drawerPanel) : drawerPanel}
             initial="hidden"
             animate="show"
@@ -175,7 +198,7 @@ export function CampaignDrawer({
             // airline IS the identity, and the seam light, the border-gradient
             // panel and the discount's text-glow all read from here.
             style={{ "--glow-color": brandHex } as React.CSSProperties}
-            className="fixed inset-y-0 right-0 z-50 flex w-full max-w-lg flex-col border-l border-border bg-card shadow-2xl"
+            className="fixed inset-y-0 right-0 z-50 flex w-full max-w-lg flex-col border-l border-border bg-card shadow-2xl outline-none"
           >
             <span
               aria-hidden
