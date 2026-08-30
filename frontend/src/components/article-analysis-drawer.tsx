@@ -8,7 +8,7 @@ import {
   TrendingUp,
   X,
 } from "lucide-react";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 
 import { AirlineLogo } from "@/components/airline-logo";
 import {
@@ -81,6 +81,23 @@ export function ArticleAnalysisDrawer({
     };
   }, [article, onClose]);
 
+  const panelRef = useRef<HTMLElement>(null);
+  const open = article !== null;
+
+  /** Same focus contract as the cluster popover and the campaign drawer: the
+   * panel takes focus on open -- without this, Tab keeps walking the page
+   * behind the overlay -- and hands it back to whatever opened it on close.
+   * Keyed on `open` alone, because `onClose` is a fresh arrow on every parent
+   * render and refocusing the panel each time would fight the reader. */
+  useEffect(() => {
+    if (!open) return;
+    const trigger = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    panelRef.current?.focus();
+    return () => {
+      if (trigger?.isConnected) trigger.focus();
+    };
+  }, [open]);
+
   const enrichment = article?.enrichment ?? null;
   const category = enrichment ? getCategory(enrichment.category) : null;
   const subcategoryLabel = enrichment
@@ -123,9 +140,11 @@ export function ArticleAnalysisDrawer({
           />
           <motion.aside
             key="article-drawer-panel"
+            ref={panelRef}
             role="dialog"
             aria-modal="true"
             aria-label="Haber analizi"
+            tabIndex={-1}
             variants={reduceMotion ? reduceVariants(drawerPanel) : drawerPanel}
             initial="hidden"
             animate="show"
@@ -135,7 +154,7 @@ export function ArticleAnalysisDrawer({
                 "--glow-color": categoryVar(enrichment?.category),
               } as React.CSSProperties
             }
-            className="fixed inset-y-0 right-0 z-50 flex w-full max-w-lg flex-col border-l border-border bg-card shadow-2xl"
+            className="fixed inset-y-0 right-0 z-50 flex w-full max-w-lg flex-col border-l border-border bg-card shadow-2xl outline-none"
           >
             {/* The story's category color, as a lit edge down the seam where
                 the panel meets the page. */}
