@@ -27,6 +27,7 @@ import {
   NEWSPAPER_CATEGORY_SLUGS,
   NEWSPAPER_EXCLUDED_CATEGORY_SLUGS,
 } from "@/lib/taxonomy";
+import { RIVAL_CODES } from "@/lib/taxonomy.gen";
 import type { ArticleListOut, ArticleOut } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -36,13 +37,19 @@ const RegionMap = dynamic(
   { ssr: false, loading: () => <Skeleton className="h-[320px] w-full rounded-xl" /> },
 );
 
-// The user's named main rivals -- TK is the home carrier, not a rival.
-const RIVALS = airlineTabs.filter((a) => a.code !== "TK");
+// The user's named main rivals, taken from the backend's own list rather than
+// from "every branded carrier except TK": the "Ana Rakipler" chip below sends
+// airline=RIVALS, which the API expands to exactly RIVAL_CODES. Deriving the
+// chip row by subtraction meant that branding a carrier the desk does not
+// consider a rival (SQ) silently added a rival chip the aggregate would not
+// have matched.
+const RIVALS = airlineTabs.filter((a) => (RIVAL_CODES as readonly string[]).includes(a.code));
 const TK = airlineTabs.find((a) => a.code === "TK")!;
 
-// Filter-row summary for the two aggregate chips.
+// Filter-row summary for the two aggregate chips. The count is derived for the
+// same reason the row is: a hand-written "9" is a caption that goes stale.
 const AIRLINE_FILTER_LABEL: Record<string, string> = {
-  RIVALS: "9 ana rakibin tümü",
+  RIVALS: `${RIVAL_CODES.length} ana rakibin tümü`,
   ALL: "haberde geçen tüm havayolları",
 };
 

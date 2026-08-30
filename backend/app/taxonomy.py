@@ -222,9 +222,39 @@ CATEGORIES: list[CategoryDef] = [
     ),
 ]
 
+# The competitive set the product is scoped to: IATA code -> display name.
+# Every carrier here owns a lane on the campaign timeline, a filter chip on the
+# Gazete and Öneriler, and an entry in frontend/src/lib/nav.ts `airlineTabs`
+# where its brand hex lives. A carrier outside this set has no lane to draw
+# itself in, so a campaign by one is left as the article it already is.
+#
+# This lives here rather than next to the pipeline that reads it because it is
+# the *frontend's* copy that used to drift: the set was written out in
+# app/pipeline/promotions.py and again in nav.ts, kept in step by a test that
+# hand-copied the literal. Singapore Airlines was added to the carrier master
+# (app/ingest/carriers.py), started producing campaigns, and rendered on the
+# Kampanyalar page as the bare string "SQ" in the default accent colour --
+# because the hand-copied literal still said ten. It is now exported into
+# taxonomy.gen.ts, so nav.ts fails the build when a carrier here has no brand
+# entry, the same way an unnamed region already does.
+TRACKED_AIRLINES: dict[str, str] = {
+    "AF": "Air France",
+    "BA": "British Airways",
+    "EK": "Emirates",
+    "EY": "Etihad Airways",
+    "KL": "KLM",
+    "LH": "Lufthansa",
+    "QR": "Qatar Airways",
+    "SQ": "Singapore Airlines",
+    "PC": "Pegasus Airlines",
+    "VF": "AJet",
+    "TK": "Turkish Airlines",
+}
+
 # The user's named main rivals (IATA codes) -- powers the newspaper's
 # "Ana Rakipler" filter (airline=RIVALS matches any of these). TK is the home
-# carrier and deliberately not in this list.
+# carrier and deliberately not in this list, and neither is SQ: it is a carrier
+# we scan and brand, not one of the rivals this desk was set up to watch.
 RIVAL_CODES: tuple[str, ...] = ("AF", "BA", "EK", "EY", "KL", "LH", "PC", "QR", "VF")
 
 # Editorial weighting: how much this portal cares about a category, on the same
