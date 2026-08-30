@@ -799,6 +799,72 @@ def _reason_with_evidence(base: str, route: RouteResolution, verdict: DateVerdic
     return f"{base.rstrip('.')} — {', '.join(extras)}."
 
 
+#: How much of a model answer a failure log carries. The old 160 characters
+#: showed the opening brace and the first field name, which is exactly the part
+#: of a truncated answer that looks correct -- the log said the payload was not
+#: an object while quoting an object. The head says what shape the answer took;
+#: the tail says whether it finished, which is the question that was actually
+#: being asked and could not be answered from the log.
+SAMPLE_HEAD_CHARS = 400
+SAMPLE_TAIL_CHARS = 100
+
+
+def _answer_sample(answer: str) -> dict:
+    """The log fields that make a bad answer self-explanatory: what it opened
+    with, what it ended with, and how long it was."""
+    fields: dict = {"sample": answer[:SAMPLE_HEAD_CHARS], "length": len(answer)}
+    if len(answer) > SAMPLE_HEAD_CHARS:
+        fields["sample_tail"] = answer[-SAMPLE_TAIL_CHARS:]
+    return fields
+
+
+def _diagnose_unreadable(carrier, page_url: str, answer: str) -> str:
+    """Log and name a response with no JSON in it.
+
+    Two distinguishable cases, because they have different fixes: an answer
+    that opens a JSON document and never closes it was cut off (raise the
+    ceiling), and one that never opened a document is a model that answered in
+    prose or refused (a prompt question). Both leave the page FAILED and
+    queued; only the reason string differs.
+    """
+    stripped = answer.strip()
+    looked_like_json = stripped.startswith(("{", "[")) or "```" in stripped
+    reason = "truncated_response" if looked_like_json else "no_json_in_response"
+    logger.info(
+        f"campaign_extract_{reason}",
+        carrier=carrier.code,
+        url=page_url,
+        **_answer_sample(answer),
+    )
+    return f"schema_error:{reason}"
+
+
+#: The output ceiling for the campaign call, and the whole of the fix for the
+#: TK page that failed twice in production.
+#:
+#: The answer to this prompt is a document: one object per offer card, each
+#: with a verbatim quote per non-null field, for a page that carries six to
+#: eight of them. The 2026-08-30 run stopped TK's answer at exactly 3,072
+#: completion tokens, mid-card, and an unterminated JSON document is worth
+#: nothing -- so a fetched page, a spent call and every campaign on it were
+#: lost to a ceiling nobody had set.
+#:
+#: 5,000 is chosen against the free tier's token window rather than against the
+#: model's context: the deep scan has run in production with under 6,000 tokens
+#: left in that window, and a ~2,000-token page prompt plus this ceiling still
+#: fits inside it. It is a ceiling, not a reservation -- a page with two cards
+#: on it still costs two cards' worth of tokens.
+#:
+#: The rejected alternative was one call per card, which TK's parser could feed
+#: directly (ingest/tk_campaigns.py already splits the page into `div.dinlinetable`
+#: blocks). It would have re-sent the ~900-token schema and rulebook six to
+#: eight times per page against the very budget that is scarce, to solve a
+#: problem that one number solves -- and the chain would still have needed the
+#: truncation rescue in schemas/campaign.py for the card that outgrows its own
+#: call.
+CAMPAIGN_MAX_OUTPUT_TOKENS = 5000
+
+
 async def extract_campaigns_from_page(
     raw_text: str,
     *,
@@ -821,7 +887,7 @@ async def extract_campaigns_from_page(
     if generate is None:
         from app.llm.factory import get_raw_generator
 
-        generate = get_raw_generator()
+        generate = get_raw_generator(max_output_tokens=CAMPAIGN_MAX_OUTPUT_TOKENS)
     if generate is None:
         logger.warning("campaign_extract_no_llm", carrier=carrier.code, url=page_url)
         return PageExtraction(succeeded=False, reason="no_llm_configured")
@@ -844,7 +910,20 @@ async def extract_campaigns_from_page(
     # habit must not read as a different failure here than it does there --
     # plus the shape that habit takes on this prompt: the campaigns as a bare
     # top-level list. See schemas/campaign.extract_campaign_json.
-    payload = extract_campaign_json(response or "")
+    answer = response or ""
+    payload = extract_campaign_json(answer)
+    if payload is None:
+        # Separated from the schema failure below because it is a different
+        # fact and the conflated one cost two production runs: a response with
+        # no readable JSON in it used to reach `parse_campaign_payload` as
+        # None and be reported as "payload must be a JSON object" -- a
+        # complaint about a shape, logged against an answer that opened with
+        # `{` and had simply been cut off before it closed.
+        return PageExtraction(
+            succeeded=False,
+            reason=_diagnose_unreadable(carrier, page_url, answer),
+            llm_calls=1,
+        )
     try:
         page = parse_campaign_payload(payload)
     except ValueError as exc:
@@ -858,9 +937,19 @@ async def extract_campaigns_from_page(
             carrier=carrier.code,
             url=page_url,
             error=str(exc),
-            sample=(response or "")[:160],
+            **_answer_sample(answer),
         )
         return PageExtraction(succeeded=False, reason=f"schema_error:{exc}", llm_calls=1)
+
+    if page.truncated:
+        logger.warning(
+            "campaign_extract_truncated_answer",
+            carrier=carrier.code,
+            url=page_url,
+            recovered=len(page.campaigns),
+            max_output_tokens=CAMPAIGN_MAX_OUTPUT_TOKENS,
+            **_answer_sample(answer),
+        )
 
     default_year = detected_at.year
     campaigns: list[ExtractedCampaign] = []
@@ -1000,6 +1089,37 @@ _TR_SHORT_DAY_RANGE = re.compile(
     r"^\s*(\d{1,2})\s*[-–—]\s*(\d{1,2})\s+([^\W\d_]+)\s+(\d{4})", re.UNICODE
 )
 
+#: "21-Haziran-26" -- AJet's other hand-typed shape, a whole date written with
+#: hyphens for spaces and the century left off. The general parser needs
+#: whitespace between the day and the month name and a four-digit year, so it
+#: read nothing here at all, and *that* is what made this worth fixing: a
+#: ticketing window that fails to parse does not fail safe. It leaves
+#: `sale_ends` null, the staleness guard in agents/campaign_airline.py has no
+#: date to fire on, and a two-day June flash sale is published in August as a
+#: campaign with no deadline. One such row was live from the 2026-08-30 scan.
+#:
+#: Completing "26" to 2026 is not the year guess this module refuses elsewhere.
+#: The year IS written; only its century is not, and a two-digit year in a
+#: carrier's own ticketing field cannot mean 1926. It is therefore completed
+#: from the scan year's century and NOT flagged `inferred_year`, which means
+#: "the source did not state a year" and would be a false statement about this
+#: field.
+_TR_DASHED_DATE = re.compile(
+    r"\b(\d{1,2})-([^\W\d_]{3,})-(\d{2}|\d{4})\b", re.UNICODE
+)
+
+
+def _expand_dashed_dates(raw: str, *, default_year: int) -> str:
+    """"21-Haziran-26" -> "21 Haziran 2026", anywhere in the field."""
+
+    def rewrite(match: re.Match[str]) -> str:
+        day, month, year = match.groups()
+        if len(year) == 2:
+            year = str(default_year - default_year % 100 + int(year))
+        return f"{day} {month} {year}"
+
+    return _TR_DASHED_DATE.sub(rewrite, raw)
+
 
 def parse_window(raw: str | None, *, default_year: int) -> tuple[date | None, date | None, bool]:
     """A carrier's own date-range field -> (start, end, year_was_inferred).
@@ -1009,10 +1129,14 @@ def parse_window(raw: str | None, *, default_year: int) -> tuple[date | None, da
     END of an open-ended run ("30 Kasım'a kadar"), because guessing a start
     would put a bar somewhere the carrier never said it was.
 
-    The one addition is `_TR_SHORT_DAY_RANGE` -- see above.
+    The two additions are `_TR_SHORT_DAY_RANGE` and `_TR_DASHED_DATE` -- see
+    above. Both are punctuation normalisations of a date the carrier fully
+    stated, applied only to a labelled date field, never to page prose.
     """
     if not raw or not raw.strip():
         return None, None, False
+
+    raw = _expand_dashed_dates(raw, default_year=default_year)
 
     short = _TR_SHORT_DAY_RANGE.match(raw)
     if short is not None:

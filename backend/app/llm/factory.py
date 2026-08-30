@@ -1,3 +1,5 @@
+import inspect
+
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.llm.base import EntityMention, LLMProvider
@@ -186,7 +188,7 @@ def get_llm_provider() -> LLMProvider:
     return live if settings.llm_full_pipeline else BudgetedProvider(live, fast)
 
 
-def get_raw_generator():
+def get_raw_generator(max_output_tokens: int | None = None):
     """The configured live model as a bare `(prompt) -> str` coroutine, or None.
 
     The LLMProvider protocol is a fixed set of enrichment *tasks*; promotion
@@ -199,13 +201,36 @@ def get_raw_generator():
     BudgetedProvider.live). Returns None whenever no live model is configured
     -- which is the normal case locally, and the caller's signal to use its own
     heuristic path rather than to fail.
+
+    `max_output_tokens` raises the returned coroutine's output ceiling for
+    every call made through it, for the caller whose answer is a document
+    rather than a sentence (pipeline/campaign_extract.py). Bound here rather
+    than passed at the call site so the coroutine keeps its one-argument shape:
+    the campaign chain takes `generate` as an injectable dependency and every
+    test in the suite hands it a plain `async def (prompt)`. A provider whose
+    completion call does not accept a ceiling -- Ollama's, which has no such
+    parameter -- is returned unchanged rather than wrapped in a kwarg it would
+    reject.
     """
     provider = get_llm_provider()
     for _ in range(3):  # BudgetedProvider -> FallbackProvider -> concrete
         generate = getattr(provider, "_generate", None)
         if callable(generate):
-            return generate
+            if max_output_tokens is None or not _accepts_max_tokens(generate):
+                return generate
+
+            async def bounded(prompt: str, _generate=generate) -> str:
+                return await _generate(prompt, max_tokens=max_output_tokens)
+
+            return bounded
         provider = getattr(provider, "live", None) or getattr(provider, "primary", None)
         if provider is None:
             return None
     return None
+
+
+def _accepts_max_tokens(generate) -> bool:
+    try:
+        return "max_tokens" in inspect.signature(generate).parameters
+    except (TypeError, ValueError):  # a C-level or otherwise unreadable callable
+        return False

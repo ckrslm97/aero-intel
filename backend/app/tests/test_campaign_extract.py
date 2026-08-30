@@ -396,8 +396,13 @@ async def test_unparseable_json_fails_the_page_and_writes_nothing():
     assert result.count == 0
 
 
-async def test_a_campaigns_key_that_is_not_a_list_is_a_failed_page():
-    result = await _extract({"campaigns": {"campaign_name": "Yaz"}})
+async def test_a_campaigns_key_that_is_not_a_container_is_a_failed_page():
+    """`{"campaigns": {"campaign_name": ...}}` used to be here too. It is the
+    campaigns key holding the one campaign instead of a list of one, which is
+    an envelope difference rather than a wrong answer, and it is now read (see
+    the schema-layer tests). A value that holds no campaign at all still is
+    not one."""
+    result = await _extract({"campaigns": "Yaz indirimi"})
     assert result.succeeded is False
 
 
@@ -488,7 +493,7 @@ def test_a_clean_object_is_read_whole_rather_than_out_of_a_slice():
 
 
 async def test_no_model_configured_is_a_failed_page_not_a_heuristic_pass(monkeypatch):
-    monkeypatch.setattr("app.llm.factory.get_raw_generator", lambda: None)
+    monkeypatch.setattr("app.llm.factory.get_raw_generator", lambda **_: None)
     result = await extract_campaigns_from_page(
         EK_PAGE,
         carrier=EK,
@@ -608,6 +613,133 @@ def test_a_bare_list_is_wrapped_rather_than_refused():
     page = parse_campaign_payload([{"campaign_name": "Yaz"}, {"discount_pct": 40}])
     assert [c.campaign_name for c in page.campaigns] == ["Yaz"]
     assert page.invalid_items == 1
+
+
+def test_a_single_campaign_written_without_the_envelope_is_read_as_one():
+    """Same leniency as the bare list, one campaign further in: the model
+    answered the question and skipped the wrapper."""
+    page = parse_campaign_payload({**SUMMER})
+
+    assert [c.campaign_name for c in page.campaigns] == ["Summer fares to Europe"]
+
+
+def test_campaigns_written_as_a_map_is_read_as_the_list_in_its_own_order():
+    page = parse_campaign_payload({"campaigns": {"1": SUMMER, "2": ISTANBUL}})
+
+    assert [c.campaign_name for c in page.campaigns] == [
+        "Summer fares to Europe",
+        "Dubai to Istanbul offer",
+    ]
+    # And the single-campaign-as-the-value shape.
+    assert parse_campaign_payload({"campaigns": SUMMER}).campaigns[0].discount_pct == 25
+
+
+@pytest.mark.parametrize("payload", [{"campaigns": {}}, {"campaigns": {"a": "Yaz"}}])
+def test_a_map_with_no_campaigns_in_it_still_fails_the_page(payload):
+    """The envelope is forgiven; the answer is not. An object that carries no
+    campaign object is not a page with no campaigns on it."""
+    with pytest.raises(ValueError):
+        parse_campaign_payload(payload)
+
+
+# --- the cut-off answer ---------------------------------------------------
+
+
+def _truncated(*items) -> str:
+    """The shape a cut-off answer actually has: a valid opening, whole cards,
+    and a last one that stops mid-field with nothing closed after it."""
+    body = ",\n".join(json.dumps(item, ensure_ascii=False) for item in items)
+    return '{\n"campaigns": [\n' + body + ',\n  {\n    "campaign_name": "Kış fırs'
+
+
+def test_a_cut_off_answer_keeps_the_cards_that_were_finished():
+    payload = extract_campaign_json(_truncated(SUMMER, ISTANBUL))
+
+    assert isinstance(payload, dict)
+    page = parse_campaign_payload(payload)
+    assert [c.campaign_name for c in page.campaigns] == [
+        "Summer fares to Europe",
+        "Dubai to Istanbul offer",
+    ]
+    assert page.truncated is True, "the caller has to be able to log why this happened"
+    # The half-written card is dropped, never completed: it is not counted as
+    # an item that failed validation either, because it was never an item.
+    assert page.invalid_items == 0
+
+
+async def test_a_cut_off_page_publishes_the_campaigns_that_survived():
+    """The production failure, end to end: a fetched page, a spent call and
+    two real campaigns used to be lost to a missing closing brace."""
+    result = await _extract(_truncated(SUMMER, ISTANBUL))
+
+    assert result.succeeded is True
+    assert result.count == 2
+
+
+def test_a_truncation_that_finished_nothing_is_still_a_failed_page():
+    """The opposite fact from an empty page. `{"campaigns": [` says the model
+    was interrupted before it said anything, and reading that as "no campaigns"
+    would baseline the page and stop asking."""
+    assert extract_campaign_json('{\n"campaigns": [\n  {\n    "campaign_name": "Kış') is None
+
+
+async def test_a_page_with_no_json_in_the_answer_says_so_in_its_reason():
+    result = await _extract("Bu sayfada kampanya bulunmuyor, yardımcı olabildiysem ne mutlu.")
+
+    assert result.succeeded is False
+    assert result.reason == "schema_error:no_json_in_response"
+
+
+async def test_an_unreadable_but_json_shaped_answer_is_named_as_a_truncation():
+    """The reason the log used to give -- "payload must be a JSON object" --
+    about a response whose first character is `{`. It is now named for what it
+    is, so the next occurrence points at the output ceiling."""
+    result = await _extract('{"campaigns": [{"campaign_name": "Kış fırs')
+
+    assert result.succeeded is False
+    assert result.reason == "schema_error:truncated_response"
+
+
+async def test_the_campaign_call_raises_its_own_output_ceiling(monkeypatch):
+    """A one-argument coroutine either way -- the whole chain injects
+    `generate` -- but the campaign call's is bound to a ceiling, because its
+    answer is a document and the provider default cut one off in production."""
+    from app.llm import factory
+    from app.pipeline.campaign_extract import CAMPAIGN_MAX_OUTPUT_TOKENS
+
+    seen: dict = {}
+
+    class _Provider:
+        name = "fake"
+
+        async def _generate(self, prompt: str, *, max_tokens: int | None = None) -> str:
+            seen["max_tokens"] = max_tokens
+            return "{}"
+
+    monkeypatch.setattr(factory, "get_llm_provider", lambda: _Provider())
+
+    assert CAMPAIGN_MAX_OUTPUT_TOKENS > 3072, "the ceiling the production answer hit"
+    generate = factory.get_raw_generator(max_output_tokens=CAMPAIGN_MAX_OUTPUT_TOKENS)
+
+    assert await generate("selam") == "{}"
+    assert seen["max_tokens"] == CAMPAIGN_MAX_OUTPUT_TOKENS
+
+
+def test_a_generator_that_cannot_take_a_ceiling_is_returned_unchanged(monkeypatch):
+    """Ollama's completion call has no such parameter; wrapping it in one would
+    turn a working local model into a TypeError on every campaign page."""
+    from app.llm import factory
+
+    class _Provider:
+        name = "ollama"
+
+        async def _generate(self, prompt: str) -> str:
+            return "{}"
+
+    provider = _Provider()
+    monkeypatch.setattr(factory, "get_llm_provider", lambda: provider)
+
+    assert factory.get_raw_generator(max_output_tokens=5000) == provider._generate
 
 
 # --- the prompt -----------------------------------------------------------

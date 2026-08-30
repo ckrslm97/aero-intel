@@ -96,16 +96,28 @@ class OpenAICompatProvider:
         stop=stop_after_attempt(4),
         reraise=True,
     )
-    async def _generate(self, prompt: str) -> str:
+    async def _generate(self, prompt: str, *, max_tokens: int | None = None) -> str:
+        """One completion. `max_tokens` raises this call's output ceiling only.
+
+        Left unset for every enrichment task, which answers in a word or a
+        paragraph and would only be capped by a number chosen here. It is set
+        by the one caller whose answer is a document -- the campaign page
+        prompt, which asks for every offer on a page with a quote per field --
+        after a production run returned exactly 3,072 completion tokens of
+        valid JSON with no closing brace on it and the whole page was failed.
+        """
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
+        body: dict = {
+            "model": self.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.2,
+        }
+        if max_tokens is not None:
+            body["max_tokens"] = max_tokens
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT, headers=headers) as client:
             response = await client.post(
                 f"{self.base_url}/chat/completions",
-                json={
-                    "model": self.model,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.2,
-                },
+                json=body,
             )
             if response.status_code == 429:
                 logger.info("llm_rate_limited_backing_off", retry_after=response.headers.get("retry-after"))
@@ -115,15 +127,30 @@ class OpenAICompatProvider:
             # reports what is actually left on every response; logging it makes
             # the ceiling visible in the job output instead of a guess.
             usage = payload.get("usage") or {}
+            choice = payload["choices"][0]
+            # Why the answer stopped. "length" means the model was cut off
+            # mid-sentence and whatever it was writing is unfinished -- the
+            # difference between a short answer and an interrupted one, which
+            # is otherwise invisible until a parser downstream complains about
+            # a shape that was never the problem.
+            finish_reason = choice.get("finish_reason")
             logger.info(
                 "llm_call_complete",
                 model=self.model,
                 prompt_tokens=usage.get("prompt_tokens"),
                 completion_tokens=usage.get("completion_tokens"),
+                finish_reason=finish_reason,
                 tokens_remaining_day=response.headers.get("x-ratelimit-remaining-tokens"),
                 requests_remaining_day=response.headers.get("x-ratelimit-remaining-requests"),
             )
-            return payload["choices"][0]["message"]["content"].strip()
+            if finish_reason == "length":
+                logger.warning(
+                    "llm_response_truncated",
+                    model=self.model,
+                    completion_tokens=usage.get("completion_tokens"),
+                    max_tokens=max_tokens,
+                )
+            return choice["message"]["content"].strip()
 
     async def generate_headline(self, title: str, content: str) -> str:
         return await self._generate(headline_prompt(title, content))
