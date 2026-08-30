@@ -154,6 +154,21 @@ class ArticleEnrichment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     translated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     translation_provider: Mapped[str | None] = mapped_column(String(30), nullable=True)
 
+    #: "Neden önemli?" -- one or two Turkish sentences on what this story means
+    #: for a revenue-management desk, written by the LLM at enrichment time.
+    #:
+    #: NULL on the overwhelming majority of rows and that is the design, not a
+    #: backlog: it is generated only for articles whose focus-weighted
+    #: importance clears WHY_IMPORTANT_MIN_IMPORTANCE (app/pipeline/enrich.py)
+    #: AND only when a translation-capable live provider is configured, because
+    #: it is a second model call on top of translation and translation already
+    #: is the daily token budget. A handful of articles a day carry one; the UI
+    #: shows the block when it is there and nothing at all when it is not.
+    #:
+    #: Text, not String(n): a length cap would truncate a sentence mid-word
+    #: rather than reject it. The provider caps its own answer instead.
+    why_important_tr: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     # --- Risk Radarı classification (see app/taxonomy.py RISK_TYPES) ---------
     # All nullable, and null is the overwhelmingly common case: most aviation
     # articles are not disaster or conflict events. Kept on ArticleEnrichment

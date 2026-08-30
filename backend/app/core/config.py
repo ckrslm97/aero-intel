@@ -63,6 +63,13 @@ class Settings(BaseSettings):
     # this portal is about; everything else still gets a heuristic enrichment
     # and is honestly labelled untranslated. 0 disables the gate.
     llm_relevance_threshold: int = 6
+    # Hard ceiling on "Neden önemli?" assessments per enrichment run
+    # (app/pipeline/enrich.py). The importance gate already keeps this to the
+    # two or three stories a run that clear WHY_IMPORTANT_MIN_IMPORTANCE, but
+    # that gate is a property of the day's news and this is a property of the
+    # budget -- a day where every wire runs a fare story must not quietly cost
+    # a second model call on all of them. 0 turns the feature off entirely.
+    llm_why_important_per_run: int = 3
 
     # --- Pipeline v2 (Phase 7 rebuild) ---
     # Off by default. When true, `python -m app.cli pipeline-v2` runs the new

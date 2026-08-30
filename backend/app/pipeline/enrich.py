@@ -20,7 +20,7 @@ from app.pipeline.relevance import score_article
 from app.pipeline.search_indexing import index_article_text
 from app.pipeline.verify import compute_confidence
 from app.repositories.entity_repository import EntityRepository
-from app.taxonomy import is_valid_risk_type, risk_family_of
+from app.taxonomy import FOCUS_BONUS, is_valid_risk_type, risk_family_of
 
 logger = get_logger(__name__)
 
@@ -130,6 +130,45 @@ def _importance_score(confidence: float, corroborating_count: int) -> float:
     return round(min(1.0, confidence * 0.7 + min(corroborating_count, 5) * 0.06), 3)
 
 
+#: Focus-weighted importance a story must clear to earn a "Neden önemli?"
+#: assessment -- the same `importance_score + FOCUS_BONUS[category]` the Gazete
+#: filters on and the daily edition's front page ranks by (see
+#: app/repositories/article_repository.py `_focus_weighted_importance`).
+#:
+#: Weighted rather than raw for the reason that function documents at length:
+#: the raw column measures how widely SYNDICATED a story is, so a flat floor on
+#: it would buy assessments for Boeing order copy that ten wires carried and
+#: none for the single-sourced fare move this desk actually needs explained.
+#: At 0.75 the gate is, in practice, "revenue management, or something several
+#: outlets corroborated" -- two or three articles out of a twelve-article live
+#: batch, on top of a ceiling in settings (llm_why_important_per_run).
+WHY_IMPORTANT_MIN_IMPORTANCE = 0.75
+
+
+def _focus_weighted(importance: float, category: str) -> float:
+    return round(importance + FOCUS_BONUS.get(category, 0.0), 3)
+
+
+async def _why_important(engine, article, category: str) -> str | None:
+    """The desk-facing "so what", for the few articles that earn one.
+
+    Optional-method shape, same as _translate_pair and _classify_risk: the
+    heuristic provider has no `why_important`, so the free path simply never
+    produces one and the column stays NULL. A failure is logged and swallowed
+    -- an article must never be lost over a nice-to-have sentence.
+    """
+    assess = getattr(engine, "why_important", None)
+    if assess is None:
+        return None
+    try:
+        return await assess(article.title, article.raw_content, category)
+    except Exception as exc:  # noqa: BLE001 -- never fail an article on this
+        logger.warning(
+            "why_important_failed", article_id=str(article.id), error=str(exc)[:200]
+        )
+        return None
+
+
 async def _select_pending(db: AsyncSession, limit: int | None) -> list[Article]:
     """The articles this run will work on.
 
@@ -220,6 +259,7 @@ async def enrich_pending_articles(db: AsyncSession, limit: int | None = None) ->
     skipped = 0
     collisions = 0
     llm_used = 0
+    assessments = 0
 
     for article in articles:
         # The gate. Scored locally, before a single network call: an article
@@ -296,6 +336,20 @@ async def enrich_pending_articles(db: AsyncSession, limit: int | None = None) ->
             # Not hidden -- still searchable and filterable, just not led with.
             importance = round(importance * LISTICLE_PENALTY, 3)
 
+        # "Neden önemli?" -- the day's few genuinely desk-relevant stories only.
+        # Three gates, all of which have to hold: the story is important enough
+        # once weighted, this article was already on the live path (the free
+        # heuristic cannot write prose), and the run has budget left.
+        why_important_tr = None
+        if (
+            worth_llm
+            and assessments < settings.llm_why_important_per_run
+            and _focus_weighted(importance, category) >= WHY_IMPORTANT_MIN_IMPORTANCE
+        ):
+            why_important_tr = await _why_important(engine, article, category)
+            if why_important_tr:
+                assessments += 1
+
         enrichment = ArticleEnrichment(
             article_id=article.id,
             headline=headline,
@@ -314,6 +368,7 @@ async def enrich_pending_articles(db: AsyncSession, limit: int | None = None) ->
             summary_tr=summary_tr,
             translated_at=datetime.now(timezone.utc) if translated else None,
             translation_provider=provider.name if translated else None,
+            why_important_tr=why_important_tr,
             **risk,
         )
         # Each article writes inside its own savepoint. The NOT EXISTS filter
@@ -334,7 +389,27 @@ async def enrich_pending_articles(db: AsyncSession, limit: int | None = None) ->
                     db.add(ArticleEntity(article_id=article.id, entity_id=entity.id))
 
                 await index_article_text(
-                    db, article.id, f"{article.title} {headline} {summary} {enrichment.tags}"
+                    db,
+                    article.id,
+                    # The Turkish text is indexed alongside the English so a
+                    # Turkish query has anything at all to match: /search reads
+                    # this vector, and until now it only ever held the English
+                    # title/headline/summary -- "yakıt" returned nothing on a
+                    # Turkish-language paper. Still the 'english' config, so
+                    # Turkish words match verbatim rather than being stemmed
+                    # (see app/pipeline/search_indexing.py).
+                    " ".join(
+                        part
+                        for part in (
+                            article.title,
+                            headline,
+                            summary,
+                            headline_tr,
+                            summary_tr,
+                            enrichment.tags,
+                        )
+                        if part
+                    ),
                 )
                 article.status = "enriched"
         except IntegrityError:
@@ -351,6 +426,9 @@ async def enrich_pending_articles(db: AsyncSession, limit: int | None = None) ->
         llm_enriched=len(articles) - skipped,
         # Articles another worker had already written while this run was going.
         collisions=collisions,
+        # Second model calls spent on "Neden önemli?" -- visible in the job
+        # output so the extra budget is a number, not an assumption.
+        why_important=assessments,
     )
     return len(articles) - collisions
 
@@ -378,6 +456,10 @@ async def translate_pending_articles(db: AsyncSession, limit: int = 12) -> int:
 
     result = await db.execute(
         select(ArticleEnrichment)
+        # The article itself comes along because a newly translated row has to
+        # be re-indexed for search, and the vector is built from the article's
+        # title plus both language pairs.
+        .options(selectinload(ArticleEnrichment.article))
         .join(Article, Article.id == ArticleEnrichment.article_id)
         .where(
             Article.is_duplicate.is_(False),
@@ -404,6 +486,28 @@ async def translate_pending_articles(db: AsyncSession, limit: int = 12) -> int:
         enrichment.summary_tr = summary_tr
         enrichment.translated_at = datetime.now(timezone.utc)
         enrichment.translation_provider = provider.name
+        # The search vector was written at enrichment time, when there was no
+        # Turkish text to put in it. Without this the backfilled rows -- which
+        # is most of what the paper shows -- stay unfindable by a Turkish query
+        # even though they now carry Turkish.
+        article = enrichment.article
+        if article is not None:
+            await index_article_text(
+                db,
+                article.id,
+                " ".join(
+                    part
+                    for part in (
+                        article.title,
+                        enrichment.headline,
+                        enrichment.summary,
+                        headline_tr,
+                        summary_tr,
+                        enrichment.tags,
+                    )
+                    if part
+                ),
+            )
         translated += 1
 
     await db.commit()

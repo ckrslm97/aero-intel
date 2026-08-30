@@ -8,9 +8,66 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.cache_headers import AGGREGATES, ARTICLES, public_cache
 from app.core.db import get_db
 from app.repositories.article_repository import ArticleRepository
-from app.schemas.article import ArticleListOut, ArticleOut
+from app.schemas.article import ArticleListOut, ArticleOut, ArticleSourceOut
+from app.taxonomy import SOURCE_TIERS, effective_source_tier
 
 router = APIRouter(prefix="/articles", tags=["articles"])
+
+_TIER_DESCRIPTION = (
+    "Source tier to keep, repeated once per value: "
+    + " | ".join(SOURCE_TIERS)
+    + ". Matches the EFFECTIVE tier -- a source with no declared tier falls "
+    "back to its trust_weight bucket, exactly as the Risk Radarı resolves it. "
+    "Omit for every tier, which is the default everywhere"
+)
+
+
+def _validated_tiers(tier: list[str] | None) -> list[str] | None:
+    """Reject an unknown tier instead of quietly returning nothing.
+
+    A typo'd `?tier=oficial` matches no source, so the honest answer is an
+    empty page -- which is indistinguishable on screen from "no news today".
+    422 says which value was wrong.
+    """
+    if not tier:
+        return None
+    unknown = [value for value in tier if value not in SOURCE_TIERS]
+    if unknown:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Unknown source tier(s): {', '.join(unknown)}. "
+                f"Valid tiers: {', '.join(SOURCE_TIERS)}."
+            ),
+        )
+    return list(tier)
+
+
+def _window_start(hours: int | None, days: int | None, date: date_type | None):
+    """The `published_at >=` cutoff for whichever window the caller asked for.
+
+    `hours`, `days` and `date` are three ways to say the same thing and only
+    one can be true at a time: a request carrying `hours=6&days=30` has no
+    defensible answer (6 hours? 30 days? the intersection, which is just 6
+    hours and makes `days` a lie?), so it is rejected rather than silently
+    resolved. Callers pick one -- the Gazete's window chips send `hours` for
+    the two short rungs and `days` for the rest; the archive sends `date`.
+    """
+    picked = [name for name, value in (("hours", hours), ("days", days), ("date", date)) if value]
+    if len(picked) > 1:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"hours, days and date are mutually exclusive; got {', '.join(picked)}. "
+                "Send exactly one time window."
+            ),
+        )
+    now = datetime.now(timezone.utc)
+    if hours:
+        return now - timedelta(hours=hours)
+    if days:
+        return now - timedelta(days=days)
+    return None
 
 
 @router.get("", response_model=ArticleListOut)
@@ -30,6 +87,16 @@ async def list_articles(
     ),
     days: int | None = Query(
         None, ge=1, le=365, description="Only articles published within the last N days"
+    ),
+    hours: int | None = Query(
+        None,
+        ge=1,
+        le=720,
+        description=(
+            "Only articles published within the last N hours -- the short end "
+            "of the same axis as `days`, for the Gazete's 6s/24s window chips "
+            "and its 'Son Dakika' strip. Mutually exclusive with days and date"
+        ),
     ),
     date: date_type | None = Query(
         None, description="Only articles from this UTC day (archive view)"
@@ -67,17 +134,20 @@ async def list_articles(
             "this desk's priority"
         ),
     ),
+    tier: list[str] | None = Query(None, description=_TIER_DESCRIPTION),
     response: Response = None,  # type: ignore[assignment]  -- FastAPI injects it
     db: AsyncSession = Depends(get_db),
 ) -> ArticleListOut:
     public_cache(response, ARTICLES)
     repo = ArticleRepository(db)
-    since = datetime.now(timezone.utc) - timedelta(days=days) if days else None
+    since = _window_start(hours, days, date)
+    tiers = _validated_tiers(tier)
     items = await repo.list_recent(
         limit=limit, offset=offset, category=category, subcategory=subcategory,
         region=region, since=since, airline=airline, on_date=date,
         country=country, airport=airport, translated_only=translated_only,
         exclude_categories=exclude_categories, min_importance=min_importance,
+        tiers=tiers,
     )
     # Filtered total (same clause as the list) so "load more" knows when to stop.
     # A short page IS the end of the result set, so the count query -- the more
@@ -90,7 +160,7 @@ async def list_articles(
             category=category, subcategory=subcategory, region=region, since=since,
             airline=airline, on_date=date, country=country, airport=airport,
             translated_only=translated_only, exclude_categories=exclude_categories,
-            min_importance=min_importance,
+            min_importance=min_importance, tiers=tiers,
         )
     return ArticleListOut(total=total, items=[ArticleOut.model_validate(a) for a in items])
 
@@ -98,6 +168,16 @@ async def list_articles(
 @router.get("/counts")
 async def article_counts(
     days: int | None = Query(None, ge=1, le=365),
+    hours: int | None = Query(
+        None,
+        ge=1,
+        le=720,
+        description=(
+            "Hour window -- mirrors the list endpoint, so a tab badge counts "
+            "the same rows a 6s/24s view will render. Mutually exclusive "
+            "with days"
+        ),
+    ),
     translated_only: bool = Query(
         False, description="Only articles with a real Turkish translation -- Gazete's default"
     ),
@@ -122,7 +202,7 @@ async def article_counts(
     rows the filtered list would never render is a badge that lies.
     """
     public_cache(response, AGGREGATES)
-    since = datetime.now(timezone.utc) - timedelta(days=days) if days else None
+    since = _window_start(hours, days, None)
     return await ArticleRepository(db).count_by_category(
         since=since,
         translated_only=translated_only,
@@ -140,6 +220,48 @@ async def daily_counts(
     """Article count per UTC day, for the archive page's date strip."""
     public_cache(response, AGGREGATES)
     return await ArticleRepository(db).count_by_day(days=days)
+
+
+@router.get("/{article_id}/sources", response_model=list[ArticleSourceOut])
+async def article_sources(
+    article_id: uuid.UUID,
+    response: Response = None,  # type: ignore[assignment]
+    db: AsyncSession = Depends(get_db),
+) -> list[ArticleSourceOut]:
+    """Every outlet that ran this story, oldest first.
+
+    The list behind `corroborating_source_count`. That number has been on the
+    Gazete's analysis drawer since it shipped and has never been checkable: the
+    duplicate group it counts is stored (Article.duplicate_of_id) but was never
+    exposed, so "3 kaynak" was a claim the reader had to take on faith.
+
+    Lazy on purpose -- one request per article a reader actually opens, not a
+    join riding along with every one of the thirty rows they scroll past.
+
+    404 rather than an empty list for an unknown id: an article with no
+    duplicates still returns exactly one row (itself), so `[]` can only mean
+    the id is wrong, and answering it with a valid-looking empty answer would
+    render as "no sources corroborated this".
+    """
+    public_cache(response, ARTICLES)
+    repo = ArticleRepository(db)
+    group = await repo.list_duplicate_group(article_id)
+    if not group:
+        raise HTTPException(status_code=404, detail="Article not found")
+    return [
+        ArticleSourceOut(
+            source_name=article.source.name,
+            source_tier=effective_source_tier(
+                article.source.tier, article.source.trust_weight
+            ),
+            trust_weight=article.source.trust_weight,
+            url=article.url,
+            published_at=article.published_at,
+            title=article.title,
+            is_primary=article.id == article_id,
+        )
+        for article in group
+    ]
 
 
 @router.get("/{article_id}", response_model=ArticleOut)

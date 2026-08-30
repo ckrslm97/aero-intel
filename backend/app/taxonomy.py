@@ -729,3 +729,51 @@ def is_valid_route_scope(slug: str | None) -> bool:
 
 def is_valid_campaign_status(slug: str | None) -> bool:
     return slug in CAMPAIGN_STATUSES
+
+
+# --- Source tiers ---------------------------------------------------------
+#
+# The owner's source-priority ladder, most authoritative first. Declared per
+# source (models/source.py `tier`, seeded by ingest/sources_seed.py) and used
+# by pipeline/confidence.py to weight a claim, by pipeline/clustering.py to
+# pick a cluster's primary telling, and now by the Gazete to badge a card and
+# filter a list.
+#
+# Lives here for the same reason FOCUS_BONUS does: taxonomy.py imports nothing
+# from the app, so the schema layer, the repository layer and the pipeline can
+# all read one definition without a cycle.
+SOURCE_TIERS: tuple[str, ...] = ("official", "regulator", "agency", "trade", "aggregator")
+
+#: Fallback for a source with no declared tier: bucket its bare trust_weight.
+#: Every source ingest/sources_seed.py seeds declares a real tier, so this only
+#: fires for a row seeded before that column existed and not yet reconciled, or
+#: a source added by hand outside the seed list.
+#:
+#: Note what it cannot produce: "official". Being an airline's or a regulator's
+#: own newsroom is a fact about who publishes the feed, not something a
+#: confidence weight can be read backwards into -- so an undeclared source is
+#: never promoted to the top rung by arithmetic.
+TRUST_WEIGHT_TIERS: tuple[tuple[float, str], ...] = (
+    (0.90, "regulator"),
+    (0.75, "agency"),
+    (0.50, "trade"),
+)
+DEFAULT_UNDECLARED_TIER = "aggregator"
+
+
+def effective_source_tier(tier: str | None, trust_weight: float | None) -> str:
+    """The tier a source counts as: the declared one, or its trust bucket.
+
+    One definition with two callers that must never disagree --
+    pipeline/clustering.py `tier_for_source` badges the Risk Radarı's
+    publication chronology with it, and schemas/article.py puts it on every
+    article card. A card reading "Ajans" while the same outlet reads
+    "Düzenleyici" three pages over is the failure this prevents.
+    """
+    if tier:
+        return tier
+    weight = trust_weight if trust_weight is not None else 0.0
+    for floor, name in TRUST_WEIGHT_TIERS:
+        if weight >= floor:
+            return name
+    return DEFAULT_UNDECLARED_TIER

@@ -50,6 +50,7 @@ from dataclasses import dataclass, field
 
 from app.llm.gazetteer import AIRLINE_ALIASES
 from app.pipeline.text_tr import jaccard, stem_tokens, tr_normalize
+from app.taxonomy import effective_source_tier
 
 #: Floor for considering a pair at all. Deliberately low: it exists to stop
 #: absurd comparisons, not to decide anything. The decision is made by the
@@ -131,23 +132,19 @@ def _tier_for_trust_weight(weight: float) -> str:
     bucketing only fires for a row seeded before that field existed and not
     yet reconciled, or a source added by hand outside the seed list -- it is
     the fallback, not the primary path. See tier_for_source below.
+
+    The ladder itself moved to app/taxonomy.py when the Gazete started badging
+    cards with it: two copies of these thresholds would let the same outlet be
+    "Ajans" on one page and "Düzenleyici" on another.
     """
-    if weight >= 0.90:
-        return "regulator"
-    if weight >= 0.75:
-        return "agency"
-    if weight >= 0.50:
-        return "trade"
-    return "aggregator"
+    return effective_source_tier(None, weight)
 
 
 def tier_for_source(source) -> str:
     """The declared tier when there is one; the trust_weight bucket otherwise."""
     if source is None:
         return "trade"
-    if source.tier:
-        return source.tier
-    return _tier_for_trust_weight(source.trust_weight)
+    return effective_source_tier(source.tier, source.trust_weight)
 
 
 def entity_codes(article) -> frozenset[str]:

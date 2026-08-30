@@ -17,9 +17,23 @@ import { ArticleCard } from "@/components/article-card";
 import { CategoryChipRow } from "@/components/filters/category-chip-row";
 import { EventsCalendar } from "@/components/events-calendar";
 import { AirlineLogo } from "@/components/airline-logo";
+import { BreakingStrip } from "@/components/gazete/breaking-strip";
+import { EventRadarStrip } from "@/components/gazete/event-radar-strip";
+import { HighlightsRow } from "@/components/gazete/highlights-row";
 import { Pagination } from "@/components/pagination";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiFetch } from "@/lib/api";
+import {
+  applyWindowParams,
+  DEFAULT_CATEGORY,
+  type GazeteFilters,
+  hasNarrowingFilters,
+  parseFilters,
+  serializeFilters,
+  TIER_FILTERS,
+  WINDOW_OPTIONS,
+  windowOption,
+} from "@/lib/gazete";
 import { airlineTabs } from "@/lib/nav";
 import {
   EVENT_REGIONS,
@@ -28,7 +42,7 @@ import {
   NEWSPAPER_EXCLUDED_CATEGORY_SLUGS,
 } from "@/lib/taxonomy";
 import { RIVAL_CODES } from "@/lib/taxonomy.gen";
-import type { ArticleListOut, ArticleOut } from "@/lib/types";
+import type { ArticleListOut, ArticleOut, CountryOut } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 // echarts + the world outline are only needed once the map is opened.
@@ -53,13 +67,7 @@ const AIRLINE_FILTER_LABEL: Record<string, string> = {
   ALL: "haberde geçen tüm havayolları",
 };
 
-// Only recent articles -- keeps the browser focused on "what's current"
-// rather than the entire archive, per the freshness feedback on this page.
-const DAYS_WINDOW = 30;
 const PAGE_LIMIT = 30;
-
-/** The Gazete's default tab. First entry of the owner's priority order. */
-const DEFAULT_CATEGORY = NEWSPAPER_CATEGORY_SLUGS[0];
 
 /** "Fewer, more critical stories": a floor on the FOCUS-WEIGHTED importance
  * score -- `importance_score + FOCUS_BONUS[category]`, applied server-side (see
@@ -124,6 +132,13 @@ const DAY_HEADER_FORMAT = new Intl.DateTimeFormat("tr-TR", {
   year: "numeric",
 });
 
+const LAST_UPDATED_FORMAT = new Intl.DateTimeFormat("tr-TR", {
+  day: "numeric",
+  month: "short",
+  hour: "2-digit",
+  minute: "2-digit",
+});
+
 interface DayGroup {
   /** ISO calendar day, or null for the trailing "Tarihsiz" bucket. */
   key: string | null;
@@ -176,49 +191,62 @@ export function NewspaperBrowser() {
   const router = useRouter();
   const pathname = usePathname();
 
-  // Opening filters can come from the URL, so Know How's "Gelir Yönetimi
-  // haberleri" link lands on the paper already filtered and a filtered view is
-  // shareable. Read once, as the initial state: after that the chips own the
-  // filters, and re-reading the URL would fight them.
+  /** The URL is the filter state -- read every render, not once on mount.
+   *
+   * It used to be read exactly once, as the initial value of six useStates,
+   * after which the chips owned the filters. That made a filtered view
+   * reachable but not SHAREABLE (the address bar never moved), and it made the
+   * back button walk out of the page instead of back through the filters --
+   * only `?page=` was URL-owned, so browser history recorded paging and
+   * nothing else.
+   *
+   * Now every chip writes to the URL and the URL drives the fetch, so a
+   * shared link reproduces the view it was copied from and back/forward walk
+   * the filter history for free (Next's useSearchParams re-renders on
+   * popstate; there is no listener to get wrong).
+   */
   const searchParams = useSearchParams();
+  const filters = useMemo(
+    () => parseFilters(new URLSearchParams(searchParams.toString())),
+    [searchParams],
+  );
+  const {
+    category: categorySlug,
+    subcategory: subcategorySlug,
+    region: regionSlug,
+    country: countrySlug,
+    airline: airlineCode,
+    tier: tierId,
+    page,
+  } = filters;
+  const activeWindow = windowOption(filters.window);
 
-  // Unlike the filter chips above, the page number stays URL-owned for its
-  // whole life -- that is what makes a paged link shareable and the back
-  // button land on the page you actually came from, per Faz 11's pagination
-  // contract. 1-indexed; an invalid or missing ?page= reads as page 1.
-  const pageParam = Number(searchParams.get("page"));
-  const page = Number.isFinite(pageParam) && pageParam >= 1 ? Math.floor(pageParam) : 1;
+  /** Apply a patch to the URL.
+   *
+   * `router.replace`, not push: a filter row is a control the reader adjusts,
+   * often several times in a row, and pushing every chip press would make the
+   * back button undo them one at a time instead of leaving the page. Paging
+   * keeps `push` below, which is Faz 11's existing pagination contract.
+   *
+   * Any filter change resets to page 1 unless the patch says otherwise --
+   * landing on page 4 of a result set that now has two pages is the classic
+   * way a filtered list renders empty for no visible reason.
+   */
+  function updateFilters(patch: Partial<GazeteFilters>, { push = false } = {}) {
+    const next: GazeteFilters = { ...filters, page: 1, ...patch };
+    const params = serializeFilters(next);
+    const href = params.size ? `${pathname}?${params.toString()}` : pathname;
+    // scroll: false on both -- Next's default scroll-to-top on navigation
+    // would yank the page every time a chip is pressed.
+    if (push) router.push(href, { scroll: false });
+    else router.replace(href, { scroll: false });
+  }
 
   function setPage(next: number) {
-    const params = new URLSearchParams(searchParams.toString());
-    if (next <= 1) params.delete("page");
-    else params.set("page", String(next));
-    router.push(params.size ? `${pathname}?${params.toString()}` : pathname, { scroll: false });
+    updateFilters({ page: Math.max(1, next) }, { push: true });
     window.scrollTo({ top: 0, behavior: reduceMotion ? "instant" : "smooth" });
   }
 
-  const initial = useMemo(() => {
-    const wanted = searchParams.get("category");
-    return {
-      // Validated against the Gazete's allow-list, not the whole taxonomy: a
-      // deep link to a category the paper no longer shows (?category=safety,
-      // or Know How's ?category=network) has no tab to select and would sit on
-      // an empty, unfixable list. Falls back to the default tab instead.
-      category: NEWSPAPER_CATEGORY_SLUGS.some((slug) => slug === wanted)
-        ? wanted!
-        : DEFAULT_CATEGORY,
-      subcategory: searchParams.get("subcategory"),
-      region: searchParams.get("region"),
-      airline: searchParams.get("airline"),
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberately the first URL only
-  }, []);
-
-  const [categorySlug, setCategorySlug] = useState(initial.category); // Gelir Yönetimi default
-  const [subcategorySlug, setSubcategorySlug] = useState<string | null>(initial.subcategory);
-  const [regionSlug, setRegionSlug] = useState<string | null>(initial.region);
-  // An IATA code, or the aggregate values "RIVALS" / "ALL" the API understands.
-  const [airlineCode, setAirlineCode] = useState<string | null>(initial.airline);
   const [eventView, setEventView] = useState<"news" | "calendar">("news");
   const [showMap, setShowMap] = useState(false);
 
@@ -228,27 +256,28 @@ export function NewspaperBrowser() {
   const [error, setError] = useState<string | null>(null);
 
   const [counts, setCounts] = useState<Record<string, number>>({});
+  const [countries, setCountries] = useState<CountryOut[]>([]);
 
   const category =
     NEWSPAPER_CATEGORIES.find((c) => c.slug === categorySlug) ?? NEWSPAPER_CATEGORIES[0];
 
   function selectCategory(slug: string) {
-    setCategorySlug(slug);
-    setSubcategorySlug(null);
-    // Region and rival filters deliberately survive a category switch: "show me
-    // everything about Emirates" should stay pinned while browsing categories.
-    setPage(1);
+    // Region, country and rival filters deliberately survive a category
+    // switch: "show me everything about Emirates" should stay pinned while
+    // browsing categories. The subcategory cannot -- it belongs to the tab
+    // being left.
+    updateFilters({ category: slug, subcategory: null });
   }
 
-  // Tab badges: one grouped request, refreshed when the window is entered.
+  // Tab badges: one grouped request, re-made when the time window changes.
+  // translated_only, the exclusions and the importance floor all mirror the
+  // list query below, so a tab badge never promises stories the filtered list
+  // will not render -- and now the window mirrors it too, so switching to
+  // "6 saat" does not leave the tabs advertising a month of news.
   useEffect(() => {
     const controller = new AbortController();
-    // translated_only mirrors the list query below, so a tab badge never
-    // promises 400 stories the filtered list will never show.
-    // The badges carry the same exclusion and importance floor as the list, so
-    // a tab never promises stories the filtered list will not render.
     const countParams = appendGazeteFilters(
-      new URLSearchParams({ days: String(DAYS_WINDOW), translated_only: "true" }),
+      applyWindowParams(new URLSearchParams({ translated_only: "true" }), activeWindow),
     );
     apiFetch<Record<string, number>>(`/articles/counts?${countParams.toString()}`, {
       cache: "default",
@@ -257,6 +286,22 @@ export function NewspaperBrowser() {
       .then(setCounts)
       .catch(() => {
         /* badges are decorative -- a failure here must not break the list */
+      });
+    return () => controller.abort();
+  }, [activeWindow]);
+
+  // The country picker's options. Counted server-side, busiest first, and only
+  // countries with at least one article -- a dropdown of 51 gazetteer names
+  // where 40 are empty teaches the reader not to trust the control.
+  useEffect(() => {
+    const controller = new AbortController();
+    apiFetch<CountryOut[]>("/taxonomy/countries?days=90", {
+      cache: "default",
+      signal: controller.signal,
+    })
+      .then(setCountries)
+      .catch(() => {
+        /* no list -> no picker, rather than an empty one */
       });
     return () => controller.abort();
   }, []);
@@ -268,7 +313,6 @@ export function NewspaperBrowser() {
     const controller = new AbortController();
     const params = new URLSearchParams({
       category: categorySlug,
-      days: String(DAYS_WINDOW),
       limit: String(PAGE_LIMIT),
       offset: String((page - 1) * PAGE_LIMIT),
       // Gazete only shows stories that actually have a Turkish translation --
@@ -277,10 +321,21 @@ export function NewspaperBrowser() {
       // server-side so `total` / the page count stay in step with the list.
       translated_only: "true",
     });
+    // hours OR days, never both: the API 422s on a request carrying two time
+    // windows, so this helper deletes one as it writes the other.
+    applyWindowParams(params, activeWindow);
     appendGazeteFilters(params);
     if (subcategorySlug) params.set("subcategory", subcategorySlug);
     if (regionSlug) params.set("region", regionSlug);
+    if (countrySlug) params.set("country", countrySlug);
     if (airlineCode) params.set("airline", airlineCode);
+    if (tierId) {
+      // One chip can stand for two tiers ("Resmî" = official + regulator);
+      // repeated keys are what the API unions.
+      TIER_FILTERS.find((filter) => filter.id === tierId)?.tiers.forEach((tier) =>
+        params.append("tier", tier),
+      );
+    }
 
     // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch driven by filter/page change; the loading flag must flip synchronously with the dependency change
     setLoading(true);
@@ -311,9 +366,34 @@ export function NewspaperBrowser() {
       cancelled = true;
       controller.abort();
     };
-  }, [categorySlug, subcategorySlug, regionSlug, airlineCode, page]);
+  }, [categorySlug, subcategorySlug, regionSlug, countrySlug, airlineCode, tierId, activeWindow, page]);
 
   const today = new Date().toISOString().slice(0, 10);
+  // "Son güncelleme": the newest thing this page actually has, taken from the
+  // payload rather than from the clock. `new Date()` would tick along happily
+  // while the API served a two-hour-old cache and the stamp would be a lie
+  // about the data, not a statement about the fetch.
+  const lastUpdated = useMemo(() => {
+    const newest = items.reduce<number | null>((latest, article) => {
+      const stamp = new Date(article.fetched_at).getTime();
+      return Number.isNaN(stamp) ? latest : Math.max(latest ?? stamp, stamp);
+    }, null);
+    return newest === null ? null : new Date(newest);
+  }, [items]);
+
+  // The two summary strips describe the DEFAULT paper. A top-4 that ignored
+  // the region chip the reader just pressed would be four unrelated stories
+  // sitting above their filtered list, which reads as a bug rather than as a
+  // summary -- so they step out of the way as soon as a filter narrows things.
+  const showStrips = !hasNarrowingFilters(filters);
+
+  // Only the countries the chosen region actually produced -- the endpoint
+  // already carries each country's region, so this is a filter rather than a
+  // second request per region.
+  const countriesInRegion = useMemo(
+    () => (regionSlug ? countries.filter((c) => c.region === regionSlug) : []),
+    [countries, regionSlug],
+  );
   const totalPages = Math.max(1, Math.ceil(total / PAGE_LIMIT));
   // Same local-calendar key `groupByDay` builds, so "today" can be picked out
   // of the date headers without re-parsing every article.
@@ -329,8 +409,13 @@ export function NewspaperBrowser() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-col gap-1">
           <h1 className="text-2xl font-semibold tracking-tight">Gazete</h1>
-          <p className="text-sm text-muted-foreground">
+          <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
             Kategoriye göre doğrulanmış, güncel havacılık haberleri.
+            {lastUpdated && (
+              <span className="text-xs tabular-nums">
+                · Son güncelleme {LAST_UPDATED_FORMAT.format(lastUpdated)}
+              </span>
+            )}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -403,13 +488,61 @@ export function NewspaperBrowser() {
         <EventsCalendar />
       ) : (
         <>
+      {/* Time window. Sits above the other filter rows because it qualifies
+          all of them: "Gelir Yönetimi, son 6 saat" is a different question
+          from "Gelir Yönetimi, son 30 gün", and every count on the page moves
+          with it. 30 gün stays the default, so a bookmarked link that predates
+          this row shows exactly what it always did. */}
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          Zaman
+        </span>
+        {WINDOW_OPTIONS.map((option) => (
+          <button
+            key={option.id}
+            onClick={() => updateFilters({ window: option.id })}
+            className={cn(
+              "rounded-full px-2.5 py-1 text-xs font-medium tabular-nums transition-colors",
+              filters.window === option.id
+                ? "bg-primary text-primary-foreground"
+                : "border border-border text-muted-foreground hover:bg-accent",
+            )}
+          >
+            {option.label}
+          </button>
+        ))}
+
+        <span aria-hidden className="mx-1 h-4 w-px bg-border" />
+
+        {/* Source authority. Four chips over five tiers -- official and
+            regulator share one, because "from the horse's mouth" is the
+            distinction a reader filters on and "airline newsroom vs
+            regulator" is not. */}
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+          Kaynak
+        </span>
+        {TIER_FILTERS.map((filter) => (
+          <button
+            key={filter.id}
+            onClick={() =>
+              updateFilters({ tier: tierId === filter.id ? null : filter.id })
+            }
+            className={cn(
+              "rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
+              tierId === filter.id
+                ? "bg-primary text-primary-foreground"
+                : "border border-border text-muted-foreground hover:bg-accent",
+            )}
+          >
+            {filter.label}
+          </button>
+        ))}
+      </div>
+
       {category.subcategories.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
           <button
-            onClick={() => {
-              setSubcategorySlug(null);
-              setPage(1);
-            }}
+            onClick={() => updateFilters({ subcategory: null })}
             className={cn(
               "rounded-full px-3 py-1 text-xs font-medium transition-colors",
               !subcategorySlug
@@ -423,8 +556,7 @@ export function NewspaperBrowser() {
             <button
               key={s.slug}
               onClick={() => {
-                setSubcategorySlug(s.slug);
-                setPage(1);
+                updateFilters({ subcategory: s.slug });
               }}
               className={cn(
                 "rounded-full px-3 py-1 text-xs font-medium transition-colors",
@@ -447,8 +579,7 @@ export function NewspaperBrowser() {
         </span>
         <button
           onClick={() => {
-            setRegionSlug(null);
-            setPage(1);
+            updateFilters({ region: null, country: null });
           }}
           className={cn(
             "rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
@@ -463,8 +594,12 @@ export function NewspaperBrowser() {
           <button
             key={r.slug}
             onClick={() => {
-              setRegionSlug(regionSlug === r.slug ? null : r.slug);
-              setPage(1);
+              // Switching region drops the country with it: a country
+              // picked from Avrupa makes no sense pinned under Asya.
+              updateFilters({
+                region: regionSlug === r.slug ? null : r.slug,
+                country: null,
+              });
             }}
             className={cn(
               "rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
@@ -476,6 +611,30 @@ export function NewspaperBrowser() {
             {r.name}
           </button>
         ))}
+        {/* Country, revealed by a region. A flat select of every country in
+            the archive is 60 options a reader scrolls; scoped to the region
+            they just chose it is the handful that region actually produced.
+            With no region picked the picker stays out of the row entirely
+            rather than offering the long list. */}
+        {regionSlug && countriesInRegion.length > 0 && (
+          <label className="ml-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+            <span className="sr-only">Ülke</span>
+            <select
+              value={countrySlug ?? ""}
+              onChange={(event) =>
+                updateFilters({ country: event.target.value || null })
+              }
+              className="rounded-full border border-border bg-background px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            >
+              <option value="">Tüm ülkeler</option>
+              {countriesInRegion.map((country) => (
+                <option key={country.name} value={country.name}>
+                  {country.name} ({country.article_count})
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <button
           onClick={() => setShowMap((open) => !open)}
           className={cn(
@@ -494,8 +653,7 @@ export function NewspaperBrowser() {
         <RegionMap
           value={regionSlug}
           onChange={(slug) => {
-            setRegionSlug(slug);
-            setPage(1);
+            updateFilters({ region: slug, country: null });
           }}
         />
       )}
@@ -517,8 +675,7 @@ export function NewspaperBrowser() {
             <button
               key={value}
               onClick={() => {
-                setAirlineCode(active ? null : value);
-                setPage(1);
+                updateFilters({ airline: active ? null : value });
               }}
               className={cn(
                 "rounded-full border px-3 py-1 text-xs font-semibold transition-colors",
@@ -539,8 +696,7 @@ export function NewspaperBrowser() {
               key={a.code}
               title={a.name}
               onClick={() => {
-                setAirlineCode(active ? null : a.code);
-                setPage(1);
+                updateFilters({ airline: active ? null : a.code });
               }}
               style={active ? { backgroundColor: a.color, borderColor: a.color } : undefined}
               className={cn(
@@ -569,6 +725,33 @@ export function NewspaperBrowser() {
           </span>
         )}
       </div>
+
+      {/* The three summaries, in the order a reader scans them: what just
+          happened, what matters most, what is coming. Each one hides itself
+          entirely when it has nothing -- a heading over an empty grid is worse
+          than no heading, and a permanent empty "Son Dakika" box teaches the
+          reader to scroll past the place breaking news will appear. */}
+      {showStrips && (
+        <>
+          <BreakingStrip
+            category={categorySlug}
+            minImportance={MIN_IMPORTANCE}
+            excludedCategories={NEWSPAPER_EXCLUDED_CATEGORY_SLUGS}
+          />
+          <HighlightsRow
+            category={categorySlug}
+            excludedCategories={NEWSPAPER_EXCLUDED_CATEGORY_SLUGS}
+          />
+          <EventRadarStrip
+            onOpenCalendar={
+              // The radar is a teaser for the calendar that already exists;
+              // the link switches to it rather than duplicating it. Only
+              // offered from the Etkinlik tab, where that toggle is on screen.
+              categorySlug === "events" ? () => setEventView("calendar") : undefined
+            }
+          />
+        </>
+      )}
 
       {error ? (
         <p className="rounded-lg border border-dashed border-border p-6 text-sm text-muted-foreground">
@@ -660,8 +843,10 @@ export function NewspaperBrowser() {
         <div className="rounded-lg border border-dashed border-border p-10 text-center">
           <p className="text-sm font-medium text-foreground">Bu filtreyle haber bulunamadı</p>
           <p className="mt-1 text-sm text-muted-foreground">
-            Son {DAYS_WINDOW} günde bu kategoride yayımlanmış haber yok. Başka bir kategori
-            veya alt başlık deneyin.
+            {/* The window is a filter now, so the empty state names the one
+                actually in force rather than a hard-coded 30. */}
+            Seçili dönemde ({activeWindow.label}) bu kategoride yayımlanmış haber yok.
+            Daha geniş bir zaman aralığı ya da başka bir filtre deneyin.
           </p>
         </div>
       )}

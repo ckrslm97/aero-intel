@@ -4,13 +4,17 @@ import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
   ExternalLink,
   Minus,
+  Sparkles,
   TrendingDown,
   TrendingUp,
   X,
 } from "lucide-react";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
 import { AirlineLogo } from "@/components/airline-logo";
+import { ArticleSourcesList } from "@/components/gazete/article-sources-list";
+import { sourceTierLabelTr } from "@/lib/gazete";
+import { confidenceBand } from "@/lib/risk";
 import {
   drawerPanel,
   drawerStagger,
@@ -49,13 +53,36 @@ const PUBLISHED_FORMAT = new Intl.DateTimeFormat("tr-TR", {
   timeStyle: "short",
 });
 
+/** Confidence -> the pill's Turkish word.
+ *
+ * The band comes from lib/risk.ts `confidenceBand`, which is the app's
+ * existing 0.75/0.5 ladder -- the same split the campaign pill renders and the
+ * risk drawer reads. A score computed by one formula and banded by three
+ * different thresholds across three pages would be the same number meaning
+ * three things.
+ */
+const CONFIDENCE_LABEL: Record<string, string> = {
+  high: "Yüksek",
+  medium: "Orta",
+  low: "Düşük",
+};
+
 /** In-app analysis for one article.
  *
- * Everything shown here comes from the article object the list already
+ * Almost everything shown here comes from the article object the list already
  * fetched -- category, region, sentiment, confidence, corroboration, named
- * carriers. There is deliberately no second request and no AI call: the
- * drawer explains what the pipeline already decided about the story, and the
- * footer is the one route to the external source.
+ * carriers -- and none of it costs a model call: the drawer explains what the
+ * pipeline already decided about the story.
+ *
+ * Two deliberate exceptions to "no second request":
+ *
+ *   * the corroborating-source list, fetched lazily per article opened
+ *     (ArticleSourcesList). The count was already on this panel; the list
+ *     under it is what makes the count checkable.
+ *   * "Neden önemli?", which is not fetched at all -- it was written at
+ *     enrichment time for the few stories that earned it and rides along in
+ *     the payload. It is labelled as a model's assessment because that is
+ *     what it is.
  */
 export function ArticleAnalysisDrawer({
   article,
@@ -66,6 +93,15 @@ export function ArticleAnalysisDrawer({
 }) {
   const reduceMotion = useReducedMotion();
   const item = reduceMotion ? reduceVariants(fadeUpItem) : fadeUpItem;
+  /** The corroboration list is revealed on demand, not on open: most readers
+   * want the story, and the ones who question the "3 kaynak" ask for it.
+   *
+   * Holds the article id rather than a boolean, so opening a second story
+   * cannot inherit the first one's expanded state -- and so nothing has to be
+   * reset in an effect (a synchronous setState in an effect body is a
+   * cascading render, and this stack's exit animations are already fragile
+   * enough without one). */
+  const [sourcesFor, setSourcesFor] = useState<string | null>(null);
 
   useEffect(() => {
     if (!article) return;
@@ -101,12 +137,7 @@ export function ArticleAnalysisDrawer({
   const summary =
     (enrichment?.is_translated && enrichment.summary_tr) || enrichment?.summary || null;
 
-  const tags = enrichment?.tags
-    ? enrichment.tags
-        .split(",")
-        .map((t) => t.trim())
-        .filter(Boolean)
-    : [];
+  const band = enrichment ? confidenceBand(enrichment.confidence_score) : null;
 
   return (
     <AnimatePresence>
@@ -201,6 +232,12 @@ export function ArticleAnalysisDrawer({
               <motion.div variants={item} className="flex flex-col gap-2">
                 <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
                   <span className="font-semibold text-foreground">{article.source.name}</span>
+                  {/* Which rung of the source ladder this outlet sits on --
+                      the same word the Risk Radarı's chronology prints for
+                      the same outlet. */}
+                  <span className="rounded-full border border-border px-1.5 py-px text-[10px] font-semibold">
+                    {sourceTierLabelTr(article.source.tier)}
+                  </span>
                   <span aria-hidden>·</span>
                   <span>
                     {article.published_at
@@ -241,14 +278,54 @@ export function ArticleAnalysisDrawer({
                     Doğrulama
                   </h3>
                   <div className="grid grid-cols-2 gap-4">
-                    <Metric
-                      label="Güven skoru"
-                      value={`%${Math.round(enrichment.confidence_score * 100)}`}
-                    />
-                    <Metric
-                      label="Doğrulayan kaynak"
-                      value={String(enrichment.corroborating_source_count)}
-                    />
+                    <div className="flex flex-col gap-1">
+                      <span className="text-[11px] text-muted-foreground">Güven skoru</span>
+                      {/* Band + score, the same pairing the campaign table's
+                          pill uses. A bare "%76" invites the reader to grade
+                          it themselves against a scale nobody published. */}
+                      <span className="flex items-center gap-1.5">
+                        <span
+                          className={cn(
+                            "rounded-full border px-2 py-0.5 text-[11px] font-medium",
+                            band === "high"
+                              ? "border-good/40 bg-good/10 text-good"
+                              : band === "medium"
+                                ? "border-warning/40 bg-warning/10 text-warning"
+                                : "border-dashed border-border text-muted-foreground",
+                          )}
+                        >
+                          {band ? CONFIDENCE_LABEL[band] : "Bilinmiyor"}
+                        </span>
+                        <span className="text-sm font-semibold tabular-nums">
+                          %{Math.round(enrichment.confidence_score * 100)}
+                        </span>
+                      </span>
+                      <span className="text-[10px] leading-tight text-muted-foreground">
+                        kaynak-güven temelli skor
+                      </span>
+                    </div>
+
+                    <div className="flex flex-col gap-1">
+                      <span className="text-[11px] text-muted-foreground">
+                        Doğrulayan kaynak
+                      </span>
+                      {/* The number opens the list it counts. It was printed
+                          here for a year with nothing behind it. */}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setSourcesFor(sourcesFor === article.id ? null : article.id)
+                        }
+                        aria-expanded={sourcesFor === article.id}
+                        className="flex w-fit items-center gap-1 text-lg font-semibold tabular-nums transition-colors hover:text-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                      >
+                        {enrichment.corroborating_source_count} kaynak
+                        <span aria-hidden className="text-xs">
+                          {sourcesFor === article.id ? "▲" : "→"}
+                        </span>
+                      </button>
+                    </div>
+
                     <Metric
                       label="Önem skoru"
                       value={`${Math.round(enrichment.importance_score * 100) / 100}`}
@@ -266,6 +343,34 @@ export function ArticleAnalysisDrawer({
                       }
                     />
                   </div>
+
+                  {sourcesFor === article.id && (
+                    <div className="border-t border-border pt-4">
+                      <ArticleSourcesList articleId={article.id} />
+                    </div>
+                  )}
+                </motion.div>
+              )}
+
+              {enrichment?.why_important_tr && (
+                <motion.div
+                  variants={item}
+                  className="flex flex-col gap-2 rounded-xl border-l-2 border-primary bg-secondary/40 px-4 py-3"
+                >
+                  <h3 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    <Sparkles className="size-3.5 text-primary" aria-hidden />
+                    Neden önemli?
+                  </h3>
+                  <p className="text-[14px] leading-relaxed text-card-foreground">
+                    {enrichment.why_important_tr}
+                  </p>
+                  {/* Labelled, not blended into the summary above it: this
+                      sentence is a model's reading of the story, while
+                      everything else in this panel is a fact the pipeline
+                      recorded about it. */}
+                  <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                    Yapay zekâ değerlendirmesi
+                  </span>
                 </motion.div>
               )}
 
@@ -317,30 +422,24 @@ export function ArticleAnalysisDrawer({
                 </motion.div>
               )}
 
-              {tags.length > 0 && (
-                <motion.div variants={item} className="flex flex-col gap-2.5">
-                  <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                    Etiketler
-                  </h3>
-                  <div className="flex flex-wrap gap-1.5">
-                    {tags.map((tag) => (
-                      <span
-                        key={tag}
-                        className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground"
-                      >
-                        {tag}
-                      </span>
-                    ))}
-                  </div>
-                </motion.div>
-              )}
+              {/* There used to be an "Etiketler" section here. It rendered
+                  `enrichment.tags`, which the pipeline writes as the sorted
+                  set of ENTITY TYPES an article mentions -- so on every story
+                  in the paper it printed the same three words: "airline,
+                  airport, country". Not a topic vocabulary, not filterable,
+                  and identical on every row. The carrier and airport chips
+                  above already say what those types were pointing at, so the
+                  section is gone rather than replaced: inventing a real tag
+                  vocabulary is a classification change, not a drawer change. */}
 
               <motion.p
                 variants={item}
                 className="text-[11px] leading-relaxed text-muted-foreground"
               >
                 Bu analiz, haber alındığında boru hattının ürettiği sınıflandırma ve
-                doğrulama verisinden oluşur — yeni bir model çağrısı yapılmaz.
+                doğrulama verisinden oluşur; panel açılırken yeni bir model çağrısı
+                yapılmaz. &ldquo;Neden önemli?&rdquo; bölümü varsa, o da haber
+                işlenirken bir kez üretilmiştir.
               </motion.p>
             </motion.div>
 

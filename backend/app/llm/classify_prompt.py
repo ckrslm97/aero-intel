@@ -28,6 +28,7 @@ in a comparison table, and an LNG pricing story to Emirates.
 """
 from __future__ import annotations
 
+from app.llm.terminology import terminology_clause_tr
 from app.taxonomy import (
     CAMPAIGN_BUSINESS_CLASSES,
     CAMPAIGN_TYPES,
@@ -148,8 +149,7 @@ KURALLAR
 3. title_tr ve summary_tr: Havacılık terimlerini ÇEVİRME. Havayolu ve
    havalimanı adları, IATA kodları, uçak tipleri ve sektör terimleri olduğu
    gibi kalır. "Business class" Türkçede de Business class'tır, "iş sınıfı"
-   değildir. Aynı şekilde: load factor, yield, RASK, hub, slot, codeshare,
-   no-show, upgrade, Economy, Premium Economy.
+   değildir. {terminology_clause_tr()}
 
 4. airlines: role="subject" haberin ASIL öznesi olan taşıyıcıdır. Karşılaştırma
    tablosunda veya yan cümlede geçen taşıyıcı "mentioned"dır.
