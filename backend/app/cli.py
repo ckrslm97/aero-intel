@@ -582,7 +582,7 @@ def _evaluate_campaigns() -> None:
     # saying so would hide which one the gate is actually failing on.
     for label, subset in (
         ("gözlemlenen (2025 üretim anlık görüntüsü)", observed_campaign_records()),
-        ("sentetik (PR8'de yazılan)", synthetic_campaign_records()),
+        ("sentetik (yazılan kayıtlar)", synthetic_campaign_records()),
     ):
         part = evaluate_campaign_extraction(subset)
         print(

@@ -1,6 +1,8 @@
-"""The golden set: 297 records (24 risk, 100 news, 173 campaign) -- 255
-hand-judged snapshots of live production output plus 42 synthetic
-campaign-surface records authored for the PR8 quality gate.
+"""The golden set: 311 records (24 risk, 100 news, 187 campaign) -- 255
+hand-judged snapshots of live production output plus 56 synthetic
+campaign-surface records: 42 authored for the PR8 quality gate and 14 more
+pinning the award/cargo/service-announcement patterns that were still reaching
+the live timeline after the backfill retired the legacy rows.
 
 `golden_set.json` is a snapshot of the owner-reviewed evaluation page
 (https://claude.ai/code/artifact/fba3334f-3f64-4ac1-bdf0-7be6cff45e83),
@@ -19,16 +21,27 @@ article body (re-fetched from `url`, where one exists) and a configured LLM --
 see `evaluate_full_pipeline`, which is the part of this module that cannot run
 without both.
 
-The PR8 synthetic campaign records
-----------------------------------
-The 42 records carrying `source == "synthetic-pr8"` are a different kind of
-data and are deliberately marked as such on every row. They are **authored,
+The synthetic campaign records
+------------------------------
+The 56 records carrying a `source` in `SYNTHETIC_SOURCES` are a different kind
+of data and are deliberately marked as such on every row. They are **authored,
 not observed**: realistic Turkish and English airline-campaign copy written to
 cover the dimensions the v2 chain added (campaign_type, business_class,
 route_scope, English and year-less dates, booking-vs-travel separation,
 near-duplicates) and which the 2025 production snapshot simply does not
 contain -- it is 131 rows from one static-scrapable carrier, 99 of them wrong
 in four repeating ways.
+
+The `synthetic-leaks` batch has a narrower job: each of its 12 "bad" records
+is a paraphrase of a row that was *still live on the site* after the backfill
+retired 121 of 144 legacy rows -- award-sale and award-booking content, a
+cargo division's half-year revenue report, an onboard-service launch -- and
+each one exists so that closing that leak stays closed. Its two "ok" records
+are the other half of the same argument: a genuine dated fare campaign that
+calls itself an "ödüllü havayolu" ("award-winning airline") must still be
+published, because a rulepack that keys on "ödül" without knowing Turkish
+morphology would silently start rejecting real campaigns for praising
+themselves.
 
 Because they are authored, they carry what an observed record cannot: a
 `text` body and explicit `expected_*` fields stating the correct answer.
@@ -51,8 +64,22 @@ from pathlib import Path
 
 _DATA_DIR = Path(__file__).resolve().parent
 
-#: The `source` marker on every authored record. See the module docstring.
+#: The `source` marker on the PR8 authored records. See the module docstring.
 SYNTHETIC_SOURCE = "synthetic-pr8"
+
+#: The second authored batch, added when the rulepacks were widened for the
+#: award/cargo/service-announcement leaks that survived the backfill. Marked
+#: with its own source rather than folded into "synthetic-pr8" so the reason a
+#: record exists stays readable on the row: these 14 are regression pins for
+#: specific patterns that were live on the site, not coverage for a dimension
+#: the snapshot lacks.
+SYNTHETIC_LEAK_SOURCE = "synthetic-leaks"
+
+#: Every marker that means "authored, not observed". `is_synthetic` reads this
+#: rather than one constant, so the observed/authored split -- which is what
+#: keeps the 131-row production snapshot honest -- never depends on remembering
+#: to update two places when a batch is added.
+SYNTHETIC_SOURCES: frozenset[str] = frozenset({SYNTHETIC_SOURCE, SYNTHETIC_LEAK_SOURCE})
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,7 +120,7 @@ class GoldenRecord:
 
     @property
     def is_synthetic(self) -> bool:
-        return self.source == SYNTHETIC_SOURCE
+        return self.source in SYNTHETIC_SOURCES
 
     def expected_dates(self) -> dict[str, date | None]:
         """The four date expectations as dates, keyed like the columns."""
