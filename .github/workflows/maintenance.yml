@@ -31,6 +31,7 @@ on:
           - evaluate-campaigns
           - check-data-quality
           - mark-legacy-campaigns-superseded
+          - backfill-campaign-classes
       days:
         description: "re-enrich only: limit to articles fetched in the last N days (blank = all)"
         required: false
@@ -151,6 +152,13 @@ jobs:
               python -m app.cli check-data-quality ;;
             mark-legacy-campaigns-superseded)
               python -m app.cli mark-legacy-campaigns-superseded ;;
+            backfill-campaign-classes)
+              # Re-runs the business-class rulepacks over the rows already in
+              # the table: loyalty/product/evergreen/news rows the v1 pipeline
+              # published are retired (superseded, never deleted) and their
+              # open alerts acknowledged. Heuristic-only -- no LLM calls, so
+              # it is safe to re-run after any change to the keyword tables.
+              python -m app.cli backfill-campaign-classes ;;
             *)
               echo "Unknown task: ${{ inputs.task }}" >&2
               exit 1 ;;
