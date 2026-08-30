@@ -542,11 +542,19 @@ async def extract_structured_entries(
         )
         if extracted is None:
             budget.dropped += 1
+            # The carrier's own date fields ride along with the reason, the
+            # same way the LLM path's `campaign_extract_rule_rejected` carries
+            # the rule's own sentence. Without them a sweep that drops thirty
+            # of AJet's thirty-four says only "sale_window_closed" thirty
+            # times, and whether that is a closed flash sale or a date the
+            # parser could not read is exactly the question being asked.
             logger.info(
                 "deep_scan_structured_rejected",
                 carrier=carrier.code,
                 campaign=entry.campaign_name,
                 reason=drop_reason,
+                booking_text=entry.booking_text,
+                travel_text=entry.travel_text,
             )
             continue
 

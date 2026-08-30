@@ -602,9 +602,42 @@ def test_a_reversed_pair_is_ordered_rather_than_published_backwards():
     )
 
 
-@pytest.mark.parametrize("raw", [None, "", "   ", "yakında", "21-Haziran-26"])
+@pytest.mark.parametrize("raw", [None, "", "   ", "yakında", "Temmuz 2026"])
 def test_an_unparseable_window_is_no_window_rather_than_a_guess(raw):
+    """"Temmuz 2026" is a month, not a window. Reading it as 1-31 July would
+    invent a day precision the carrier never stated, and the campaign it
+    belongs to is dropped for having no dates either way."""
     assert parse_window(raw, default_year=2026) == (None, None, False)
+
+
+def test_a_hyphenated_date_with_a_two_digit_year_is_read_rather_than_dropped():
+    """AJet writes "21-Haziran-26" in the same TicketingDates field it writes
+    "18-19 Mayıs 2026" in. The general parser needs spaces and four digits, so
+    this used to resolve to no window at all -- and a window that fails to
+    parse does not fail safe: with `sale_ends` null the staleness guard has
+    nothing to fire on, and a two-day June sale is published in August as a
+    campaign with no deadline. The year is written here; only its century is
+    not, so it is completed and NOT flagged as inferred."""
+    assert parse_window("21-Haziran-26", default_year=2026) == (
+        None,
+        date(2026, 6, 21),
+        False,
+    )
+    assert parse_window("21-Haziran-2026 - 22-Haziran-2026", default_year=2026) == (
+        date(2026, 6, 21),
+        date(2026, 6, 22),
+        False,
+    )
+
+
+def test_the_two_day_range_shape_is_not_broken_by_the_hyphen_rule():
+    """The dashed-date rewrite runs first and must leave AJet's commonest
+    shape, whose hyphen joins two day numbers rather than a whole date, alone."""
+    assert parse_window("30-31 Mart 2026", default_year=2026) == (
+        date(2026, 3, 30),
+        date(2026, 3, 31),
+        False,
+    )
 
 
 def test_a_structured_campaign_carries_both_windows_and_no_llm_flag():
@@ -656,6 +689,127 @@ def test_the_rule_layer_still_gets_a_veto_on_the_structured_path():
         detected_at=NOW,
         today=TODAY,
         source_name="AJet kampanya sayfası",
+    )
+
+    assert campaign is None
+    assert reason == "sale_window_closed"
+
+
+# --- what AJet's 34 active records actually are ------------------------------
+#
+# The 2026-08-30 sweep harvested 34 active AJet campaigns and published 2. That
+# read as over-blocking and was investigated as one; it is not. AJet runs
+# two-day flash sales and `IsCampaignActive` marks the record as still having a
+# live detail page, not the sale as still being open -- so on any given day
+# almost every active record is a sale whose booking window closed weeks ago,
+# with a travel window that is still in the future.
+#
+# These four are verbatim from that sweep, and they pin the distinction the
+# investigation turned on: the date guard, not the rulepack, is what drops
+# them, and the same record passes while its sale is open.
+
+
+def _ajet(name: str, *, booking: str | None, travel: str | None, body: str = "", pct=None):
+    return StructuredCampaign(
+        campaign_name=name,
+        url=f"https://ajet.com/tr/kesfet/kampanyalar/{abs(hash(name))}",
+        body_text=body,
+        booking_text=booking,
+        travel_text=travel,
+        discount_pct=pct,
+        campaign_type="PERCENT_DISCOUNT" if pct else None,
+    )
+
+
+def _build(entry, *, today=TODAY):
+    return build_structured_campaign(
+        entry,
+        carrier=CARRIER_MASTER["VF"],
+        detected_at=datetime(today.year, today.month, today.day, 5, 0, tzinfo=timezone.utc),
+        today=today,
+        source_name=ajet_campaigns.SOURCE_NAME,
+    )
+
+
+#: The one record of the 34 whose booking window was still open on scan day.
+AJET_OPEN = _ajet(
+    "Rotalarını 29 EUR'dan Başlayan Fiyatlarla Türkiye Üzerinden Dünyaya Taşı ✈️",
+    booking="27-30 Ağustos 2026",
+    travel="1 Eylül - 24 Ekim 2026",
+    body="29 EUR'dan başlayan fiyatlara seyahat planlarını genişletmenin tam zamanı!",
+)
+
+#: A dated student campaign -- the case the rulepack is most often accused of
+#: over-blocking, and the one PR50's "dated student fare is not EVERGREEN" test
+#: pins on the article path.
+AJET_STUDENT = _ajet(
+    "19 Mayıs'ta Gençlere Özel: Yurt İçi Uçuşlarda %30 İndirim✈️",
+    booking="18-19 Mayıs 2026",
+    travel="1 Eylül 2026 – 10 Kasım 2026",
+    body="Gençlere özel yurt içi uçuşlarda %30 indirim seni bekliyor.",
+    pct=30,
+)
+
+
+def test_the_one_ajet_record_whose_sale_was_still_open_is_published():
+    campaign, reason = _build(AJET_OPEN)
+
+    assert reason is None
+    assert (campaign.sale_starts, campaign.sale_ends) == (date(2026, 8, 27), date(2026, 8, 30))
+    assert campaign.business_class == "ACTIVE_CAMPAIGN"
+
+
+def test_a_dated_student_campaign_is_a_campaign_while_its_sale_is_open():
+    """The over-blocking hypothesis, tested rather than assumed: EVERGREEN
+    needs the vocabulary AND no sale window, and the structured path threads
+    the carrier's own ticketing dates into that check. "Gençlere Özel" with a
+    booking window is a fare campaign that happens to target students."""
+    campaign, reason = _build(AJET_STUDENT, today=date(2026, 5, 19))
+
+    assert reason is None
+    assert campaign.business_class == "ACTIVE_CAMPAIGN"
+    assert (campaign.sale_starts, campaign.sale_ends) == (date(2026, 5, 18), date(2026, 5, 19))
+
+
+def test_the_same_student_campaign_is_dropped_for_its_dates_not_for_its_audience():
+    """Three months later it is the identical record, and the reason it is
+    dropped is the closed booking window -- not EVERGREEN, which never gets
+    asked because the date guards run first."""
+    campaign, reason = _build(AJET_STUDENT)
+
+    assert campaign is None
+    assert reason == "sale_window_closed"
+
+
+def test_a_flash_sale_whose_date_field_is_hyphenated_is_dropped_like_any_other():
+    """The one row the 2026-08-30 sweep published that it should not have. Its
+    booking window is "21-Haziran-26"; unread, it left `sale_ends` null, and a
+    June flash sale went out in August as a campaign with no deadline."""
+    entry = _ajet(
+        "Babalar Gününe Özel: %30 İndirim Kodu AJet Whatsapp Kanalımızda! 💐",
+        booking="21-Haziran-26",
+        travel="22 Eylül – 31 Aralık 2026",
+        body="Babalar Günü sürprizi AJet WhatsApp Kanalı'nda sizi bekliyor!",
+        pct=30,
+    )
+
+    campaign, reason = _build(entry)
+
+    assert campaign is None
+    assert reason == "sale_window_closed"
+
+
+def test_an_open_travel_window_does_not_reopen_a_closed_sale():
+    """Every one of the 32 dropped records has a future travel window; that is
+    what a flash sale sold in May for an autumn trip looks like. The product
+    question is whether a ticket can still be BOUGHT, and it cannot."""
+    campaign, reason = _build(
+        _ajet(
+            "Sonbahar Rotanı Şimdiden Seç: Yurt İçi Uçuşlarda %30 İndirim ✈️",
+            booking="2-3 Temmuz 2026",
+            travel="6 Ekim 2026 – 31 Aralık 2026",
+            pct=30,
+        )
     )
 
     assert campaign is None

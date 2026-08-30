@@ -48,3 +48,27 @@ async def test_retry_decorator_keeps_the_method_awaitable(monkeypatch):
 
     monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
     assert await provider._generate("selam") == "Merhaba"
+
+
+async def test_an_output_ceiling_is_sent_only_when_the_caller_asks_for_one(monkeypatch):
+    """The campaign page prompt answers with a document and had one cut off in
+    production; every other task answers in a sentence and must not be capped
+    by a number chosen for the campaign one."""
+    provider = OpenAICompatProvider("https://example.com/v1", "openai/gpt-oss-120b", "k")
+    bodies: list[dict] = []
+
+    async def fake_post(self, url, **kwargs):
+        bodies.append(kwargs["json"])
+        return httpx.Response(
+            200,
+            request=httpx.Request("POST", url),
+            json={"choices": [{"message": {"content": "{}"}, "finish_reason": "stop"}]},
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", fake_post)
+
+    await provider._generate("selam")
+    await provider._generate("selam", max_tokens=5000)
+
+    assert "max_tokens" not in bodies[0]
+    assert bodies[1]["max_tokens"] == 5000

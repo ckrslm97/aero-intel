@@ -98,7 +98,10 @@ def canned(monkeypatch):
         payload = state["payload"]
         return payload if isinstance(payload, str) else json.dumps(payload)
 
-    monkeypatch.setattr("app.llm.factory.get_raw_generator", lambda: generate)
+    # `**_` swallows the campaign call's output ceiling: the chain asks the
+    # factory for a generator bound to one, and a canned coroutine has no wire
+    # to send it on.
+    monkeypatch.setattr("app.llm.factory.get_raw_generator", lambda **_: generate)
     return state
 
 

@@ -40,6 +40,27 @@ merges what it finds. Anything that is not JSON at all, and any object without
 a usable `campaigns` list, still fails the page exactly as before -- and each
 item inside the list is still judged on its own.
 
+**A cut-off answer is damaged packaging, not a wrong answer.** The second Azure
+run failed TK a second time, and the log said `campaign payload must be a JSON
+object` about a response whose first character was `{` -- because the model
+never got to the last one. It stopped at exactly 3,072 completion tokens,
+mid-card, and an unterminated document parses as nothing at all, so
+`extract_campaign_json` returned None and the caller reported the shape
+complaint that None happens to trip.
+
+`recover_campaign_items` is the answer to that: it walks what did arrive and
+keeps the campaign objects that are *complete* -- balanced braces, valid JSON
+on their own -- discarding the half-written one the cut landed in. Nothing is
+completed, closed or guessed; an object that was still being typed is dropped
+exactly as an unusable card always was, and every survivor still goes through
+the date, rule and route layers before it can reach a row.
+
+The rescue is deliberately conditional on finding at least one whole item. A
+truncation that produced none is not an empty page and must never be read as
+one: `{"campaigns": [` says the model was interrupted before it said anything,
+which is the opposite fact from "the model looked and there was nothing", and
+the page stays FAILED so the next scan asks again.
+
 Nothing here decides whether a campaign is real, whether its dates are true or
 where it flies: that is the rule/date/entity half of the chain. This layer only
 guarantees that what reaches those layers is typed, in range, and honest about
@@ -312,6 +333,12 @@ class RawCampaignPage(BaseModel):
     #: rather than dropped silently: a page whose every item lands here looks
     #: identical to an empty page otherwise, and those are opposite facts.
     invalid_items: int = 0
+    #: The model's answer was cut off and these are the cards that had finished
+    #: being written when it was. Carried so the caller can log it: a page that
+    #: keeps arriving truncated is an output-ceiling problem, and it is only
+    #: visible if the rescue says it happened rather than looking like a clean
+    #: short answer.
+    truncated: bool = False
 
 
 #: Models fence their output however firmly they are asked not to. Same pattern
@@ -341,6 +368,72 @@ def _json_candidates(text: str):
             yield text[start : end + 1]
 
 
+#: The key `extract_campaign_json` sets on a payload it had to rescue out of a
+#: truncated answer, and the only key `parse_campaign_payload` reads besides
+#: `campaigns`. A marker rather than a second return value because every caller
+#: in the chain passes the payload straight from one function to the other, and
+#: a tuple would have to be unpacked in four places to be ignored in three.
+RECOVERED_KEY = "_recovered_from_truncation"
+
+
+def recover_campaign_items(text: str) -> list[dict]:
+    """The complete campaign objects inside a cut-off answer, in page order.
+
+    A single pass over the first JSON array in the text, tracking string state
+    so a `"` inside a quote cannot open one and a brace inside `source_text`
+    cannot close the wrong object. Only spans that start with `{`, end with the
+    `}` that balances it, and parse on their own are kept -- which is precisely
+    the set of cards the model finished writing before it was cut off.
+
+    Never called for an answer that parses: `extract_campaign_json` tries the
+    document itself first, and this only runs when nothing at all parsed.
+    """
+    start = text.find("[")
+    if start == -1:
+        return []
+
+    items: list[dict] = []
+    depth = 0
+    in_string = False
+    escaped = False
+    object_start: int | None = None
+
+    for index in range(start + 1, len(text)):
+        char = text[index]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            if depth == 0:
+                object_start = index
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth < 0:
+                break
+            if depth == 0 and object_start is not None:
+                try:
+                    parsed = json.loads(text[object_start : index + 1])
+                except (json.JSONDecodeError, ValueError):
+                    parsed = None
+                if isinstance(parsed, dict):
+                    items.append(parsed)
+                object_start = None
+        elif char == "]" and depth == 0:
+            # The array closed. Anything after it belongs to a different
+            # structure and is not one of the campaigns.
+            break
+
+    return items
+
+
 def extract_campaign_json(raw: str) -> object | None:
     """One model answer's raw text -> the JSON in it, or None.
 
@@ -353,6 +446,10 @@ def extract_campaign_json(raw: str) -> object | None:
     None means "there is no JSON here", which the caller turns into a failed
     page. It is never an empty result: a page the model did not answer for and
     a page with no campaigns on it are opposite facts.
+
+    The last resort, when nothing parses, is `recover_campaign_items` -- and
+    only when it finds at least one whole card, because a truncation that
+    finished nothing is an interrupted answer rather than an empty one.
     """
     text = (raw or "").strip()
     fenced = _FENCE.search(text)
@@ -366,7 +463,46 @@ def extract_campaign_json(raw: str) -> object | None:
             continue
         if isinstance(parsed, (dict, list)):
             return parsed
+
+    recovered = recover_campaign_items(text)
+    if recovered:
+        return {"campaigns": recovered, RECOVERED_KEY: True}
     return None
+
+
+def _is_one_campaign(payload: object) -> bool:
+    """Does this object carry a campaign's identity field?
+
+    `campaign_name` and nothing else, because it is the one field
+    `RawCampaignItem` refuses to default: an object that has it is an answer to
+    the question asked, however it was wrapped, and an object that does not is
+    not a campaign no matter what else it contains.
+    """
+    if not isinstance(payload, dict):
+        return False
+    name = payload.get("campaign_name")
+    return isinstance(name, str) and bool(name.strip())
+
+
+def _campaign_list(raw_items: object) -> list | None:
+    """`campaigns` as the model wrote it -> the list, or None if it is neither.
+
+    Two shapes beyond the list the prompt draws, both seen from models asked
+    for a keyed schema: the single campaign written as the value itself
+    (`{"campaigns": {"campaign_name": ...}}`), and the key-per-campaign map
+    (`{"campaigns": {"1": {...}, "2": {...}}}`). Both are the same answer with
+    a different container, and the container is not the contract -- but a map
+    with no campaign objects in it is, and that still fails.
+    """
+    if isinstance(raw_items, list):
+        return raw_items
+    if not isinstance(raw_items, dict):
+        return None
+    if _is_one_campaign(raw_items):
+        return [raw_items]
+    # Insertion order is the model's own order, which is page order.
+    nested = [value for value in raw_items.values() if isinstance(value, dict)]
+    return nested or None
 
 
 def parse_campaign_payload(payload: object) -> RawCampaignPage:
@@ -382,22 +518,40 @@ def parse_campaign_payload(payload: object) -> RawCampaignPage:
     then re-fetching and re-asking for them twice a day -- would be a protocol
     complaint dressed up as a data-quality rule. `[]` therefore means what
     `{"campaigns": []}` means: the model looked and there was nothing.
+
+    Two further containers are read the same way and for the same reason: a
+    single campaign object at the top level, and `campaigns` written as a map
+    instead of a list (see `_campaign_list`). Both are recognised by the
+    campaign's own identity field rather than by shape alone, so an arbitrary
+    object still fails -- the leniency is about the envelope, never about what
+    counts as a campaign.
     """
     if isinstance(payload, list):
         payload = {"campaigns": payload}
     if not isinstance(payload, dict):
         raise ValueError("campaign payload must be a JSON object")
+    if "campaigns" not in payload and _is_one_campaign(payload):
+        # One campaign, written without the envelope. Same reading as the bare
+        # list above and for the same reason: the model answered the question,
+        # it just did not type the wrapper, and a page whose single campaign we
+        # are holding must not be failed over the container it arrived in.
+        payload = {"campaigns": [payload]}
     raw_items = payload.get("campaigns")
     if raw_items is None:
         raise ValueError("campaign payload is missing 'campaigns'")
-    if not isinstance(raw_items, list):
+    items_in = _campaign_list(raw_items)
+    if items_in is None:
         raise ValueError("'campaigns' must be a list")
 
     items: list[RawCampaignItem] = []
     invalid = 0
-    for raw in raw_items:
+    for raw in items_in:
         try:
             items.append(RawCampaignItem.model_validate(raw))
         except Exception:  # noqa: BLE001 -- one bad card, not a bad page
             invalid += 1
-    return RawCampaignPage(campaigns=items, invalid_items=invalid)
+    return RawCampaignPage(
+        campaigns=items,
+        invalid_items=invalid,
+        truncated=bool(payload.get(RECOVERED_KEY)),
+    )
