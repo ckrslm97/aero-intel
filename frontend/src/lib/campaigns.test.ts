@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { promotion } from "@/lib/__fixtures__/promotion";
 import {
+  campaignAmountLabel,
   campaignFacetCounts,
   campaignFieldLabel,
   campaignQueryString,
@@ -12,7 +13,9 @@ import {
   EMPTY_CAMPAIGN_FILTERS,
   filterCampaigns,
   formatChangeValue,
+  groupDatelessCampaigns,
   hasActiveCampaignFilter,
+  isDatelessCampaign,
   relativeTimeTr,
   reviewRequiredCount,
   sourceTierLabel,
@@ -65,6 +68,120 @@ describe("filterCampaigns", () => {
       reviewOnly: true,
     });
     expect(out).toEqual([]);
+  });
+});
+
+describe("groupDatelessCampaigns", () => {
+  /** A start-less campaign detected on `day`, i.e. one point marker. */
+  const dateless = (id: string, airline: string, day: string) =>
+    promotion({ id, airline_code: airline, sale_starts: null, detected_at: `${day}T09:00:00Z` });
+
+  it("collapses a carrier's 23 same-day announcements into one cluster", () => {
+    // The regression itself: Singapore Airlines published 23 route fares on one
+    // day with no sale window, and the lane drew 23 diamonds in one column.
+    const rows = Array.from({ length: 23 }, (_, i) =>
+      dateless(`sq-${i}`, "SQ", "2026-08-29"),
+    );
+
+    const { clusters, singles, dated } = groupDatelessCampaigns(rows);
+
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0].items).toHaveLength(23);
+    expect(clusters[0].airlineCode).toBe("SQ");
+    expect(clusters[0].day).toBe("2026-08-29");
+    expect(clusters[0].key).toBe("SQ:2026-08-29");
+    expect(singles).toEqual([]);
+    expect(dated).toEqual([]);
+  });
+
+  it("leaves dated campaigns entirely alone", () => {
+    const withDates = promotion({ id: "bar", sale_starts: "2026-09-01", sale_ends: "2026-09-30" });
+    const openEnded = promotion({ id: "open", sale_starts: "2026-09-01", sale_ends: null });
+    const rows = [
+      withDates,
+      dateless("p1", "TK", "2026-08-29"),
+      openEnded,
+      dateless("p2", "TK", "2026-08-29"),
+    ];
+
+    const { dated, clusters, singles } = groupDatelessCampaigns(rows);
+
+    // A published start is a bar, whatever the end date says.
+    expect(dated).toEqual([withDates, openEnded]);
+    expect(isDatelessCampaign(openEnded)).toBe(false);
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0].items.map((p) => p.id)).toEqual(["p1", "p2"]);
+    expect(singles).toEqual([]);
+  });
+
+  it("keeps two carriers announcing on the same day apart", () => {
+    const rows = [
+      dateless("tk-1", "TK", "2026-08-29"),
+      dateless("sq-1", "SQ", "2026-08-29"),
+      dateless("tk-2", "TK", "2026-08-29"),
+      dateless("sq-2", "SQ", "2026-08-29"),
+    ];
+
+    const { clusters } = groupDatelessCampaigns(rows);
+
+    expect(clusters.map((c) => c.key)).toEqual(["TK:2026-08-29", "SQ:2026-08-29"]);
+    expect(clusters.every((c) => c.items.length === 2)).toBe(true);
+  });
+
+  it("keeps one carrier's two different days apart", () => {
+    const rows = [
+      dateless("a", "SQ", "2026-08-29"),
+      dateless("b", "SQ", "2026-08-30"),
+      dateless("c", "SQ", "2026-08-30"),
+    ];
+
+    const { clusters, singles } = groupDatelessCampaigns(rows);
+
+    expect(singles.map((p) => p.id)).toEqual(["a"]);
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0].day).toBe("2026-08-30");
+  });
+
+  it("leaves a lone dateless campaign as a plain point marker", () => {
+    // A count chip reading "1" is noise, so a bucket of one is never a cluster.
+    const { clusters, singles } = groupDatelessCampaigns([dateless("only", "PC", "2026-08-29")]);
+    expect(clusters).toEqual([]);
+    expect(singles.map((p) => p.id)).toEqual(["only"]);
+  });
+
+  it("does not merge rows whose detection date cannot be read", () => {
+    // Two undateable rows are two unknowns, not one campaign seen twice.
+    const rows = [
+      promotion({ id: "x", airline_code: "TK", sale_starts: null, detected_at: "" }),
+      promotion({ id: "y", airline_code: "TK", sale_starts: null, detected_at: "" }),
+    ];
+    const { clusters, singles } = groupDatelessCampaigns(rows);
+    expect(clusters).toEqual([]);
+    expect(singles.map((p) => p.id)).toEqual(["x", "y"]);
+  });
+
+  it("returns empty buckets for an empty window", () => {
+    expect(groupDatelessCampaigns([])).toEqual({ dated: [], singles: [], clusters: [] });
+  });
+});
+
+describe("campaignAmountLabel", () => {
+  it("prefers the published discount rate", () => {
+    expect(campaignAmountLabel(promotion({ discount_pct: 40 }))).toBe("%40");
+  });
+
+  it("falls back to the starting price with its currency", () => {
+    const label = campaignAmountLabel(
+      promotion({ discount_pct: null, attrs_json: { price_floor: 899, currency: "TRY" } }),
+    );
+    expect(label).toBe("899 TRY");
+  });
+
+  it("says nothing rather than showing a dash for a campaign with no number", () => {
+    expect(campaignAmountLabel(promotion({ discount_pct: null }))).toBeNull();
+    expect(
+      campaignAmountLabel(promotion({ discount_pct: null, attrs_json: { cabin: "ECONOMY" } })),
+    ).toBeNull();
   });
 });
 

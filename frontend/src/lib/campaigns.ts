@@ -151,6 +151,95 @@ export function reviewRequiredCount(
   ).length;
 }
 
+/* --- timeline clustering -------------------------------------------------- */
+
+/** A campaign the source published no sale START for.
+ *
+ * `sale_starts` alone decides it, exactly as the swimlane's `place()` does:
+ * without a start there is no window to draw a bar *along*, whatever the end
+ * date happens to say. Exported so the grid and this module cannot drift apart
+ * on what "dateless" means. */
+export function isDatelessCampaign(promo: PromotionOut): boolean {
+  return !promo.sale_starts;
+}
+
+/** The day we first saw a campaign, as "YYYY-MM-DD".
+ *
+ * A plain slice, not a Date: the swimlane positions everything with integer
+ * day arithmetic precisely so no reader's timezone can shift a campaign onto
+ * the wrong column, and re-deriving the day through a local-time Date here
+ * would reintroduce exactly that. */
+export function campaignDetectedDay(promo: PromotionOut): string {
+  return (promo.detected_at ?? "").slice(0, 10);
+}
+
+/** Dateless campaigns one carrier published on one day, as a single mark. */
+export interface CampaignCluster {
+  /** `${airlineCode}:${day}`. Stable across renders, so it is a React key. */
+  key: string;
+  airlineCode: string;
+  /** "YYYY-MM-DD" -- the detected day every item in the cluster shares. */
+  day: string;
+  /** Two or more, in the order they arrived. */
+  items: PromotionOut[];
+}
+
+export interface DatelessGrouping {
+  /** Campaigns with a published sale start. Untouched and in input order:
+   * bars and open-ended bars are placed exactly as they were. */
+  dated: PromotionOut[];
+  /** Dateless campaigns alone in their (carrier, day) bucket. These keep the
+   * plain point marker -- a count chip reading "1" is noise. */
+  singles: PromotionOut[];
+  /** Buckets of two or more. */
+  clusters: CampaignCluster[];
+}
+
+/** Split a window's campaigns into the three things the timeline can draw.
+ *
+ * Why this exists: a dateless campaign is marked at its detection day, and CSS
+ * grid has to push same-column items onto new rows. So when Singapore Airlines
+ * announced 23 route fares in one day -- every one of them start-less -- the SQ
+ * lane became 23 diamonds and 23 identical "Yeni" badges stacked into a column
+ * taller than the viewport. The lane was not wrong about the data; one column
+ * simply cannot hold 23 marks. Collapsing a (carrier, day) bucket into one
+ * marker with a count keeps the lane one row high and moves the 23 titles to
+ * where a list belongs.
+ *
+ * Grouping is by carrier AND day: two carriers announcing on the same day are
+ * two different facts, and merging them would invent a joint campaign. An
+ * unreadable `detected_at` buckets under the campaign's own id, so a row we
+ * cannot date stays a single mark rather than silently merging with every
+ * other undateable row. */
+export function groupDatelessCampaigns(
+  promos: readonly PromotionOut[],
+): DatelessGrouping {
+  const dated: PromotionOut[] = [];
+  const buckets = new Map<string, CampaignCluster>();
+
+  for (const promo of promos) {
+    if (!isDatelessCampaign(promo)) {
+      dated.push(promo);
+      continue;
+    }
+    const day = campaignDetectedDay(promo);
+    const key = `${promo.airline_code}:${day || promo.id}`;
+    const bucket = buckets.get(key);
+    if (bucket) bucket.items.push(promo);
+    else {
+      buckets.set(key, { key, airlineCode: promo.airline_code, day, items: [promo] });
+    }
+  }
+
+  const singles: PromotionOut[] = [];
+  const clusters: CampaignCluster[] = [];
+  for (const bucket of buckets.values()) {
+    if (bucket.items.length === 1) singles.push(bucket.items[0]);
+    else clusters.push(bucket);
+  }
+  return { dated, singles, clusters };
+}
+
 /* --- presentation -------------------------------------------------------- */
 
 /** Status is icon + word + colour, in that order of importance. Colour is
@@ -208,6 +297,25 @@ export const CONFIDENCE_BAND_LABELS_TR: Record<string, string> = {
 export function confidenceBandLabel(band: string | null): string {
   if (!band) return "Değerlendirilmedi";
   return CONFIDENCE_BAND_LABELS_TR[band] ?? band;
+}
+
+const PRICE_FORMAT = new Intl.NumberFormat("tr-TR", { maximumFractionDigits: 0 });
+
+/** The one number a cluster row has room for: the discount rate the source
+ * published, and otherwise the starting price out of `attrs_json`.
+ *
+ * Null when the source stated neither -- the row then shows its title alone,
+ * because a "—" in a money column reads as "zero discount" rather than as
+ * "not published". */
+export function campaignAmountLabel(promo: PromotionOut): string | null {
+  if (promo.discount_pct !== null) return `%${promo.discount_pct}`;
+
+  const attrs = promo.attrs_json;
+  const floor = attrs?.price_floor;
+  if (typeof floor !== "number" || !Number.isFinite(floor)) return null;
+  const currency = typeof attrs?.currency === "string" ? attrs.currency : null;
+  const amount = PRICE_FORMAT.format(floor);
+  return currency ? `${amount} ${currency}` : amount;
 }
 
 function regionNames(promo: PromotionOut): string[] {
