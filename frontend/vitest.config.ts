@@ -43,10 +43,17 @@ export default defineConfig({
         // and are checked in a browser instead.
         "src/components/kokpit/alert-center.tsx",
         "src/components/kokpit/signal-board.tsx",
+        // Risk Radarı'nın yeniden tasarımı: the page's rules (filtering,
+        // search folding, the coverage/aviation-link wording, the trend
+        // transform) plus the drawer, which is where the honesty labels and
+        // the keyboard contract live. The map is deliberately not here -- it
+        // is a canvas-geometry surface, checked in a browser.
+        "src/components/risk/risk-detail-drawer.tsx",
         "src/hooks/*.ts",
         "src/lib/campaigns.ts",
         "src/lib/cockpit.ts",
         "src/lib/format.ts",
+        "src/lib/risk.ts",
       ],
     },
   },

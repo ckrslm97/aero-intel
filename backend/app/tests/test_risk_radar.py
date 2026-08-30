@@ -401,7 +401,8 @@ def test_non_risk_article_classifies_to_all_none():
 
 async def _risk_article(
     db, source, *, url, risk_type, severity, country, city=None, days_ago=1,
-    title="t", entities=(),
+    title="t", entities=(), summary_tr=None, confidence_score=0.0,
+    corroborating_source_count=1,
 ):
     from app.taxonomy import risk_family_of as family_of
 
@@ -428,6 +429,9 @@ async def _risk_article(
             risk_severity=severity,
             risk_country=country,
             risk_city=city,
+            summary_tr=summary_tr,
+            confidence_score=confidence_score,
+            corroborating_source_count=corroborating_source_count,
         )
     )
     for entity in entities:
@@ -682,3 +686,381 @@ async def test_empty_radar_is_a_valid_empty_response(db_session):
     assert out.total == 0
     assert out.countries == []
     assert out.type_counts == {}
+    # Still stamped: "we looked at 09:14 and there was nothing" is a different
+    # statement from "we have not looked", and the page shows the first one.
+    assert out.generated_at is not None
+
+
+# --------------------------------------------------------------------------
+# API: the cluster, unpacked
+#
+# Every field below was already loaded by the same query and discarded before
+# serialization -- the page could show a headline and a country while the
+# evidence behind the signal sat in memory on every request. These tests pin
+# down both what is now served and, as importantly, what it is allowed to
+# claim: publication times are never event times, and a named airport is
+# never an affected one.
+# --------------------------------------------------------------------------
+
+
+async def test_members_are_the_publication_chronology_oldest_first(db_session):
+    """The drawer draws this as a timeline, so the order is load-bearing: it
+    is the order the story was TOLD in, which is the only chronology this data
+    has. Oldest first, because that is the first telling the rest are echoing
+    -- the same preference pick_primary already makes."""
+    source = await _source(db_session, "S7", tier="agency")
+    italy = await _entity(db_session, "country", "Italy")
+    cta = await _entity(db_session, "airport", "Catania Fontanarossa", code="CTA")
+
+    await _risk_article(
+        db_session, source, url="https://m.com/late",
+        title="Etna küllerinin Catania Havalimanı'nı kapatmasıyla 700 uçuş iptal edildi",
+        risk_type="volcano", severity="medium", country="Italy", city="Catania",
+        days_ago=1, entities=(italy, cta),
+    )
+    await _risk_article(
+        db_session, source, url="https://m.com/early",
+        title="Etna patlaması Catania Havalimanı'nın kapanmasına yol açtı, 700 uçuş iptal",
+        risk_type="volcano", severity="high", country="Italy", city="Catania",
+        days_ago=3, entities=(italy, cta),
+    )
+    await db_session.commit()
+
+    from fastapi import Response
+
+    out = await list_risks(days=14, response=Response(), db=db_session)
+    signal = out.countries[0].items[0]
+
+    assert [m.url for m in signal.members] == ["https://m.com/early", "https://m.com/late"]
+    assert signal.members[0].published_at < signal.members[1].published_at
+    assert signal.first_reported_at == signal.members[0].published_at
+    assert signal.last_reported_at == signal.members[1].published_at
+    # The tier the drawer badges each row with, resolved server-side so the
+    # frontend never has to know the trust_weight bucketing rules.
+    assert {m.source_tier for m in signal.members} == {"agency"}
+    assert signal.members_truncated is False
+
+
+async def test_a_long_cluster_says_its_chronology_is_truncated(db_session):
+    """A wire story republished by every aggregator must not turn one card's
+    payload into a hundred rows -- but a silently clipped timeline is worse
+    than a clipped one that says so."""
+    from app.api.v1.risks import MEMBER_CAP
+
+    source = await _source(db_session, "S8")
+    turkey = await _entity(db_session, "country", "Turkey")
+    for i in range(MEMBER_CAP + 3):
+        await _risk_article(
+            db_session, source, url=f"https://wire.com/{i}",
+            title="Kahramanmaraş'ta 7.2 deprem: havalimanı kapatıldı, tahliye sürüyor",
+            risk_type="earthquake", severity="high", country="Turkey", city="Kahramanmaras",
+            days_ago=2, entities=(turkey,),
+        )
+    await db_session.commit()
+
+    from fastapi import Response
+
+    out = await list_risks(days=14, response=Response(), db=db_session)
+    signal = out.countries[0].items[0]
+
+    assert signal.source_count == MEMBER_CAP + 3  # the count is never clipped
+    assert len(signal.members) == MEMBER_CAP
+    assert signal.members_truncated is True
+
+
+async def test_airports_are_distinct_capped_and_ordered(db_session):
+    """One code once, however many members named it, and a stable order --
+    otherwise the same event lists its airports differently on every request
+    depending on how the join came back."""
+    from app.api.v1.risks import AIRPORT_CAP
+
+    source = await _source(db_session, "S9")
+    turkey = await _entity(db_session, "country", "Turkey")
+    airports = [
+        await _entity(db_session, "airport", f"Havalimanı {i}", code=f"A{i:02d}")
+        for i in range(AIRPORT_CAP + 2)
+    ]
+    # Both members name IST; it must appear once, not twice.
+    ist = await _entity(db_session, "airport", "İstanbul Havalimanı", code="IST")
+    await _risk_article(
+        db_session, source, url="https://ap.com/1",
+        title="İstanbul'da fırtına: uçuşlar iptal edildi, tahliye başladı",
+        risk_type="storm", severity="high", country="Turkey", city="Istanbul",
+        entities=(turkey, ist, *airports),
+    )
+    await _risk_article(
+        db_session, source, url="https://ap.com/2",
+        title="İstanbul'daki fırtına nedeniyle uçuşlar iptal, tahliye sürüyor",
+        risk_type="storm", severity="medium", country="Turkey", city="Istanbul",
+        entities=(turkey, ist),
+    )
+    await db_session.commit()
+
+    from fastapi import Response
+
+    out = await list_risks(days=14, response=Response(), db=db_session)
+    signal = out.countries[0].items[0]
+
+    assert signal.source_count == 2  # both members feed the airport union
+    codes = [a.code for a in signal.airports]
+    assert len(codes) == AIRPORT_CAP
+    assert len(set(codes)) == len(codes)
+    assert codes == sorted(codes)
+    # Names ride along so a code chip can carry a title attribute; a bare
+    # three-letter code is not a place to anyone who does not already know it.
+    assert all(a.name for a in signal.airports)
+
+
+async def test_a_named_airport_makes_the_aviation_link_direct(db_session):
+    """The rule, stated: an aviation-operational event type, or an airport
+    named in the coverage. Nothing else. It says why the signal is on an
+    aviation desk's radar -- never that a flight moved, which this product
+    has no data to claim."""
+    from app.api.v1.risks import aviation_link_for
+
+    # The rule table, independent of the database.
+    assert aviation_link_for("earthquake", "natural", 0) == "indirect"
+    assert aviation_link_for("earthquake", "natural", 1) == "direct"
+    assert aviation_link_for("war", "conflict", 0) == "indirect"
+    # v2's aviation-operational types are direct on their own merit, with or
+    # without an airport entity -- see AVIATION_OPERATIONAL_TYPES on why they
+    # cannot occur on today's v1 feed.
+    assert aviation_link_for("atc_disruption", "infrastructure", 0) == "direct"
+    assert aviation_link_for("accident_incident", "operational", 0) == "direct"
+
+    source = await _source(db_session, "S10")
+    greece = await _entity(db_session, "country", "Greece")
+    ath = await _entity(db_session, "airport", "Atina Uluslararası", code="ATH")
+    await _risk_article(
+        db_session, source, url="https://av.com/with",
+        title="Atina'da orman yangını: havalimanı kapatıldı",
+        risk_type="wildfire", severity="high", country="Greece", city="Athens",
+        entities=(greece, ath),
+    )
+    await _risk_article(
+        db_session, source, url="https://av.com/without",
+        title="Portekiz'de sel felaketi köyleri vurdu, tahliye edildi",
+        risk_type="flood", severity="medium", country="Portugal",
+    )
+    await db_session.commit()
+
+    from fastapi import Response
+
+    out = await list_risks(days=14, response=Response(), db=db_session)
+    by_country = {c.country: c.items[0] for c in out.countries}
+    assert by_country["Greece"].aviation_link == "direct"
+    assert by_country["Portugal"].aviation_link == "indirect"
+    assert by_country["Portugal"].airports == []
+
+
+async def test_is_updated_needs_an_old_first_telling_and_a_new_last_one(db_session):
+    """Both halves, and the boundary is 24h on each. This is a statement about
+    COVERAGE -- "somebody is still writing about this" -- and never about the
+    event, which this data has no lifecycle for."""
+    source = await _source(db_session, "S11")
+    japan = await _entity(db_session, "country", "Japan")
+
+    # Two tellings three days apart, the newer one inside the last 24h.
+    for days_ago, url in ((3, "https://u.com/first"), (0, "https://u.com/latest")):
+        await _risk_article(
+            db_session, source, url=url,
+            title="Sendai'de 6.8 deprem: havalimanı kapandı, tahliye sürüyor",
+            risk_type="earthquake", severity="high", country="Japan", city="Sendai",
+            days_ago=days_ago, entities=(japan,),
+        )
+    # A one-article cluster cannot be "updated": its first and last telling are
+    # the same moment, so one of the two halves always fails.
+    await _risk_article(
+        db_session, source, url="https://u.com/single",
+        title="Şili'de volkanik patlama sonrası kül bulutu, tahliye edildi",
+        risk_type="volcano", severity="medium", country="Chile", days_ago=3,
+    )
+    await db_session.commit()
+
+    from fastapi import Response
+
+    out = await list_risks(days=14, response=Response(), db=db_session)
+    by_country = {c.country: c.items[0] for c in out.countries}
+
+    japan_signal = by_country["Japan"]
+    assert japan_signal.is_updated is True
+    # ...and it is NOT "fresh": the signal itself is three days old. The two
+    # badges answer different questions and must not collapse into one.
+    assert japan_signal.is_fresh is False
+
+    stale = by_country["Chile"]
+    assert stale.is_updated is False
+    assert stale.is_fresh is False
+
+
+async def test_the_region_follows_the_resolved_country_not_the_article(db_session):
+    """A Pentagon story about Middle East operations has
+    ArticleEnrichment.region = middle-east (it names those countries) and
+    risk_country = United States. The detail panel shows Ülke and Bölge side by
+    side, so taking the article's region put "United States / Orta Doğu" in one
+    card. Both are true about the ARTICLE; only the country's own region is
+    true about the PLACE the signal is pinned to."""
+    source = await _source(db_session, "S12b")
+    article = Article(
+        source_id=source.id,
+        url="https://r.com/1",
+        title="Pentagon awards laser weapon contracts",
+        raw_content="body",
+        published_at=NOW - timedelta(days=1),
+        fetched_at=NOW - timedelta(days=1),
+        content_hash="https://r.com/1",
+        status="enriched",
+    )
+    db_session.add(article)
+    await db_session.flush()
+    db_session.add(
+        ArticleEnrichment(
+            article_id=article.id,
+            headline="Laser weapons",
+            category="safety",
+            region="middle-east",  # every country the article mentions
+            risk_type="war",
+            risk_family="conflict",
+            risk_severity="high",
+            risk_country="United States",
+        )
+    )
+    await db_session.commit()
+
+    from fastapi import Response
+
+    out = await list_risks(days=14, response=Response(), db=db_session)
+    assert out.countries[0].items[0].region == "north-america"
+
+
+async def test_the_primary_summary_and_confidence_ride_along(db_session):
+    source = await _source(db_session, "S12")
+    await _risk_article(
+        db_session, source, url="https://s.com/1", risk_type="flood",
+        severity="medium", country="France",
+        summary_tr="Lyon çevresinde sel; birkaç yol kapandı.",
+        confidence_score=0.82, corroborating_source_count=3,
+    )
+    await db_session.commit()
+
+    from fastapi import Response
+
+    out = await list_risks(days=14, response=Response(), db=db_session)
+    signal = out.countries[0].items[0]
+    assert signal.summary_tr == "Lyon çevresinde sel; birkaç yol kapandı."
+    assert signal.confidence_score == pytest.approx(0.82)
+    assert signal.corroborating_source_count == 3
+
+
+async def test_an_unsummarised_signal_reports_none_not_an_empty_string(db_session):
+    """ArticleEnrichment.summary defaults to "", and "" would render as a card
+    with a blank paragraph under the headline -- a summary that says nothing,
+    presented as a summary. None is the honest value and the UI hides it."""
+    source = await _source(db_session, "S13")
+    await _risk_article(
+        db_session, source, url="https://s.com/2", risk_type="storm",
+        severity="low", country="Spain",
+    )
+    await db_session.commit()
+
+    from fastapi import Response
+
+    out = await list_risks(days=14, response=Response(), db=db_session)
+    assert out.countries[0].items[0].summary_tr is None
+
+
+# --------------------------------------------------------------------------
+# API: trend
+# --------------------------------------------------------------------------
+
+
+async def test_trend_buckets_by_utc_day_and_splits_by_family_and_severity(db_session):
+    from fastapi import Response
+
+    from app.api.v1.risks import risk_trend
+
+    source = await _source(db_session, "S14")
+    await _risk_article(
+        db_session, source, url="https://t.com/1", risk_type="wildfire",
+        severity="high", country="Greece", days_ago=1,
+    )
+    await _risk_article(
+        db_session, source, url="https://t.com/2", risk_type="flood",
+        severity="high", country="Italy", days_ago=1,
+    )
+    await _risk_article(
+        db_session, source, url="https://t.com/3", risk_type="attack",
+        severity="low", country="Egypt", days_ago=1,
+    )
+    await db_session.commit()
+
+    out = await risk_trend(days=30, response=Response(), db=db_session)
+
+    day = (NOW - timedelta(days=1)).date().isoformat()
+    assert {(p.family, p.severity, p.count) for p in out.points} == {
+        # Two natural/high articles on one day fold into one point of 2 --
+        # wildfire and flood are different types but the same family.
+        ("natural", "high", 2),
+        ("conflict", "low", 1),
+    }
+    assert {p.day for p in out.points} == {day}
+    assert out.days == 30
+
+
+async def test_trend_counts_articles_not_clustered_signals(db_session):
+    """Deliberately different from GET /risks's `total`: three outlets on one
+    eruption is ONE signal there and THREE publications here, because that is
+    what a daily shape can be consistent about. The response's own `note` is
+    what stops the two numbers reading as a contradiction."""
+    from fastapi import Response
+
+    from app.api.v1.risks import risk_trend
+
+    source = await _source(db_session, "S15")
+    italy = await _entity(db_session, "country", "Italy")
+    for i in range(3):
+        await _risk_article(
+            db_session, source, url=f"https://t2.com/{i}",
+            title="Etna patlaması Catania Havalimanı'nı kapattı, 700 uçuş iptal edildi",
+            risk_type="volcano", severity="high", country="Italy", city="Catania",
+            days_ago=1, entities=(italy,),
+        )
+    await db_session.commit()
+
+    out = await risk_trend(days=30, response=Response(), db=db_session)
+    listed = await list_risks(days=30, response=Response(), db=db_session)
+
+    assert sum(p.count for p in out.points) == 3
+    assert listed.total == 1
+    assert "yayın hacmini" in out.note
+
+
+async def test_trend_excludes_articles_outside_the_window(db_session):
+    from fastapi import Response
+
+    from app.api.v1.risks import risk_trend
+
+    source = await _source(db_session, "S16")
+    await _risk_article(
+        db_session, source, url="https://t3.com/in", risk_type="storm",
+        severity="medium", country="Japan", days_ago=5,
+    )
+    await _risk_article(
+        db_session, source, url="https://t3.com/out", risk_type="storm",
+        severity="medium", country="Japan", days_ago=60,
+    )
+    await db_session.commit()
+
+    out = await risk_trend(days=30, response=Response(), db=db_session)
+    assert sum(p.count for p in out.points) == 1
+
+
+async def test_an_empty_trend_is_an_empty_series_not_zero_filled_days(db_session):
+    """Thirty rows of zero would look like thirty measured days; no rows is the
+    truth, and the chart fills its own axis."""
+    from fastapi import Response
+
+    from app.api.v1.risks import risk_trend
+
+    out = await risk_trend(days=30, response=Response(), db=db_session)
+    assert out.points == []

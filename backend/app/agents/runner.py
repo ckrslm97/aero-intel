@@ -339,6 +339,8 @@ async def run_pipeline_v2(db: AsyncSession, *, limit: int = DEFAULT_BATCH_SIZE) 
         not_applicable: dict = {}
         risk_type = risk_family = risk_severity = risk_country = risk_city = None
         risk_score_value = None
+        risk_score_detail = None
+        aviation_impact_note = None
         risk_assessed_at = None
         if result.risk.state is not OutcomeState.FAILED:
             risk_assessed_at = now
@@ -349,14 +351,26 @@ async def run_pipeline_v2(db: AsyncSession, *, limit: int = DEFAULT_BATCH_SIZE) 
                 risk_severity = risk.severity
                 risk_country = _canonical_country(risk.country) or risk.country
                 risk_city = risk.city
-                risk_score_value = score_risk(
+                # `.score` used to be read straight off the call and the rest of
+                # the result dropped. A risk score is the product of five
+                # factors, so a bare 0.08 says nothing about WHICH of the five
+                # collapsed it -- keep the breakdown, the same way
+                # confidence_detail keeps the confidence ladder's.
+                risk_score = score_risk(
                     severity=risk.severity,
                     probability=risk.probability,
                     aviation_impact_score=risk.aviation_impact_score,
                     source_tier=primary_candidate.tier,
                     event_time=primary.published_at or primary.fetched_at,
                     now=now,
-                ).score
+                )
+                risk_score_value = risk_score.score
+                risk_score_detail = risk_score.components
+                # The model's own sentence for why aviation cares. Parsed since
+                # v2 shipped, stored from here on: it is the only human-readable
+                # half of aviation_impact_score, and re-deriving it later would
+                # cost another model call on an article we no longer keep.
+                aviation_impact_note = risk.aviation_impact_note
             else:
                 not_applicable["risk"] = result.risk.reason
 
@@ -397,6 +411,8 @@ async def run_pipeline_v2(db: AsyncSession, *, limit: int = DEFAULT_BATCH_SIZE) 
             risk_country=risk_country,
             risk_city=risk_city,
             risk_score=risk_score_value,
+            risk_score_detail=risk_score_detail,
+            aviation_impact_note=aviation_impact_note,
             risk_assessed_at=risk_assessed_at,
             confidence_score=confidence.score,
             confidence_band=confidence.band,

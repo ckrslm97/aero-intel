@@ -96,6 +96,21 @@ class NewsEvent(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     #: Weighted severity x probability x aviation impact x recency x source tier.
     #: Stored so the map, the ranking and the list order by the same number.
     risk_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    #: The five factors behind `risk_score`, as pipeline/risk_scoring.py
+    #: computed them (severity, probability, aviation_impact, recency,
+    #: source_tier). Kept for the same reason `confidence_detail` is: the score
+    #: is a product of five numbers, and a bare 0.08 cannot be argued with --
+    #: it does not say whether the event was minor, unlikely, stale or thinly
+    #: sourced. RiskScoreResult already produced this dict and the runner threw
+    #: it away; storing it is what makes a score explainable after the weights
+    #: have moved on.
+    risk_score_detail: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    #: The classifier's own one-sentence Turkish answer to "why does aviation
+    #: care about this event" (llm/classify.py RiskAssessment). Parsed on every
+    #: risk call since v2 shipped and persisted nowhere until now, so the one
+    #: piece of reasoning behind an aviation_impact_score was lost the moment
+    #: the score was computed from it.
+    aviation_impact_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     risk_assessed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

@@ -265,6 +265,32 @@ async def test_a_risk_verdict_is_persisted_with_a_score(db_session, monkeypatch)
     assert event["risk_assessed_at"] is not None
     assert event["risk_score"] is not None
     assert event["region"] == "europe"
+    # The score is a product of five factors, so the number alone cannot be
+    # argued with -- a 0.08 does not say whether the event was minor, unlikely,
+    # stale or thinly sourced. Both of these were computed and thrown away
+    # before the row was written; they are the explanation half of the verdict.
+    assert set(event["risk_score_detail"]) == {
+        "severity", "probability", "aviation_impact", "recency", "source_tier",
+    }
+    assert event["risk_score_detail"]["probability"] == pytest.approx(0.95)
+    assert event["aviation_impact_note"] == "Hava üssü operasyonları etkilendi."
+
+
+async def test_a_non_risk_event_carries_no_score_breakdown_and_no_impact_note(db_session):
+    """The default stub answers NOT_APPLICABLE for risk. Both new columns must
+    stay null rather than land as an empty dict and an empty string -- "no
+    risk assessment" and "an assessment that said nothing" are different
+    facts, and only the first one is true here."""
+    source = await _source(db_session)
+    await _article(db_session, source, "https://a.example/plain", "Pegasus yeni hat açıyor")
+    await db_session.commit()
+
+    await run_pipeline_v2(db_session, limit=10)
+
+    event = (await db_session.execute(NewsEvent.__table__.select())).mappings().one()
+    assert event["risk_score"] is None
+    assert event["risk_score_detail"] is None
+    assert event["aviation_impact_note"] is None
 
 
 async def test_a_failed_classification_is_never_published(db_session, monkeypatch):
