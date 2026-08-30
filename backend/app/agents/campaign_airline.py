@@ -62,6 +62,7 @@ services/golden_eval_service.py) go on reading `.payload`/`.reason` unchanged.
 """
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 
 from app.agents.gate import DISTRACTOR_TERMS
@@ -102,6 +103,25 @@ REQUIRED_FIELDS = ("sale_window",)
 # other way would silently never match -- the same trap agents/gate.py
 # documents at the top of its own tables.
 
+
+def _stem_pattern(stems: tuple[str, ...]) -> re.Pattern[str]:
+    """Match a stem plus whatever Turkish agglutination is hanging off it.
+
+    `_keyword_pattern()` anchors both ends on `\\b`, which is exactly right for
+    a closed word like "avios" and exactly wrong for a Turkish noun. Two of the
+    false positives still live on the site died here: LOYALTY_TERMS has
+    contained "puan" since the rulepack was written, and neither "Kredi Kartı
+    **Puanlarınızı** ... Transfer Edin" nor "transfer edilebilir kredi kartı
+    **puanları**" matched it, because neither headline contains the bare stem.
+
+    Only for stems no other Turkish word begins with. "mil" is deliberately NOT
+    one of them -- `\\bmil\\w*` swallows "milyon", "milli" and "Milano", and a
+    rulepack that rejects "1 milyon koltuk indirimde" is worse than the leak it
+    was meant to close.
+    """
+    return re.compile("|".join(rf"\b{re.escape(stem)}\w*" for stem in stems))
+
+
 #: Standing benefits with no campaign window: a segment that always gets this
 #: rate. A published "campaign" that never starts and never ends is noise on a
 #: timeline whose entire purpose is when-does-this-close. Detection needs BOTH
@@ -133,19 +153,119 @@ PRODUCT_TERMS: tuple[str, ...] = (
 ) + DISTRACTOR_TERMS["hotel"]
 _PRODUCT = _keyword_pattern(PRODUCT_TERMS)
 
+#: A carrier launching or extending a *service*, which is a product
+#: announcement wearing a press release. "KLM, Bölgesel Ekonomi Sınıfında Buy
+#: On Board Hizmetini Sunuyor" was live on the site as a KLM fare campaign.
+#:
+#: Every entry is a phrase, never a bare verb, and that is the whole design.
+#: "sunuyor", "tanıtıyor" and "duyurdu" are also how a genuine campaign
+#: announces itself ("Pegasus ... flaş indirimi duyurdu"), so the launch verb
+#: only counts when it is already bound to a service noun.
+SERVICE_LAUNCH_TERMS: tuple[str, ...] = (
+    "buy on board", "buy onboard", "ucak ici satis", "ucak ici satislar",
+    "hizmetini sunuyor", "hizmeti sunuyor", "hizmete sunuyor",
+    "hizmetini sunmaya", "hizmetini baslatti", "hizmetini baslatiyor",
+    "hizmeti baslatiyor", "hizmete basliyor", "yeni hizmetini",
+    "yeni hizmet sunuyor", "hizmetini genisletiyor", "hizmete aciyor",
+    "launches service", "launches new service", "launches a new service",
+    "introduces service", "introduces new service", "introduces a new service",
+    "rolls out service", "unveils new service", "starts offering",
+    "new onboard service", "new in flight service",
+)
+_SERVICE_LAUNCH = _keyword_pattern(SERVICE_LAUNCH_TERMS)
+
 #: Miles, points and status. The single largest category among the 129 wrong
 #: rows -- Avios bonus sales, Flying Blue devaluations, TrueBlue point
 #: purchases -- all of which are about the currency, not about the fare.
 LOYALTY_TERMS: tuple[str, ...] = (
     "mil", "mil kazan", "mil kazanim", "bonus mil", "mile", "miles",
+    "milleri", "milleriniz", "millerinizi", "milinizi", "mil transferi",
     "puan", "puanlar", "bolpuan", "point", "points", "bonus points",
     "statu", "status match", "statu esitleme", "elite status", "tier",
+    "statusu", "statunuz", "statuye", "statu atlama",
+    "elite", "elit statu", "elit uye", "elit uyelik",
     "miles smiles", "milesandsmiles", "avios", "skywards", "flying blue",
     "trueblue", "bolbol", "executive club", "frequent flyer", "mileage",
     "odul bilet", "award ticket", "award chart", "redemption",
     "sadakat programi", "loyalty programme", "loyalty program",
+    # --- the award/redemption family the live leaks were made of ------------
+    # English is handled phrase by phrase rather than on a bare "award" stem,
+    # because "award-winning" and "awarded best airline" are marketing copy on
+    # genuine fare pages. The Turkish half is the `_AWARD` stem below.
+    "award sale", "award sales", "award flight", "award flights",
+    "award booking", "award bookings", "award availability", "award space",
+    "award pricing", "award redemption", "award seat", "award seats",
+    "award travel", "award search", "reward flight", "reward flights",
+    "reward seat", "reward seats", "reward booking", "reward sale",
+    "rewards program", "rewards programme", "rewards sale", "rewards member",
+    "redeem", "redeeming", "redemptions", "points and miles",
+    # Transfers: the currency moving between programmes, never a fare.
+    "transfer bonus", "bonus transfer", "point transfer", "points transfer",
+    "transferable points", "transfer edilebilir", "puan aktarimi",
 )
 _LOYALTY = _keyword_pattern(LOYALTY_TERMS)
+
+#: Turkish stems whose inflected forms are the ones that actually appear.
+LOYALTY_STEMS: tuple[str, ...] = ("puan",)
+_LOYALTY_STEM = _stem_pattern(LOYALTY_STEMS)
+
+#: "ödül" and everything Turkish hangs off it -- ödülü, ödüle, ödüller,
+#: ödüllerde, ödülün -- with exactly one form carved out.
+#:
+#: **"ödüllü" is not award vocabulary.** It is the adjective "award-winning",
+#: and "ödüllü havayolu" is marketing fluff that shows up on genuinely dated
+#: fare campaigns. In folded form the whole distinction is the letter after
+#: "odul": "odul" + "lu" is the adjective and must not match, while "odul" +
+#: "ller..." is the plural and must. Hence the negative lookahead rather than a
+#: plain `\bodul\w*`, which would reject a real campaign for praising itself.
+_AWARD = re.compile(r"\bodul(?!lu)\w*")
+
+#: Miles-plus-cash, the way award-redemption content prices itself:
+#: "120.000 + ~500$'lık iş sınıfı" was live as a KLM campaign. Matched against
+#: the RAW text, not the folded text, because folding is what destroys it --
+#: `fold_text()` collapses that headline to "120 000 500 lik is sinifi", losing
+#: both the "+" and the "$" that make the pattern mean anything.
+#:
+#: The grouped thousands separator is what keeps this off fare prices: a fare
+#: is "1.299 TL", one number with no second number added to it. Requiring an
+#: explicit "+" between a points-scale figure and a money figure is narrow
+#: enough that no fare campaign phrasing satisfies it.
+_POINTS_PLUS_CASH = re.compile(
+    r"\b\d{1,3}[.,]\d{3}\b\s*\+\s*[~≈]?\s*[$€£₺]?\s*\d"
+    r"|\b\d{2,3}\s?k\b\s*\+\s*[~≈]?\s*[$€£₺]?\s*\d",
+    re.IGNORECASE,
+)
+
+#: Cargo, and the vocabulary of a financial results announcement. Both are
+#: required: "IAG Cargo'nun ilk yarı yıl geliri ... %9,4 düşüş gösterdi" was
+#: published as a Qatar Airways campaign because it carries a percentage and
+#: the word "gelir". A freight division's half-year revenue is never a
+#: passenger fare campaign, and the pairing is what makes that safe to say --
+#: "kargo" alone would also match an airline's belly-cargo promotion copy, and
+#: "gelir" alone is a verb form ("gelirse") as often as it is a noun.
+CARGO_STEMS: tuple[str, ...] = ("kargo",)
+CARGO_TERMS: tuple[str, ...] = (
+    "cargo", "air cargo", "freight", "freighter", "air freight",
+    "belly cargo", "yuk tasima", "yuk tasimaciligi",
+)
+_CARGO = re.compile(
+    "|".join([_stem_pattern(CARGO_STEMS).pattern, _keyword_pattern(CARGO_TERMS).pattern])
+)
+
+FINANCIAL_STEMS: tuple[str, ...] = ("gelir", "ciro", "zarar", "bilanco")
+FINANCIAL_TERMS: tuple[str, ...] = (
+    "revenue", "revenues", "profit", "profits", "loss", "losses",
+    "earnings", "operating profit", "net profit", "financial results",
+    "half year", "first half", "quarter", "quarterly", "q1", "q2", "q3", "q4",
+    "yari yil", "ilk yari", "ceyrek", "ceyrekte", "ceyregi", "ceyreginde",
+    "kar", "kari", "karlilik", "net kar", "faaliyet kari",
+    "finansal sonuclar", "mali sonuclar", "bilanco",
+)
+_FINANCIAL = re.compile(
+    "|".join(
+        [_stem_pattern(FINANCIAL_STEMS).pattern, _keyword_pattern(FINANCIAL_TERMS).pattern]
+    )
+)
 
 #: What a page that actually wants to sell you a ticket says. Its ABSENCE is
 #: the signal -- together with no dates and no rate, it means the page reports
@@ -188,70 +308,128 @@ def _first_match(pattern, text: str) -> str | None:
 def _business_class(
     text: str,
     *,
+    raw_text: str = "",
     has_sale_window: bool,
     has_any_date: bool,
     has_discount: bool,
 ) -> tuple[str, str | None] | None:
-    """The non-fare class this page belongs to, or None if it is a fare campaign.
+    """The rule this page trips, or None if it is a fare campaign.
+
+    Returns `(rule, evidence)`, where the rule -- not the class -- is the unit,
+    because two rules can land on the same class for entirely different
+    reasons and the analyst is owed the actual one. "Kargo yarı yıl geliri" and
+    "no dates, no rate, no CTA" are both NEWS_ONLY; telling the first one it
+    was rejected for having no discount rate would be a lie about a row that
+    prints a percentage in its headline.
 
     Order is by how specific the evidence is, not by how common the class is.
     A page saying both "bagaj" and "mil" is a product promo that happens to
     award miles, so PRODUCT is asked first; LOYALTY is next because its
-    vocabulary is unambiguous; EVERGREEN needs a second condition and so comes
-    after the two that do not; NEWS_ONLY is last because it is defined by
-    absence and everything positive should get its say first.
+    vocabulary is unambiguous; the two-condition rules (cargo financials,
+    evergreen) come after the ones that need only one; NEWS_ONLY-by-absence is
+    last because everything positive should get its say first.
 
     Takes the three date/rate facts as booleans rather than a
     `CampaignExtraction`, so the same rulepack can be asked about a stored
     `Promotion` row -- which has the same four date columns and the same
     `discount_pct` but is not an extraction -- without a second copy of the
     keyword tables (see `detect_business_class`).
+
+    `raw_text` is the same content before `fold_text()`, for the one rule that
+    needs punctuation to mean anything (`_POINTS_PLUS_CASH`). Optional and
+    defaulted, so a caller that only has folded text loses that rule and
+    nothing else.
     """
     product = _first_match(_PRODUCT, text)
     if product:
-        return "PRODUCT_PROMOTION", product
+        return "product", product
 
-    loyalty = _first_match(_LOYALTY, text)
+    service = _first_match(_SERVICE_LAUNCH, text)
+    if service:
+        return "service_launch", service
+
+    loyalty = _first_match(_LOYALTY, text) or _first_match(_LOYALTY_STEM, text)
     if loyalty:
-        return "LOYALTY_PROMOTION", loyalty
+        return "loyalty", loyalty
+
+    award = _first_match(_AWARD, text)
+    if award:
+        return "award", award
+
+    points_plus_cash = _first_match(_POINTS_PLUS_CASH, raw_text)
+    if points_plus_cash:
+        return "points_plus_cash", points_plus_cash.strip()
+
+    # Cargo needs the freight vocabulary AND the financial-report vocabulary,
+    # for the same reason evergreen needs a second condition: a carrier's own
+    # belly-cargo promotion is legitimately about cargo, and a rulepack that
+    # rejected everything saying "kargo" would be overreaching.
+    cargo = _first_match(_CARGO, text)
+    financial = _first_match(_FINANCIAL, text)
+    if cargo and financial:
+        return "cargo_financials", f"{cargo} + {financial}"
 
     # Evergreen needs the vocabulary AND no sale window: a student fare that
     # runs for three days in September is a real campaign that happens to
     # target students, and rejecting it would be the rulepack overreaching.
     evergreen = _first_match(_EVERGREEN, text)
     if evergreen and not has_sale_window:
-        return "EVERGREEN_OFFER", evergreen
+        return "evergreen", evergreen
 
     # Nothing to book, nothing to book it by, and nothing off the price: an
     # article about the campaign surface rather than a campaign.
     if not has_any_date and not has_discount and not _BOOKING_CTA.search(text):
-        return "NEWS_ONLY", None
+        return "news_only", None
 
     return None
 
 
-_CLASS_REASONS: dict[str, str] = {
-    "PRODUCT_PROMOTION": (
-        "Bagaj, lounge, otel gibi yan ürün/hizmet kampanyası — bilet ücreti kampanyası değil"
+#: rule -> (business_class, the Turkish sentence that explains that rule).
+#: Several rules share a class; none share a sentence.
+_RULE_VERDICTS: dict[str, tuple[str, str]] = {
+    "product": (
+        "PRODUCT_PROMOTION",
+        "Bagaj, lounge, otel gibi yan ürün/hizmet kampanyası — bilet ücreti kampanyası değil",
     ),
-    "LOYALTY_PROMOTION": (
-        "Mil/puan kazanımı veya sadakat programı kampanyası — ücret kampanyası değil"
+    "service_launch": (
+        "PRODUCT_PROMOTION",
+        "Yeni ürün/hizmet lansmanı duyurusu (servis tanıtımı) — bilet ücreti kampanyası değil",
     ),
-    "EVERGREEN_OFFER": (
+    "loyalty": (
+        "LOYALTY_PROMOTION",
+        "Mil/puan kazanımı veya sadakat programı kampanyası — ücret kampanyası değil",
+    ),
+    "award": (
+        "LOYALTY_PROMOTION",
+        "Ödül bileti / ödül uçuşu içeriği: mil-puan ile bilet, ödül satışı veya ödül "
+        "rezervasyonu — ücret kampanyası değil",
+    ),
+    "points_plus_cash": (
+        "LOYALTY_PROMOTION",
+        "Mil/puan + üzerine nakit ödeme kalıbı — ödül bileti içeriği, ücret kampanyası değil",
+    ),
+    "cargo_financials": (
+        "NEWS_ONLY",
+        "Kargo biriminin finansal sonuç haberi (gelir/kâr/dönem) — yolcu bilet "
+        "kampanyası değil",
+    ),
+    "evergreen": (
+        "EVERGREEN_OFFER",
         "Belirli bir yolcu grubuna sürekli sunulan standart teklif, satış dönemi yok "
-        "— süreli ücret kampanyası değil"
+        "— süreli ücret kampanyası değil",
     ),
-    "NEWS_ONLY": (
+    "news_only": (
+        "NEWS_ONLY",
         "Tarih, indirim oranı ve rezervasyon çağrısı yok — kampanyayı anlatan içerik, "
-        "kampanyanın kendisi değil"
+        "kampanyanın kendisi değil",
     ),
 }
 
 
-def _rejection_reason(business_class: str, evidence: str | None) -> str:
+def _rejection_reason(rule: str, evidence: str | None) -> str:
     """One Turkish sentence, quoting the phrase that decided it where there is
     one. A verdict the analyst cannot check is a verdict they cannot trust."""
-    base = _CLASS_REASONS[business_class]
+    _, base = _RULE_VERDICTS[rule]
     if evidence:
         return f"{base} (\"{evidence}\" geçiyor)."
     return f"{base}."
@@ -260,7 +438,9 @@ def _rejection_reason(business_class: str, evidence: str | None) -> str:
 #: The four classes the rulepack can return -- everything that is *not* a fare
 #: campaign. ACTIVE_CAMPAIGN is deliberately absent: it is the verdict when
 #: none of these matched, never something detected in its own right.
-NON_FARE_CLASSES: tuple[str, ...] = tuple(_CLASS_REASONS)
+NON_FARE_CLASSES: tuple[str, ...] = tuple(
+    dict.fromkeys(business_class for business_class, _ in _RULE_VERDICTS.values())
+)
 
 
 def detect_business_class(
@@ -286,8 +466,10 @@ def detect_business_class(
     backfill that carried its own copy would start disagreeing with the live
     pipeline on the first term either side added.
     """
+    raw = f"{title}\n{text or ''}"
     detected = _business_class(
-        fold_text(f"{title}\n{text or ''}"),
+        fold_text(raw),
+        raw_text=raw,
         has_sale_window=sale_starts is not None or sale_ends is not None,
         has_any_date=any(
             value is not None
@@ -297,8 +479,9 @@ def detect_business_class(
     )
     if detected is None:
         return None
-    business_class, evidence = detected
-    return business_class, _rejection_reason(business_class, evidence)
+    rule, evidence = detected
+    business_class, _ = _RULE_VERDICTS[rule]
+    return business_class, _rejection_reason(rule, evidence)
 
 
 def _acceptance_reason(campaign: CampaignExtraction) -> str:

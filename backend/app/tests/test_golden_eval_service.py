@@ -2,7 +2,8 @@ import json
 from datetime import date
 
 from app.golden import (
-    SYNTHETIC_SOURCE,
+    SYNTHETIC_LEAK_SOURCE,
+    SYNTHETIC_SOURCES,
     GoldenRecord,
     campaign_records,
     news_records,
@@ -38,12 +39,14 @@ def _record(idx=1, title="t", system_label="", verdict="ok", reason="", url=None
 
 
 def test_golden_set_loads_the_expected_counts():
-    """The campaign count moved from 131 to 173 in PR8: the 131 observed rows
-    are untouched (see the split assertion below) and 42 authored records were
-    added for the dimensions the 2025 snapshot has no examples of."""
+    """The campaign count moved 131 -> 173 (PR8) -> 187: the 131 observed rows
+    are untouched (see the split assertion below), 42 authored records cover
+    the dimensions the 2025 snapshot has no examples of, and 14 more pin the
+    award/cargo/service-announcement leaks that were still live after the
+    backfill."""
     assert len(risk_records()) == 24
     assert len(news_records()) == 100
-    assert len(campaign_records()) == 173
+    assert len(campaign_records()) == 187
 
 
 def test_the_observed_campaign_snapshot_is_still_exactly_the_original_131():
@@ -80,11 +83,11 @@ def test_golden_records_are_well_formed():
 
 def test_synthetic_campaign_records_are_labelled_and_in_taxonomy():
     records = synthetic_campaign_records()
-    assert len(records) == 42
+    assert len(records) == 56
     for record in records:
         # Marked as authored on the row itself, and never live-fetchable --
         # `evaluate_full_pipeline` must skip them rather than hit the network.
-        assert record.source == SYNTHETIC_SOURCE
+        assert record.source in SYNTHETIC_SOURCES
         assert record.url is None
         assert record.text
         assert record.reason
@@ -338,7 +341,7 @@ def test_expired_records_are_graded_against_the_status_engine_not_the_class():
 def test_the_real_golden_set_produces_a_computable_false_positive_rate():
     report = evaluate_campaign_extraction()
     assert report.today == EVALUATION_TODAY
-    assert report.graded == 142
+    assert report.graded == 156
     assert report.false_positive_rate is not None
     assert 0.0 <= report.false_positive_rate <= 1.0
     assert report.precision is not None and report.recall is not None
@@ -365,6 +368,56 @@ def test_no_authored_non_campaign_leaks_through():
     report = evaluate_campaign_extraction(synthetic_campaign_records())
     assert report.false_positives == 0
     assert report.false_negatives == 0
+
+
+def _leak_records():
+    return [r for r in campaign_records() if r.source == SYNTHETIC_LEAK_SOURCE]
+
+
+def test_the_leak_batch_pins_every_pattern_that_was_still_live():
+    """Each of these is a paraphrase of a row the site was still publishing
+    after the backfill: award sales and award-booking guides, a cargo
+    division's half-year revenue, an onboard-service launch. Rejected is not
+    enough -- each must be rejected as the *right kind* of wrong, or the
+    business_class column on the analyst view is decoration."""
+    records = _leak_records()
+    assert len(records) == 14
+
+    report = evaluate_campaign_extraction(records)
+    assert report.false_positives == 0
+    assert report.false_negatives == 0
+    for row in report.by_business_class.values():
+        assert row.class_agreed == row.total
+
+
+def test_the_leak_batch_still_publishes_a_campaign_that_calls_itself_award_winning():
+    """The over-blocking half. "Ödüllü havayolu" is Turkish for
+    "award-winning airline" -- marketing fluff on a genuinely dated campaign,
+    and one letter away from the "ödül" (award/redemption) vocabulary the
+    LOYALTY rulepack now keys on."""
+    published = [
+        r for r in evaluate_campaign_extraction(_leak_records()).results if r.would_publish
+    ]
+    assert len(published) == 2
+    assert all("dül" in r.title or "ward-Winning" in r.title for r in published)
+
+
+def test_the_campaign_gate_passes_so_the_article_path_flag_may_be_on():
+    """The gate and the flag are one decision, asserted together so they cannot
+    drift: `.github/workflows/jobs-news.yml` turns CAMPAIGN_V2_ENABLED on for
+    the article path, and it is only allowed to be on while this holds."""
+    from pathlib import Path
+
+    from app.cli import CAMPAIGN_FP_RATE_GATE
+
+    report = evaluate_campaign_extraction()
+    assert report.false_positive_rate < CAMPAIGN_FP_RATE_GATE
+    assert report.recall == 1.0
+
+    workflow = (
+        Path(__file__).resolve().parents[3] / ".github" / "workflows" / "jobs-news.yml"
+    ).read_text(encoding="utf-8")
+    assert 'CAMPAIGN_V2_ENABLED: "true"' in workflow
 
 
 def test_the_real_golden_set_keeps_every_expected_campaign_type_in_the_taxonomy():

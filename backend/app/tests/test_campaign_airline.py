@@ -180,6 +180,151 @@ def test_a_loyalty_promotion_is_never_published_as_a_fare_campaign(title, text):
 @pytest.mark.parametrize(
     "title,text",
     [
+        # The Turkish "ödül" family, in the inflections the headlines actually
+        # use -- none of which contain the bare stem.
+        ("Qatar Airways aylık ödül indirimini tanıtıyor", "Ödüllerde %25'e varan azalma."),
+        ("Qatar Airways ödül uçuş maliyetlerini %25 azalttı", ""),
+        ("Alaska Atmos Rewards Küresel Kaçış Ödül Satışı", "Ödül biletleri daha az mille."),
+        ("Her seyahatseverin bilmesi gereken 9 ödül uçuşu rezervasyon taktiği", ""),
+        ("Ödüle giden yol", "Ödülü nasıl kullanacağınızı anlatıyoruz."),
+        # English, phrase by phrase.
+        ("Award Booking Guide", "How to find award space on partner carriers."),
+        ("Global Getaways Award Sale", "Book an award flight for fewer miles."),
+        ("Redeem your points for a premium cabin", "Redemptions open on Monday."),
+        # Points that only ever appear inflected: "puan" is in the rulepack,
+        # "puanlarınızı" is what the headline says.
+        ("Kredi Kartı Puanlarınızı Cathay Pacific'e Transfer Edin", ""),
+        ("Transfer edilebilir kredi kartı puanları neden kazanılmalı", ""),
+        ("Bu ay %30 transfer bonusu", "Puan aktarımı yapanlara bonus."),
+    ],
+)
+def test_the_award_and_points_vocabulary_is_never_a_fare_campaign(title, text):
+    """The categories PR8 documented as residual and the backfill left live:
+    award sales, award-booking guides and credit-card point transfers. All are
+    about the currency or about how to spend it, never about a fare."""
+    result = validate_campaign(title, _campaign(), today=TODAY, text=text)
+    assert result.state is OutcomeState.NOT_APPLICABLE
+    assert result.reason == "business_class:LOYALTY_PROMOTION"
+
+
+@pytest.mark.parametrize(
+    "title,text",
+    [
+        ("120.000 + ~500$'lık iş sınıfı üç kişilik aile için uygun mu?", ""),
+        ("Is 120,000 + $500 worth it in business?", ""),
+        ("Bu fırsat mantıklı mı?", "Kişi başı 60.000 + 250$ ödeyerek geçiş yapabilirsiniz."),
+    ],
+)
+def test_a_points_plus_cash_price_is_award_content_not_a_fare(title, text):
+    """"120.000 + ~500$'lık iş sınıfı" was live as a KLM campaign. The pattern
+    only survives on the raw text -- fold_text() collapses it to "120 000 500",
+    losing the "+" and the "$" that are the whole signal."""
+    result = validate_campaign(title, _campaign(), today=TODAY, text=text)
+    assert result.state is OutcomeState.NOT_APPLICABLE
+    assert result.reason == "business_class:LOYALTY_PROMOTION"
+
+
+@pytest.mark.parametrize(
+    "title,text",
+    [
+        ("IAG Cargo'nun ilk yarı yıl geliri %9,4 düştü", "Kapasite kesintileri etkiledi."),
+        ("Turkish Cargo second quarter revenue rises 12 percent", ""),
+        ("Kargo biriminin çeyrek kârı açıklandı", "Bilanço bugün paylaşıldı."),
+    ],
+)
+def test_a_cargo_financial_report_is_news_not_a_passenger_campaign(title, text):
+    """A revenue *decline* read as a discount is the exact mistake the module
+    docstring opens with, and it was still live: "IAG Cargo'nun ilk yarı yıl
+    geliri ... %9,4 düşüş" was published as a Qatar Airways campaign."""
+    result = validate_campaign(title, _campaign(), today=TODAY, text=text)
+    assert result.state is OutcomeState.NOT_APPLICABLE
+    assert result.reason == "business_class:NEWS_ONLY"
+
+
+def test_cargo_alone_is_not_enough_to_reject_a_dated_campaign():
+    """Both halves are required. A carrier's own cargo promotion with a real
+    window is not a financial results announcement, and the rulepack must not
+    treat the word "kargo" as a veto."""
+    result = validate_campaign(
+        "Kargo taşımalarında %20 indirim",
+        _campaign(discount_pct=20),
+        today=TODAY,
+        text="Kargo gönderilerinde 25-27 Ağustos arası %20 indirim. Hemen rezervasyon yapın.",
+    )
+    assert result.state is OutcomeState.CLASSIFIED
+
+
+@pytest.mark.parametrize(
+    "title,text",
+    [
+        ("KLM, Bölgesel Ekonomi Sınıfında Buy On Board Hizmetini Sunuyor", ""),
+        ("Lufthansa kısa mesafede yeni kabin hizmetini başlatıyor", ""),
+        ("British Airways introduces new service on regional routes", ""),
+    ],
+)
+def test_a_service_launch_announcement_is_a_product_not_a_fare_campaign(title, text):
+    result = validate_campaign(title, _campaign(), today=TODAY, text=text)
+    assert result.state is OutcomeState.NOT_APPLICABLE
+    assert result.reason == "business_class:PRODUCT_PROMOTION"
+
+
+def test_a_launch_verb_alone_does_not_reject_a_campaign_announcing_itself():
+    """"sunuyor", "duyurdu" and "tanıtıyor" are also how a real campaign
+    announces itself, which is why every service-launch term is a phrase bound
+    to a service noun rather than a bare verb."""
+    result = validate_campaign(
+        "Pegasus yeni indirim kampanyasını tanıtıyor",
+        _campaign(),
+        today=TODAY,
+        text="Pegasus, 25-27 Ağustos arası geçerli %50 indirimi duyurdu. Hemen rezervasyon yapın.",
+    )
+    assert result.state is OutcomeState.CLASSIFIED
+
+
+@pytest.mark.parametrize(
+    "title,text",
+    [
+        ("Ödüllü havayolumuzla Balkanlar'a %45 indirim", "Ödüllü havayolu Pegasus duyurdu."),
+        ("Award-winning airline: 40% off fares to London", "Book now."),
+        ("Yılın ödüllü kabin ekibiyle uçun", "25-27 Ağustos arası %50 indirim."),
+    ],
+)
+def test_award_winning_marketing_fluff_does_not_block_a_real_campaign(title, text):
+    """The morphology trap the "ödül" rule had to be written around: "ödüllü"
+    is the adjective "award-winning", one letter from "ödüller". A rulepack
+    that rejects a dated campaign for praising itself has overreached, and this
+    is the assertion that says so."""
+    result = validate_campaign(title, _campaign(), today=TODAY, text=text)
+    assert result.state is OutcomeState.CLASSIFIED
+    assert result.details["business_class"] == "ACTIVE_CAMPAIGN"
+
+
+def test_a_million_seats_on_sale_is_not_read_as_a_points_balance():
+    """"1 milyon koltuk indirimde" is standard Turkish campaign copy. It is
+    also why "mil" is not one of the suffix-tolerant stems -- `\\bmil\\w*`
+    swallows "milyon"."""
+    result = validate_campaign(
+        "1 milyon koltuk indirimde",
+        _campaign(),
+        today=TODAY,
+        text="Kampanya 25-27 Ağustos arası. Hemen bilet alın.",
+    )
+    assert result.state is OutcomeState.CLASSIFIED
+
+
+def test_a_fare_price_with_a_thousands_separator_is_not_points_plus_cash():
+    result = validate_campaign(
+        "İstanbul-Berlin 1.299 TL'den başlayan fiyatlarla",
+        _campaign(),
+        today=TODAY,
+        text="Satış dönemi 25-27 Ağustos. Hemen rezervasyon yapın.",
+    )
+    assert result.state is OutcomeState.CLASSIFIED
+
+
+@pytest.mark.parametrize(
+    "title,text",
+    [
         ("Öğrencilere özel indirim", "Öğrenci belgesi ile her zaman geçerli indirim."),
         ("Student discount", "Students always save on selected routes."),
         ("Kurumsal seyahat avantajları", "Şirketler için sürekli geçerli kurumsal anlaşma."),
