@@ -6,17 +6,30 @@ page draws the same set three ways -- a map, a "Sıcak Noktalar" ranking and a
 country-sectioned list -- and all three must agree on which country is worst.
 Computing the weighted score once, server-side, is what guarantees that; three
 client-side re-derivations of it would be three chances to disagree.
+
+What this data CANNOT say, listed once here because every field below is shaped
+by it and the UI has to keep the same discipline:
+
+* **No event coordinates.** Placement is a country or city centroid, never the
+  event's own point -- the classifier resolves a name, not a location.
+* **No event-occurrence time.** Every timestamp here is a PUBLICATION time.
+  `first_reported_at`/`last_reported_at` bracket the coverage, not the event.
+* **No lifecycle.** Nothing in the feed says an event is active, contained or
+  over. `is_fresh`/`is_updated` are statements about the coverage flow, and
+  they are named that way so they cannot be mistaken for a status.
+* **No operational impact.** There is no schedule, OTP or route data behind
+  this product, so an airport named in an article is exactly that -- named.
+  See AirportRefOut and aviation_link_for().
 """
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query, Response
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.cache_headers import AGGREGATES, public_cache
-from app.core.logging import get_logger
 from app.core.db import get_db
 from app.models.article import Article, ArticleEnrichment
 from app.models.entity import ArticleEntity
@@ -29,7 +42,34 @@ from app.taxonomy import (
 )
 
 router = APIRouter(prefix="/risks", tags=["risks"])
-logger = get_logger(__name__)
+
+
+class AirportRefOut(BaseModel):
+    """An airport NAMED IN the coverage of this event -- never one we claim is
+    affected by it.
+
+    These come from the entity gazetteer's airport matches across the cluster's
+    articles, which is evidence that the story mentions the airport and nothing
+    more. There is no operational feed behind this product, so "etkilenen
+    havalimanları" would be a claim nothing in the pipeline can support; the UI
+    label is "Anılan havalimanları" for exactly that reason.
+    """
+
+    code: str
+    name: str
+
+
+class RiskMemberOut(BaseModel):
+    """One article inside the cluster: a telling of the event, with its own
+    outlet, tier and publication time."""
+
+    title: str
+    url: str
+    source_name: str
+    #: official | regulator | agency | trade | aggregator -- see
+    #: pipeline/clustering.py tier_for_source.
+    source_tier: str
+    published_at: datetime | None
 
 
 class RiskItemOut(BaseModel):
@@ -53,6 +93,46 @@ class RiskItemOut(BaseModel):
     # >1 means multiple outlets reported the same event and this is already
     # the merged, reconciled view -- see list_risks()'s clustering pass.
     source_count: int = 1
+
+    # --- the cluster, unpacked ------------------------------------------
+    #
+    # Everything below was already loaded by list_risks()'s single query --
+    # members, their sources, their airport entities, the primary's enrichment
+    # -- and then discarded before serialization. Reading the page meant
+    # reading a headline and a country; the evidence behind the signal existed
+    # in memory on every request and reached nobody.
+
+    #: The primary article's Turkish summary (falling back to its English one).
+    #: None rather than "" when the enrichment never produced either.
+    summary_tr: str | None = None
+    #: Cross-source verification score of the primary article's enrichment,
+    #: 0-1, and how many sources corroborated it. Shown as a band plus the
+    #: number -- a band with no number behind it is an opinion.
+    confidence_score: float | None = None
+    corroborating_source_count: int | None = None
+
+    #: PUBLICATION span of the cluster: when the first and the last member were
+    #: published. Not the event's own start and end -- nothing in this pipeline
+    #: knows when an earthquake began, only when someone wrote about it.
+    first_reported_at: datetime | None = None
+    last_reported_at: datetime | None = None
+    #: "Still being written about": first telling older than 24h, newest one
+    #: inside it. Deliberately a statement about coverage, not about the event
+    #: -- there is no lifecycle (active/contained/resolved) anywhere in this
+    #: data, and a badge implying one would be invented.
+    is_updated: bool = False
+
+    #: Airports named across the cluster's articles. Capped -- see AIRPORT_CAP.
+    airports: list[AirportRefOut] = []
+    #: "direct" | "indirect" -- see aviation_link_for(). A link-strength hint
+    #: about how close the coverage sits to aviation, NOT an impact score.
+    aviation_link: str = "indirect"
+
+    #: The publication chronology, oldest first. Capped -- see MEMBER_CAP.
+    members: list[RiskMemberOut] = []
+    #: True when `members` is the first MEMBER_CAP of a longer list, so the UI
+    #: can say so instead of silently showing a partial chronology.
+    members_truncated: bool = False
 
 
 class SeverityCountsOut(BaseModel):
@@ -80,6 +160,32 @@ class RiskRadarOut(BaseModel):
     # without the client flattening every group to count them.
     type_counts: dict[str, int]
     family_counts: dict[str, int]
+    # When this rollup was computed. The page stamps it as "son güncelleme",
+    # which is a fact about the response and not about the newest article --
+    # those two are different numbers and the page shows both.
+    generated_at: datetime
+
+
+class RiskTrendPointOut(BaseModel):
+    #: UTC day, ISO "YYYY-MM-DD".
+    day: str
+    family: str
+    severity: str
+    #: ARTICLES published that day, not events that happened that day. See
+    #: risk_trend()'s docstring.
+    count: int
+
+
+class RiskTrendOut(BaseModel):
+    days: int
+    points: list[RiskTrendPointOut]
+    #: Shipped in the payload rather than left to the frontend to remember:
+    #: every consumer of this series has to state what it counts, and a caption
+    #: that lives only in one component is one refactor away from being lost.
+    note: str = (
+        "Günlük değerler yayın hacmini sayar: o gün yayımlanan risk haberi "
+        "sayısı. Olayların gerçekleşme zamanı bu veride yok."
+    )
 
 
 # Rows whose country never resolved still belong on the page -- the event is
@@ -89,6 +195,53 @@ class RiskRadarOut(BaseModel):
 UNKNOWN_COUNTRY = "Belirtilmemiş"
 
 FRESH_WINDOW = timedelta(hours=24)
+
+#: How many airports a card will name. Six is what a card and a drawer chip row
+#: can carry without wrapping into a wall of codes; a story naming more than
+#: six airports is a network-wide piece where the specific list stopped being
+#: the point. Deterministic (sorted by code), so the same event names the same
+#: airports on every request.
+AIRPORT_CAP = 6
+
+#: How many articles the publication chronology carries. Twelve is well past
+#: the 3-4 members a real cluster has, and it bounds the payload for the
+#: pathological case (a wire story republished by every aggregator) without
+#: hiding a normal cluster's tail. `members_truncated` says when it bit.
+MEMBER_CAP = 12
+
+#: Risk types whose subject IS an aviation operation -- the event is something
+#: happening to flights, an airport or an airspace, not something happening in
+#: a place that flights also serve.
+#:
+#: Every slug here belongs to the v2 taxonomy (app/taxonomy.py
+#: RISK_CATEGORIES), which /risks does not serve: production still classifies
+#: with the v1 nine-type natural/conflict set, and none of those nine is an
+#: aviation operation. So on today's feed this set never matches and
+#: `aviation_link` is decided entirely by whether an airport was named -- which
+#: is the honest answer for a wildfire or a coup. It is written out anyway
+#: because the alternative is a rule that silently means "airport named" while
+#: claiming to mean "aviation-operational", and because /risks moving to v2 is
+#: a change of one query, not of this rule.
+AVIATION_OPERATIONAL_TYPES = frozenset(
+    {"accident_incident", "disruption", "airport_disruption", "atc_disruption", "restriction"}
+)
+
+
+def aviation_link_for(risk_type: str, risk_family: str, airport_count: int) -> str:
+    """"direct" or "indirect" -- how close this signal sits to aviation.
+
+    A LINK STRENGTH, not an impact score. It says why this event is on an
+    aviation desk's radar at all: either the event itself is an aviation
+    operation, or the coverage names an airport. It does not say the airport is
+    affected, how badly, or whether any flight moved -- none of which this
+    pipeline can know (there is no schedule, OTP or route feed behind it).
+
+    Two inputs rather than one so the rule keeps meaning what it says once
+    /risks reads the v2 taxonomy; see AVIATION_OPERATIONAL_TYPES.
+    """
+    if risk_type in AVIATION_OPERATIONAL_TYPES or risk_family == "operational":
+        return "direct"
+    return "direct" if airport_count > 0 else "indirect"
 
 
 @router.get("", response_model=RiskRadarOut)
@@ -172,14 +325,6 @@ async def aggregate_risks(db: AsyncSession, days: int = 14) -> RiskRadarOut:
         primary = by_id[pick_primary(group).article_id]
         primary_enrichment = primary.enrichment
 
-        if len(members) > 1:
-            logger.info(
-                "risk_cluster_membership_debug",
-                size=len(members),
-                titles=[m.title[:60] for m in members],
-                ids=[str(m.id) for m in members],
-            )
-
         # Severity: the most severe member wins. A vaguer report that never
         # mentions the closure's scale should not water down one that does --
         # under-stating a live hazard is the wrong failure mode here.
@@ -220,6 +365,50 @@ async def aggregate_risks(db: AsyncSession, days: int = 14) -> RiskRadarOut:
         if family is None:
             continue
 
+        # The publication chronology. `by_published` is already the cluster in
+        # publication order, which is the only timeline this data has: these are
+        # the moments outlets WROTE about the event, never the moments the event
+        # itself did anything. The drawer that renders them says so out loud.
+        member_rows = [
+            RiskMemberOut(
+                title=m.title,
+                url=m.url,
+                source_name=m.source.name if m.source else "",
+                source_tier=tier_for_source(m.source),
+                published_at=m.published_at,
+            )
+            for m in by_published
+        ]
+        published_times = [m.published_at for m in by_published if m.published_at]
+        first_reported = published_times[0] if published_times else None
+        last_reported = published_times[-1] if published_times else None
+        # "Still being written about": the story is older than a day and
+        # somebody added to it today. Two members are not required -- a single
+        # article cannot satisfy both halves, so this is false for the common
+        # one-article cluster by arithmetic rather than by a special case.
+        is_updated = bool(
+            first_reported
+            and last_reported
+            and (now - first_reported) > FRESH_WINDOW
+            and (now - last_reported) <= FRESH_WINDOW
+        )
+
+        # Airports NAMED across the cluster -- see AirportRefOut on why the
+        # label is "anılan" and never "etkilenen". Distinct by code and sorted
+        # by it, so the same event lists the same airports in the same order on
+        # every request rather than in whatever order the join came back.
+        airports_by_code: dict[str, str] = {}
+        for m in by_published:
+            for link in m.entity_links:
+                entity = link.entity
+                if entity is None or entity.entity_type != "airport" or not entity.code:
+                    continue
+                airports_by_code.setdefault(entity.code.upper(), entity.name)
+        airports = [
+            AirportRefOut(code=code, name=name)
+            for code, name in sorted(airports_by_code.items())[:AIRPORT_CAP]
+        ]
+
         published = primary.published_at
         item = RiskItemOut(
             id=str(primary.id),
@@ -233,10 +422,31 @@ async def aggregate_risks(db: AsyncSession, days: int = 14) -> RiskRadarOut:
             severity=severity,
             country=risk_country,
             city=risk_city,
-            region=(country_bearer.enrichment.region if country_bearer else None)
-            or COUNTRY_TO_REGION.get(country.lower()),
+            # The RESOLVED COUNTRY's region first, the article's own detected
+            # region only as a fallback. The other way round put "Ülke: United
+            # States" next to "Bölge: Orta Doğu" in the detail panel, because
+            # ArticleEnrichment.region is derived from every country the
+            # article mentions -- a Pentagon story about Middle East operations
+            # is filed under middle-east while its risk_country is the US.
+            # Both facts are true about the ARTICLE; only one of them is true
+            # about the PLACE this signal is pinned to, and this field is the
+            # place.
+            region=COUNTRY_TO_REGION.get(country.lower())
+            or (country_bearer.enrichment.region if country_bearer else None),
             is_fresh=bool(published and (now - published) <= FRESH_WINDOW),
             source_count=len(members),
+            # The primary's own summary: it is the telling that was picked as
+            # most reliable, so it is the one whose words stand for the event.
+            summary_tr=(primary_enrichment.summary_tr or primary_enrichment.summary) or None,
+            confidence_score=primary_enrichment.confidence_score,
+            corroborating_source_count=primary_enrichment.corroborating_source_count,
+            first_reported_at=first_reported,
+            last_reported_at=last_reported,
+            is_updated=is_updated,
+            airports=airports,
+            aviation_link=aviation_link_for(risk_type, family, len(airports_by_code)),
+            members=member_rows[:MEMBER_CAP],
+            members_truncated=len(member_rows) > MEMBER_CAP,
         )
         grouped.setdefault(country, []).append(item)
         type_counts[risk_type] = type_counts.get(risk_type, 0) + 1
@@ -285,4 +495,100 @@ async def aggregate_risks(db: AsyncSession, days: int = 14) -> RiskRadarOut:
         countries=countries,
         type_counts=type_counts,
         family_counts=family_counts,
+        # `now`, captured at the top of this function -- the moment the window
+        # was cut, not the moment the response is serialized. The page stamps
+        # this as its freshness, and it must mean "this is the state of the
+        # radar as of", not "a clock ran while I rendered".
+        generated_at=now,
     )
+
+
+@router.get("/trend", response_model=RiskTrendOut)
+async def risk_trend(
+    days: int = Query(30, ge=7, le=90),
+    response: Response = None,  # type: ignore[assignment]
+    db: AsyncSession = Depends(get_db),
+) -> RiskTrendOut:
+    """Daily risk-classified PUBLICATION counts, split by family and severity.
+
+    What this counts, said plainly: how many risk-classified articles were
+    published each day. It is not how many events happened -- this pipeline has
+    no event-occurrence time anywhere (see the module docstring's data notes),
+    only publication timestamps, and a single earthquake covered by six outlets
+    over three days is six points spread across three days here.
+
+    So the honest reading of a spike is "the feed wrote more about risk that
+    day", which is genuinely useful (it is what a desk's attention actually
+    tracked) and is emphatically not "more disasters happened". The response
+    carries that sentence in `note` so no consumer has to remember it.
+
+    Unclustered on purpose, unlike GET /risks: clustering is a whole-window
+    operation and re-running it per day would produce daily totals that do not
+    sum to the window's own total. A shape over time wants a consistent unit,
+    and the article is the only unit that is consistent day by day.
+    """
+    public_cache(response, AGGREGATES)
+
+    # Whole UTC days, back-counted from today -- so "30 gün" is 30 day buckets
+    # including today, not a 30x24h window that cuts today's bucket in half.
+    since = datetime.combine(
+        datetime.now(timezone.utc).date() - timedelta(days=days - 1),
+        time.min,
+        tzinfo=timezone.utc,
+    )
+    # coalesce(published_at, fetched_at) is what ix_articles_day_expr indexes
+    # (partial, is_duplicate = false), so the range predicate below can use it.
+    # The published_at IS NOT NULL filter keeps this counting exactly the
+    # population GET /risks draws from -- and under that filter the coalesce is
+    # published_at, so bucketing on it changes no number while keeping the
+    # index applicable.
+    day_expr = func.coalesce(Article.published_at, Article.fetched_at)
+    # timezone('UTC', ...) first: date_trunc on a bare timestamptz truncates in
+    # the SESSION timezone, which shifts every late-evening UTC article into the
+    # wrong day on a non-UTC deployment. Same guard as the archive's
+    # count_by_day (app/repositories/article_repository.py).
+    day_col = func.date_trunc("day", func.timezone("UTC", day_expr))
+
+    # Grouped by risk_type, not by risk_family, and folded to the family here:
+    # risk_family is a denormalisation of risk_type and a row written before it
+    # existed (or by the CLI backfill) can carry a type with a null family.
+    # Grouping on the nullable column would put those rows in a "null" bucket
+    # the chart has no series for; folding from the type means the trend's
+    # totals always equal the feed's.
+    result = await db.execute(
+        select(
+            day_col.label("day"),
+            ArticleEnrichment.risk_type,
+            ArticleEnrichment.risk_severity,
+            func.count().label("count"),
+        )
+        .join(ArticleEnrichment, ArticleEnrichment.article_id == Article.id)
+        .where(
+            Article.is_duplicate.is_(False),
+            ArticleEnrichment.risk_type.is_not(None),
+            Article.published_at.is_not(None),
+            day_expr >= since,
+        )
+        .group_by(day_col, ArticleEnrichment.risk_type, ArticleEnrichment.risk_severity)
+        .order_by(day_col)
+    )
+
+    folded: dict[tuple[str, str, str], int] = {}
+    for day, risk_type, severity, count in result.all():
+        family = RISK_TYPE_FAMILY.get(risk_type)
+        if family is None:
+            # An off-taxonomy slug that predates is_valid_risk_type's gate. It
+            # has no family, no label and no chip; counting it under a real
+            # family would be worse than leaving it out of the shape.
+            continue
+        key = (day.date().isoformat(), family, severity or "low")
+        folded[key] = folded.get(key, 0) + count
+
+    points = [
+        RiskTrendPointOut(day=day, family=family, severity=severity, count=count)
+        for (day, family, severity), count in sorted(folded.items())
+    ]
+    # Days with nothing classified are simply absent: a zero-filled series is
+    # the chart's job (it knows its own axis), and inventing rows here would
+    # make an empty window look like 30 measured zeroes.
+    return RiskTrendOut(days=days, points=points)

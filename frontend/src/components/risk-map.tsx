@@ -1,39 +1,25 @@
 "use client";
 
-import * as echarts from "echarts";
 import ReactECharts from "echarts-for-react";
 import { useEffect, useMemo, useState } from "react";
 
-import { useChartTheme } from "@/lib/chart-theme";
-import type { RiskCountry } from "@/lib/types";
-
-// Same fetched-asset loader hub-map.tsx and region-map.tsx use: the world
-// outline is 455KB of coordinates and must never enter the JS graph as an
-// import. Deliberately NOT extracted into a shared lib module here -- that
-// extraction is already in flight on another branch, and duplicating the
-// eight lines keeps this branch trivially mergeable with it.
-let mapPromise: Promise<void> | null = null;
-
-function ensureWorldMap(): Promise<void> {
-  if (!mapPromise) {
-    mapPromise = fetch("/geo/world.json")
-      .then((res) => res.json())
-      .then((geoJson) => {
-        echarts.registerMap("world", geoJson);
-      })
-      .catch(() => {
-        mapPromise = null;
-      });
-  }
-  return mapPromise;
-}
+import { RiskMapPopover, type MapAnchor } from "@/components/risk/risk-map-popover";
+import { useChartTheme, withAlpha } from "@/lib/chart-theme";
+import { ensureWorldMap } from "@/lib/echarts-world";
+import { GEO_FEATURE_BY_COUNTRY } from "@/lib/geo/risk-country-shapes";
+import type { RiskCountry, RiskItem } from "@/lib/types";
 
 /** Country centroids for the countries this classifier can actually name --
  * every key of backend COUNTRY_TO_REGION (50 entries), plus the handful of
  * others the LLM path can return. Approximate population-weighted centres, not
  * geometric ones: a marker on Turkey should sit near Ankara, not in the middle
  * of the Anatolian plateau. Used only when a city is unknown; a known city
- * beats a centroid every time (see CITY_COORDS). */
+ * beats a centroid every time (see CITY_COORDS).
+ *
+ * Centroids are ALL this page has. There are no event coordinates anywhere in
+ * the pipeline -- the classifier resolves a place NAME, never a location -- so
+ * a marker means "somewhere in this country/city", and the footnote under the
+ * map says exactly that rather than letting the pin imply precision. */
 const COUNTRY_COORDS: Record<string, [number, number]> = {
   turkey: [35.24, 39.06], "united kingdom": [-1.55, 52.36], france: [2.35, 46.6],
   germany: [10.45, 51.17], spain: [-3.7, 40.2], italy: [12.57, 42.5],
@@ -148,24 +134,47 @@ const SEVERITY_WORD: Record<string, string> = {
   low: "Düşük",
 };
 
+/** Four steps, not a continuous ramp.
+ *
+ * A continuous fill invites a reader to compare two countries that differ by
+ * one low-severity article, which this data cannot support -- the underlying
+ * number is a small integer sum of 3/2/1 weights over a news feed. Four buckets
+ * say "more than / less than" and refuse to say more.
+ *
+ * The alphas top out well below opaque on purpose. A choropleth rewards
+ * AREA, so Russia and Canada dominate the frame whatever their score is, and a
+ * saturated top step turned the whole map into an alarm -- against this page's
+ * own rule that the only loud things on screen are the few markers and cards
+ * that earn it. Four steps that stay legible against both base fills, and the
+ * markers still read on top of the darkest one. */
+const FILL_STEPS = [0.08, 0.16, 0.26, 0.38];
+
+interface MarkerBucket {
+  lon: number;
+  lat: number;
+  family: string;
+  country: string;
+  city: string | null;
+  typeLabel: string;
+  severity: string;
+  items: RiskItem[];
+}
+
 interface RiskPoint {
   name: string;
   value: [number, number, number];
   symbolSize: number;
   itemStyle: { color: string; opacity: number; borderColor: string; borderWidth: number };
-  meta: {
-    country: string;
-    city: string | null;
-    typeLabel: string;
-    severity: string;
-    count: number;
-  };
+  meta: { key: string; country: string; city: string | null; typeLabel: string; severity: string; count: number };
 }
 
 interface RiskMapProps {
   countries: RiskCountry[];
   selectedCountry: string | null;
   onSelectCountry: (country: string | null) => void;
+  /** Opening one signal from a marker's popover. The map never renders the
+   * detail itself -- it hands the item back and the page opens its drawer. */
+  onOpenItem: (item: RiskItem) => void;
 }
 
 /**
@@ -175,13 +184,25 @@ interface RiskMapProps {
  * contract is that emphasis comes from ranking and from a few lit edges, never
  * from motion.
  *
- * Family is encoded by SHAPE (triangle = natural hazard, diamond = conflict)
- * and severity by colour, so the two dimensions stay separable and the family
- * reading survives without colour vision -- the same redundancy the list's
- * icon+word badges use.
+ * Three encodings, each independent and each spelled out in the legend:
+ * family is SHAPE (triangle = natural hazard, diamond = conflict), severity is
+ * COLOUR, and cluster size is AREA. The country polygon underneath carries the
+ * country's weighted score as fill intensity, which is the same number "Sıcak
+ * Noktalar" ranks by -- so the map and the ranking cannot disagree about which
+ * country is worst.
+ *
+ * Clicking is two different questions: a polygon means "show me this country"
+ * (it filters the page), a marker means "what are these" (it opens a popover
+ * listing the events stacked at that point, each of which opens the drawer).
  */
-export function RiskMap({ countries, selectedCountry, onSelectCountry }: RiskMapProps) {
+export function RiskMap({
+  countries,
+  selectedCountry,
+  onSelectCountry,
+  onOpenItem,
+}: RiskMapProps) {
   const [mapReady, setMapReady] = useState(false);
+  const [popover, setPopover] = useState<{ anchor: MapAnchor; bucketKey: string } | null>(null);
   const theme = useChartTheme();
 
   useEffect(() => {
@@ -194,7 +215,7 @@ export function RiskMap({ countries, selectedCountry, onSelectCountry }: RiskMap
     };
   }, []);
 
-  const { option, plotted, unplaced } = useMemo(() => {
+  const { option, plotted, unplaced, buckets } = useMemo(() => {
     const severityColor: Record<string, string> = {
       high: theme.critical,
       // No --good anywhere on this page: a "low severity" war is still a war.
@@ -204,10 +225,7 @@ export function RiskMap({ countries, selectedCountry, onSelectCountry }: RiskMap
 
     // One marker per (place, type, severity) so a country with a wildfire and
     // an earthquake shows both, rather than one blended dot.
-    const buckets = new Map<
-      string,
-      { lon: number; lat: number; count: number; meta: RiskPoint["meta"]; family: string }
-    >();
+    const bucketMap = new Map<string, MarkerBucket>();
     let unplacedCount = 0;
 
     for (const group of countries) {
@@ -220,44 +238,47 @@ export function RiskMap({ countries, selectedCountry, onSelectCountry }: RiskMap
           continue;
         }
         const key = `${coords[0]},${coords[1]},${item.risk_type},${item.severity}`;
-        const existing = buckets.get(key);
+        const existing = bucketMap.get(key);
         if (existing) {
-          existing.count += 1;
-          existing.meta.count = existing.count;
+          existing.items.push(item);
           continue;
         }
-        buckets.set(key, {
+        bucketMap.set(key, {
           lon: coords[0],
           lat: coords[1],
-          count: 1,
           family: item.risk_family,
-          meta: {
-            country: group.country,
-            city: item.city,
-            typeLabel: item.risk_type_label_tr,
-            severity: item.severity,
-            count: 1,
-          },
+          country: group.country,
+          city: item.city,
+          typeLabel: item.risk_type_label_tr,
+          severity: item.severity,
+          items: [item],
         });
       }
     }
 
-    const all = [...buckets.values()];
-    const maxCount = Math.max(1, ...all.map((b) => b.count));
+    const all = [...bucketMap.entries()];
+    const maxCount = Math.max(1, ...all.map(([, b]) => b.items.length));
 
-    const toPoint = (b: (typeof all)[number]): RiskPoint => ({
-      name: b.meta.country,
-      value: [b.lon, b.lat, b.count],
-      symbolSize: symbolSize(b.count, maxCount),
+    const toPoint = ([key, b]: [string, MarkerBucket]): RiskPoint => ({
+      name: b.country,
+      value: [b.lon, b.lat, b.items.length],
+      symbolSize: symbolSize(b.items.length, maxCount),
       itemStyle: {
-        color: severityColor[b.meta.severity] ?? theme.neutral,
+        color: severityColor[b.severity] ?? theme.neutral,
         // Dimmed, never hidden, when another country is selected: the rest of
         // the world does not stop having events because one row is focused.
-        opacity: selectedCountry && selectedCountry !== b.meta.country ? 0.28 : 0.85,
+        opacity: selectedCountry && selectedCountry !== b.country ? 0.28 : 0.85,
         borderColor: theme.surface,
         borderWidth: 1.5,
       },
-      meta: b.meta,
+      meta: {
+        key,
+        country: b.country,
+        city: b.city,
+        typeLabel: b.typeLabel,
+        severity: b.severity,
+        count: b.items.length,
+      },
     });
 
     const tooltipFor = (p: { data?: { meta?: RiskPoint["meta"] } }) => {
@@ -265,14 +286,14 @@ export function RiskMap({ countries, selectedCountry, onSelectCountry }: RiskMap
       if (!m) return "";
       const place = m.city ? `${m.country} · ${m.city}` : m.country;
       const severity = SEVERITY_WORD[m.severity] ?? m.severity;
-      return `<b>${place}</b><br/>${m.typeLabel} · ${severity} · ${m.count} haber`;
+      return `<b>${place}</b><br/>${m.typeLabel} · ${severity} · ${m.count} haber<br/><span style="opacity:.7">Listeyi açmak için tıklayın</span>`;
     };
 
     const series = (family: string, symbol: string) => ({
       type: "scatter" as const,
       coordinateSystem: "geo" as const,
       symbol,
-      data: all.filter((b) => b.family === family).map(toPoint),
+      data: all.filter(([, b]) => b.family === family).map(toPoint),
       tooltip: { formatter: tooltipFor },
       // Entrance only, and no per-point delay cascade -- the markers appear,
       // then the map is still.
@@ -280,8 +301,34 @@ export function RiskMap({ countries, selectedCountry, onSelectCountry }: RiskMap
       zlevel: 2,
     });
 
+    // Country polygons, filled by the SAME weighted score the ranking sorts by
+    // (severity 3/2/1, summed) -- recomputed for the filtered view upstream, so
+    // narrowing the page repaints the map rather than leaving it showing the
+    // unfiltered world.
+    const maxScore = Math.max(1, ...countries.map((c) => c.score));
+    const regions = countries
+      .flatMap((group) => {
+        const feature = GEO_FEATURE_BY_COUNTRY[group.country.toLowerCase()];
+        if (!feature) return [];
+        const step = Math.min(
+          FILL_STEPS.length - 1,
+          Math.max(0, Math.ceil((group.score / maxScore) * FILL_STEPS.length) - 1),
+        );
+        return [
+          {
+            name: feature,
+            itemStyle: {
+              areaColor: withAlpha(theme.critical, FILL_STEPS[step]),
+              borderColor: selectedCountry === group.country ? theme.primary : theme.surface,
+              borderWidth: selectedCountry === group.country ? 1.6 : 0.6,
+            },
+          },
+        ];
+      });
+
     return {
-      plotted: all.reduce((n, b) => n + b.count, 0),
+      buckets: bucketMap,
+      plotted: all.reduce((n, [, b]) => n + b.items.length, 0),
       unplaced: unplacedCount,
       option: {
         backgroundColor: "transparent",
@@ -311,15 +358,20 @@ export function RiskMap({ countries, selectedCountry, onSelectCountry }: RiskMap
             itemStyle: { areaColor: theme.isDark ? "#33332f" : "#dcdacf" },
           },
           select: { disabled: true },
+          regions,
         },
         series: [series("natural", "triangle"), series("conflict", "diamond")],
       },
     };
   }, [countries, selectedCountry, theme]);
 
+  // A bucket that no longer exists (the filters changed under an open popover)
+  // closes it rather than rendering a stale list.
+  const openBucket = popover ? buckets.get(popover.bucketKey) : undefined;
+
   if (!mapReady) {
     return (
-      <div className="flex h-[420px] items-center justify-center rounded-xl border border-border bg-card">
+      <div className="flex h-[280px] items-center justify-center rounded-xl border border-border bg-card sm:h-[420px]">
         <span className="text-xs text-muted-foreground">Harita yükleniyor…</span>
       </div>
     );
@@ -327,21 +379,68 @@ export function RiskMap({ countries, selectedCountry, onSelectCountry }: RiskMap
 
   return (
     <div className="flex flex-col gap-1.5 rounded-xl border border-border bg-card p-2">
-      <ReactECharts
-        option={option}
-        style={{ height: 420, width: "100%" }}
-        opts={{ renderer: "canvas" }}
-        notMerge
-        onEvents={{
-          click: (params: { data?: { meta?: RiskPoint["meta"] } }) => {
-            const country = params.data?.meta?.country;
-            if (country) onSelectCountry(country === selectedCountry ? null : country);
-          },
-        }}
-      />
+      <div className="h-[280px] w-full sm:h-[420px]">
+        <ReactECharts
+          option={option}
+          style={{ height: "100%", width: "100%" }}
+          opts={{ renderer: "canvas" }}
+          notMerge
+          onEvents={{
+            click: (params: {
+              componentType?: string;
+              name?: string;
+              data?: { meta?: RiskPoint["meta"] };
+              event?: { event?: MouseEvent };
+            }) => {
+              const meta = params.data?.meta;
+              if (meta) {
+                // A marker: "what are these?" -- the popover answers with the
+                // actual events, each of which opens the drawer.
+                const native = params.event?.event;
+                setPopover({
+                  bucketKey: meta.key,
+                  anchor: {
+                    x: native?.clientX ?? 0,
+                    below: (native?.clientY ?? 0) + 10,
+                    above: (native?.clientY ?? 0) - 10,
+                  },
+                });
+                return;
+              }
+              // A polygon: "show me this country" -- same idiom as
+              // region-map.tsx's region click, filtering rather than detailing.
+              if (params.componentType === "geo" && params.name) {
+                const match = countries.find(
+                  (c) => GEO_FEATURE_BY_COUNTRY[c.country.toLowerCase()] === params.name,
+                );
+                if (match) {
+                  setPopover(null);
+                  onSelectCountry(match.country === selectedCountry ? null : match.country);
+                }
+              }
+            },
+          }}
+        />
+      </div>
+
+      {popover && openBucket && (
+        <RiskMapPopover
+          anchor={popover.anchor}
+          country={openBucket.country}
+          city={openBucket.city}
+          items={openBucket.items}
+          onSelect={(item) => {
+            setPopover(null);
+            onOpenItem(item);
+          }}
+          onClose={() => setPopover(null)}
+        />
+      )}
+
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-1 text-[11px] text-muted-foreground">
-        {/* The legend spells out both encodings in words. Shape carries family
-            and colour carries severity; neither is left to be inferred. */}
+        {/* The legend spells out every encoding in words. Shape carries family,
+            colour carries severity, fill carries the country's weighted score;
+            none of the three is left to be inferred. */}
         <span className="flex items-center gap-1.5">
           <span aria-hidden className="text-foreground">▲</span> Doğal afet
         </span>
@@ -357,11 +456,28 @@ export function RiskMap({ countries, selectedCountry, onSelectCountry }: RiskMap
         <span className="flex items-center gap-1.5">
           <span aria-hidden className="size-2 rounded-full bg-muted-foreground/50" /> Düşük
         </span>
+        <span className="flex items-center gap-1.5">
+          Ülke dolgusu: az
+          {FILL_STEPS.map((step) => (
+            <span
+              key={step}
+              aria-hidden
+              className="size-2 rounded-[2px]"
+              style={{ backgroundColor: withAlpha(theme.critical, step) }}
+            />
+          ))}
+          çok
+        </span>
         <span className="ml-auto tabular-nums">
           {plotted} olay haritada
           {unplaced > 0 && ` · ${unplaced} olay konumlandırılamadı`}
         </span>
       </div>
+      {/* The one thing a map of disasters must not let a reader assume. */}
+      <p className="px-1 text-[11px] leading-relaxed text-muted-foreground">
+        Konumlar ülke/şehir merkezidir, olay noktası değildir. Ülkeye tıklayın:
+        sayfa o ülkeye daralır. İşarete tıklayın: o noktadaki olaylar listelenir.
+      </p>
     </div>
   );
 }

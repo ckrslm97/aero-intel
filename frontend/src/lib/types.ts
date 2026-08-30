@@ -433,6 +433,24 @@ export interface PromotionNewCountOut {
 
 /* --- Risk Radarı (backend/app/api/v1/risks.py) --------------------------- */
 
+/** An airport NAMED IN the coverage of a signal -- never one we claim is
+ * affected by it. There is no schedule or operations feed behind this product,
+ * so the UI label is "Anılan havalimanları" and never "etkilenen". */
+export interface RiskAirportRef {
+  code: string;
+  name: string;
+}
+
+/** One article inside a signal's cluster: a telling of the event. */
+export interface RiskMember {
+  title: string;
+  url: string;
+  source_name: string;
+  /** official | regulator | agency | trade | aggregator. */
+  source_tier: string;
+  published_at: string | null;
+}
+
 export interface RiskItem {
   id: string;
   headline: string;
@@ -453,6 +471,29 @@ export interface RiskItem {
    * case; >1 means multiple outlets reported the same event and this is
    * already the merged, reconciled view. */
   source_count: number;
+  /** The primary article's Turkish summary. Null -- never "" -- when the
+   * enrichment produced none, so the card can leave the slot out entirely
+   * instead of rendering a blank paragraph. */
+  summary_tr: string | null;
+  confidence_score: number | null;
+  corroborating_source_count: number | null;
+  /** PUBLICATION span of the cluster: first and last time somebody wrote about
+   * it. Not the event's own start and end -- nothing upstream knows when an
+   * earthquake began, only when it was reported. */
+  first_reported_at: string | null;
+  last_reported_at: string | null;
+  /** First telling older than 24h, newest one inside it: "still being written
+   * about". A statement about coverage, never a lifecycle status -- there is
+   * no active/contained/resolved anywhere in this data. */
+  is_updated: boolean;
+  airports: RiskAirportRef[];
+  /** "direct" | "indirect" -- how close the coverage sits to aviation (an
+   * aviation-operational event type, or an airport named). A link-strength
+   * hint, NOT an impact score. */
+  aviation_link: string;
+  /** The publication chronology, oldest first. Capped server-side. */
+  members: RiskMember[];
+  members_truncated: boolean;
 }
 
 export interface RiskSeverityCounts {
@@ -478,6 +519,29 @@ export interface RiskRadarOut {
   countries: RiskCountry[];
   type_counts: Record<string, number>;
   family_counts: Record<string, number>;
+  /** When the rollup was computed -- the page's freshness stamp. Distinct from
+   * the newest article's timestamp, which is a different number and is shown
+   * separately. */
+  generated_at: string;
+}
+
+/** One (day, family, severity) bucket of the publication-volume series. */
+export interface RiskTrendPoint {
+  /** UTC day, "YYYY-MM-DD". */
+  day: string;
+  family: string;
+  severity: string;
+  /** ARTICLES published that day, not events that happened that day. */
+  count: number;
+}
+
+export interface RiskTrendOut {
+  days: number;
+  points: RiskTrendPoint[];
+  /** The backend's own sentence about what the series counts. Rendered as the
+   * chart's caption rather than restated in the component, so the API and the
+   * page can never disagree about it. */
+  note: string;
 }
 
 /* --- Kokpit ------------------------------------------------------------- */
