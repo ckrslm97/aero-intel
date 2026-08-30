@@ -11,7 +11,7 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDataSource } from "@/hooks/use-data-source";
 import { apiFetch } from "@/lib/api";
-import { formatDelta } from "@/lib/format";
+import { formatRate, formatSignedPct } from "@/lib/format";
 import type { KokpitFxBoardOut, KokpitFxPairOut } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -45,7 +45,7 @@ function deltaPill(deltaPct: number | null) {
       )}
     >
       <Icon className="size-3" />
-      {formatDelta(deltaPct)}
+      {formatSignedPct(deltaPct)}
     </span>
   );
 }
@@ -67,7 +67,7 @@ function FxPairCard({ pair, index }: { pair: KokpitFxPairOut; index: number }) {
       <CardContent className="flex flex-col gap-2">
         <CountUp
           value={pair.value}
-          format={(v) => v.toFixed(4)}
+          format={(v) => formatRate(v, 4)}
           className="text-2xl font-semibold tracking-tight tabular-nums dark:text-glow"
         />
         <div className="flex flex-wrap items-center gap-1.5">
@@ -140,7 +140,7 @@ export function FxBoard() {
           </CardHeader>
           <CardContent className="flex flex-col gap-1.5">
             <p className="text-2xl font-semibold tabular-nums text-muted-foreground">
-              {board.peg.value.toFixed(2)}
+              {formatRate(board.peg.value)}
             </p>
             <span className="w-fit rounded-full bg-secondary px-2 py-0.5 text-[11px] font-medium text-secondary-foreground">
               {board.peg.label}

@@ -8,6 +8,7 @@ import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDataSource } from "@/hooks/use-data-source";
 import { apiFetch } from "@/lib/api";
+import { formatRate } from "@/lib/format";
 import type { FxForecastOut } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -18,6 +19,74 @@ const chip = (active: boolean) =>
       ? "bg-primary/12 text-primary ring-1 ring-primary/40 dark:glow-soft"
       : "border border-border text-muted-foreground hover:bg-accent",
   );
+
+interface RangeGroup {
+  pair: string;
+  min: number;
+  max: number;
+  rows: FxForecastOut[];
+}
+
+/** Where each institution's dot sits inside its own group's min..max span.
+ * A single-forecast group collapses to one dot at the left end rather than
+ * dividing by zero. */
+function dotOffsetPct(value: number, min: number, max: number): number {
+  if (max === min) return 0;
+  return ((value - min) / (max - min)) * 100;
+}
+
+/** The spread of published forecasts for one pair -- NOT a consensus.
+ *
+ * There is deliberately no average, median or "piyasa beklentisi" number
+ * anywhere in this component. The module that curates these rows
+ * (backend/app/ingest/curated_seed.py) forbids it by design: institutions
+ * publishing for differently-worded horizons do not have a mean that means
+ * anything, and printing one would turn four attributable claims into one
+ * unattributable invention.
+ *
+ * The horizons are NOT normalised either, which is why this bar groups by pair
+ * alone and then says "farklı vadeler" out loud. Bucketing Garanti's "yıl
+ * sonu" together with JPMorgan's "end-2026" would be exactly the judgement the
+ * curation module refuses to make -- and with every row carrying its own
+ * wording, a strict (pair, horizon) grouping produced no group larger than one
+ * and the bar never rendered at all.
+ *
+ * So what it claims is only what is true: these are the published numbers for
+ * this pair, they span this range, they are for different horizons, and each
+ * dot is one institution's own figure with its own horizon in the hover.
+ */
+function ForecastRangeBar({ group }: { group: RangeGroup }) {
+  const spreadPct = group.min ? ((group.max - group.min) / group.min) * 100 : 0;
+  return (
+    <div className="flex flex-col gap-1 rounded-lg border border-border bg-card/60 px-3 py-2">
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-[11px] font-semibold">{group.pair}</span>
+        <span className="truncate text-[10px] text-muted-foreground">
+          {group.rows.length} kurum · farklı vadeler
+        </span>
+      </div>
+      <div className="relative h-4">
+        <span
+          aria-hidden
+          className="absolute inset-x-0 top-1/2 h-1 -translate-y-1/2 rounded-full bg-gradient-to-r from-primary/25 via-primary/40 to-primary/25"
+        />
+        {group.rows.map((row) => (
+          <span
+            key={`${row.institution}-${row.horizon_label}`}
+            title={`${row.institution} · ${row.horizon_label}: ${formatRate(row.value, 4)}`}
+            style={{ left: `${dotOffsetPct(row.value, group.min, group.max)}%` }}
+            className="absolute top-1/2 size-2 -translate-x-1/2 -translate-y-1/2 cursor-help rounded-full bg-primary ring-2 ring-card"
+          />
+        ))}
+      </div>
+      <div className="flex items-baseline justify-between text-[10px] tabular-nums text-muted-foreground">
+        <span>{formatRate(group.min, 4)}</span>
+        <span className="text-[9px]">aralık %{spreadPct.toFixed(0)}</span>
+        <span>{formatRate(group.max, 4)}</span>
+      </div>
+    </div>
+  );
+}
 
 /** Curated bank FX forecasts -- see backend/app/ingest/curated_seed.py.
  * Every row is one institution's own, individually-attributed number: never
@@ -53,6 +122,31 @@ export function FxForecastTable() {
       ),
     [rows, pair, horizon],
   );
+
+  // Grouped by pair only -- see ForecastRangeBar for why the horizons are not
+  // bucketed. A pair with a single published forecast gets no bar: a "range"
+  // of one is just the number, and it is already in the table below.
+  const ranges = useMemo<RangeGroup[]>(() => {
+    const groups = new Map<string, RangeGroup>();
+    for (const row of filtered) {
+      const existing = groups.get(row.currency_pair);
+      if (existing) {
+        existing.rows.push(row);
+        existing.min = Math.min(existing.min, row.value);
+        existing.max = Math.max(existing.max, row.value);
+      } else {
+        groups.set(row.currency_pair, {
+          pair: row.currency_pair,
+          min: row.value,
+          max: row.value,
+          rows: [row],
+        });
+      }
+    }
+    return [...groups.values()]
+      .filter((group) => group.rows.length > 1)
+      .sort((a, b) => a.pair.localeCompare(b.pair));
+  }, [filtered]);
 
   if (!loaded) {
     return <Skeleton className="h-64 w-full rounded-xl" />;
@@ -101,6 +195,14 @@ export function FxForecastTable() {
         ))}
       </div>
 
+      {ranges.length > 0 && (
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          {ranges.map((group) => (
+            <ForecastRangeBar key={group.pair} group={group} />
+          ))}
+        </div>
+      )}
+
       <Card className="overflow-x-auto">
         <table className="w-full min-w-[36rem] text-sm">
           <thead>
@@ -122,7 +224,7 @@ export function FxForecastTable() {
                     onto a shared "3 ay" column. */}
                 <td className="px-4 py-2.5 text-muted-foreground">{row.horizon_label}</td>
                 <td className="px-4 py-2.5 text-right font-semibold tabular-nums">
-                  {row.value.toFixed(4)}
+                  {formatRate(row.value, 4)}
                 </td>
                 <td className="px-4 py-2.5 text-muted-foreground">
                   {new Date(row.publication_date).toLocaleDateString("tr-TR", {

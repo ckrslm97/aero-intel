@@ -544,6 +544,19 @@ async def count_new_promotions(
     timeline's eight-week window.
     """
     public_cache(response, FRESH)
+    return await new_promotion_counts(db)
+
+
+async def new_promotion_counts(db: AsyncSession) -> dict:
+    """The count itself, split out from the endpoint so a second caller reuses
+    it instead of restating the window and the publishability clause.
+
+    Kokpit's "Rakip Aktivitesi" signal tile is that caller (see
+    app/services/cockpit_signals_service.py): it prints the same number the
+    /kampanyalar banner does, and a hand-rolled second query would eventually
+    drift from `_publishable_promotions()` and show a count the campaign page
+    could not reproduce.
+    """
     cutoff = datetime.now(timezone.utc) - timedelta(hours=NEW_WINDOW_HOURS)
     rows = (
         await db.execute(

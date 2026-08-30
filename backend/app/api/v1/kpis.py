@@ -15,7 +15,7 @@ from app.core.logging import get_logger
 from app.ingest.markets import fetch_history
 from app.repositories.kpi_repository import KpiRepository
 from app.schemas.kpi import KpiCorroborationOut, KpiDetailOut, KpiHistoryPointOut, KpiOut
-from app.services.kpi_service import LY_SUFFIX
+from app.services.kpi_service import JET_FUEL_CRACK_SPREAD_USD, LY_SUFFIX
 
 logger = get_logger(__name__)
 
@@ -216,19 +216,27 @@ async def _load_history(
     settings = get_settings()
 
     # fuel_price is derived from Brent crude (see kpi_service.py) -- reuse
-    # oil's real historical closes and apply the same multiplier, rather than
+    # oil's real historical closes and apply the same derivation, rather than
     # waiting months for our own scheduler to accumulate a derived history.
+    #
+    # That derivation is ADDITIVE: Brent plus IATA's published crack spread.
+    # This branch was still applying an older 1.18x rule of thumb long after
+    # kpi_service.py moved the live value onto JET_FUEL_CRACK_SPREAD_USD, so
+    # the jet-fuel detail page drew a history that ended ~40% below the current
+    # value printed above it -- a visible cliff between the last historical
+    # point and today's reading. The constant is imported from the service that
+    # writes the value so the two can no longer drift apart.
     yahoo_symbol = YAHOO_HISTORY_SYMBOLS.get(metric_key)
-    multiplier = 1.0
+    crack_spread = 0.0
     if metric_key == "fuel_price":
         yahoo_symbol = YAHOO_HISTORY_SYMBOLS["oil_price"]
-        multiplier = 1.18
+        crack_spread = JET_FUEL_CRACK_SPREAD_USD
 
     if yahoo_symbol:
         points = await fetch_history(settings.yahoo_finance_base_url, yahoo_symbol, period)
         if points:
             return (
-                [KpiHistoryPointOut(as_of=ts, value=round(v * multiplier, 2)) for ts, v in points],
+                [KpiHistoryPointOut(as_of=ts, value=round(v + crack_spread, 2)) for ts, v in points],
                 True,
             )
         # Yahoo Finance unreachable -- fall through to our own accumulated

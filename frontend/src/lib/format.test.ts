@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { formatCompactNumber, formatDelta } from "./format";
+import { formatCompactNumber, formatDelta, formatRate, formatSignedPct } from "./format";
 
 describe("formatDelta", () => {
   it("signs a positive change with a leading +", () => {
@@ -32,5 +32,33 @@ describe("formatCompactNumber", () => {
 
   it("leaves small numbers unabbreviated", () => {
     expect(formatCompactNumber(42)).toBe("42");
+  });
+});
+
+describe("formatRate", () => {
+  it("uses Turkish separators at two decimals", () => {
+    expect(formatRate(41.7231)).toBe("41,72");
+    // Thousands separator, for a rate like USD/JPY or a $/bbl price.
+    expect(formatRate(1234.5)).toBe("1.234,50");
+  });
+
+  it("pads to two decimals rather than dropping a trailing zero", () => {
+    expect(formatRate(3.75)).toBe("3,75");
+    expect(formatRate(52)).toBe("52,00");
+  });
+});
+
+describe("formatSignedPct", () => {
+  it("puts the percent sign before the number, Turkish-style", () => {
+    expect(formatSignedPct(2.36)).toBe("+%2,4");
+    expect(formatSignedPct(-2.36)).toBe("-%2,4");
+  });
+
+  it("leaves a zero change unsigned", () => {
+    expect(formatSignedPct(0)).toBe("%0,0");
+  });
+
+  it("honours a requested precision", () => {
+    expect(formatSignedPct(23.4, 0)).toBe("+%23");
   });
 });

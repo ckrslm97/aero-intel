@@ -9,7 +9,7 @@ import { formatCompactNumber } from "@/lib/format";
  * The one place chart colors live.
  *
  * Before this file, four chart components (insights-client, kpi-detail-chart,
- * revenue-overview-chart, charts/sparkline) each carried their own
+ * kokpit/annual-trend-chart, charts/sparkline) each carried their own
  * `isDark ? "#.." : "#.."` ternaries, none of which referenced the
  * --chart-1..5 tokens that globals.css already defines.
  *

@@ -29,6 +29,10 @@ export interface ArticleEnrichmentOut {
   summary_tr: string | null;
   translated_at: string | null;
   is_translated: boolean;
+  /** low | medium | high, or null for a story the classifier read as carrying
+   * no risk. Null on the great majority of rows: a badge a row may earn, never
+   * a field a row is expected to have. */
+  risk_severity: string | null;
 }
 
 /** A named entity the story mentions. `code` is IATA where there is one. */
@@ -546,6 +550,57 @@ export interface MarketPulseOut {
   summary_tr: string;
   citations: MarketPulseCitationOut[];
   generated_at: string;
+}
+
+/** One "Sinyal Panosu" tile. Deliberately NOT a score -- see
+ * backend/app/services/cockpit_signals_service.py for why four stated drivers
+ * beat one blended number, and for the threshold tables behind `level`. */
+export interface CockpitSignal {
+  key: "fx" | "fuel" | "risk" | "competitor";
+  label_tr: string;
+  /** `unknown` is not a band: it means the driver could not be read at all,
+   * and must never render as a green "all clear". */
+  level: "good" | "warning" | "critical" | "unknown";
+  level_label_tr: string;
+  /** Already formatted server-side, so the tile's headline number and the
+   * sentence beneath it can never round differently. */
+  value_label: string;
+  reason_tr: string;
+  method_tr: string;
+  source: string;
+  source_url: string | null;
+  href: string | null;
+  as_of: string | null;
+}
+
+export interface CockpitSignalsOut {
+  signals: CockpitSignal[];
+  generated_at: string;
+}
+
+/** One year of an IATA industry series. `kind` is why the chart draws the tail
+ * dashed: 2026 is a forecast and 2025 an estimate in IATA's June 2026 report. */
+export interface AnnualPoint {
+  year: number;
+  value: number;
+  kind: "actual" | "estimate" | "forecast";
+}
+
+export interface AnnualSeries {
+  metric_key: string;
+  label_tr: string;
+  unit: string;
+  up_is_good: boolean;
+  points: AnnualPoint[];
+}
+
+export interface AnnualSeriesBoardOut {
+  series: AnnualSeries[];
+  source: string;
+  source_url: string;
+  /** "sektör geneli · yıllık · ..." -- the caveat every surface showing these
+   * numbers must print, so none of them can read as company figures. */
+  scope_tr: string;
 }
 
 /* --- Hub network signals -------------------------------------------------- */

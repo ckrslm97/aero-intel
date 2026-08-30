@@ -1,236 +1,191 @@
-import { KpiCard } from "@/components/kpi-card";
-import { FxBoard } from "@/components/kokpit/fx-board";
-import { FxForecastTable } from "@/components/kokpit/fx-forecast-table";
-import { IataIndicatorTable } from "@/components/kokpit/iata-indicator-table";
-import { MarketPulseCard } from "@/components/kokpit/market-pulse-card";
-import { MarketTicker } from "@/components/market-ticker";
-import { MotionItem, MotionList, MotionRail } from "@/components/motion/motion-list";
+import { AlertCenter } from "@/components/kokpit/alert-center";
 // Lazily loaded, so echarts stays out of the landing page's initial bundle --
 // see the note in that file for why the boundary is a module of its own.
-import { RevenueOverviewChart } from "@/components/revenue-overview-chart-lazy";
+import { AnnualTrendChart } from "@/components/kokpit/annual-trend-chart-lazy";
+import { AviationFeed } from "@/components/kokpit/aviation-feed";
+import { CockpitHeader } from "@/components/kokpit/cockpit-header";
+import { CompetitivePulse } from "@/components/kokpit/competitive-pulse";
+import { FuelEnergy } from "@/components/kokpit/fuel-energy";
+import { FxBoard } from "@/components/kokpit/fx-board";
+import { FxForecastTable } from "@/components/kokpit/fx-forecast-table";
+import { InsightDigestCard } from "@/components/kokpit/insight-digest-card";
+import { KpiStrip } from "@/components/kokpit/kpi-strip";
+import { MarketPulseCard } from "@/components/kokpit/market-pulse-card";
+import { MarketPulseStrip } from "@/components/kokpit/market-pulse-strip";
+import { SectionHeader } from "@/components/kokpit/section-header";
+import { SignalBoard } from "@/components/kokpit/signal-board";
 import { apiFetch } from "@/lib/api";
-import {
-  MARKET_KEYS,
-  REVENUE_BAR_KEYS,
-  REVENUE_MANAGEMENT_KEYS,
-} from "@/lib/kpi-groups";
-import type { KpiOut } from "@/lib/types";
+import type {
+  AnnualSeriesBoardOut,
+  CockpitSignalsOut,
+  IataIndicatorOut,
+  KokpitFxBoardOut,
+  KpiOut,
+} from "@/lib/types";
 
-function KpiGrid({ kpis }: { kpis: KpiOut[] }) {
-  return (
-    <MotionList className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
-      {kpis.map((kpi) => (
-        <MotionItem key={kpi.metric_key} variant="scalePop">
-          <KpiCard
-            metricKey={kpi.metric_key}
-            label={kpi.label}
-            value={kpi.value}
-            unit={kpi.unit || undefined}
-            deltaPct={kpi.delta_pct ?? undefined}
-            upIsGood={kpi.up_is_good}
-            trend={kpi.trend}
-            isEstimate={kpi.is_estimate}
-            lyDeltaPct={kpi.ly_delta_pct ?? undefined}
-            lyComparisonLabel={kpi.comparison_label}
-          />
-        </MotionItem>
-      ))}
-    </MotionList>
-  );
+/** ISR: KPIs and FX move at most every 15 minutes, so a 60s revalidation
+ * serves the page instantly and still stays current. */
+const LIVE = { cache: "force-cache", next: { revalidate: 60 } } as const;
+/** The IATA series and the curated indicators change when a person edits a
+ * seed file, not between requests. */
+const CURATED = { cache: "force-cache", next: { revalidate: 3600 } } as const;
+
+/** Fetch or fall back to `empty`. Kokpit is eleven sections over eight
+ * endpoints, and one of them being down must thin the page, never blank it --
+ * the same per-source degradation contract `useDataSource` gives the client
+ * components further down, applied to the server-rendered half. */
+async function load<T>(path: string, init: RequestInit & { next?: { revalidate?: number } }, empty: T): Promise<T> {
+  try {
+    return await apiFetch<T>(path, init);
+  } catch {
+    return empty;
+  }
 }
 
-export default async function DashboardPage() {
-  let kpis: KpiOut[] = [];
-  let error: string | null = null;
+/**
+ * KOKPİT -- the executive landing page.
+ *
+ * The page has to answer four questions in about five seconds: durum ne, risk
+ * var mı, ne değişiyor, neye dikkat. The order below is that answer, and the
+ * top three sections (header, market strip, signal board + alerts) are sized
+ * to sit inside a 1440x900 fold together.
+ *
+ * WHAT THIS PAGE REFUSES TO SHOW
+ * ------------------------------
+ * Several obvious executive-dashboard components are deliberately absent
+ * because the data behind them does not exist here:
+ *
+ * * a composite 0-100 "health score" -- see cockpit_signals_service.py;
+ * * a macro impact matrix, GDP/inflation/rate panels, regional IATA splits,
+ *   monthly commercial data -- none of these are ingested at all;
+ * * forecast confidence percentages -- the curated forecast rows carry no
+ *   confidence field, and inventing one would defeat the point of curating;
+ * * competitor capacity / load factor / market share -- every competitive
+ *   number on this page is a count of news and campaigns, and each panel says
+ *   so in its own caption rather than relying on one line a reader may skip;
+ * * a "data health %" figure in the header -- there is no such measurement.
+ *
+ * The commercial figures ARE real, but they are IATA's GLOBAL INDUSTRY annual
+ * series 2019-2026, not this airline's and not monthly. That caveat is printed
+ * under the section heading, next to the numbers, not tucked into a tooltip.
+ */
+export default async function KokpitPage() {
+  // Four independent server fetches. `Promise.all` because they are
+  // independent: serially, a cold render paid four round trips end to end.
+  const [kpis, board, signalsOut, annual, iata] = await Promise.all([
+    load<KpiOut[]>("/kpis", LIVE, []),
+    load<KokpitFxBoardOut | null>("/kokpit/fx", LIVE, null),
+    load<CockpitSignalsOut | null>("/kokpit/signals", LIVE, null),
+    load<AnnualSeriesBoardOut | null>("/kokpit/annual-series", CURATED, null),
+    load<IataIndicatorOut[]>("/kokpit/iata?kind=forecast", CURATED, []),
+  ]);
 
-  try {
-    // ISR: the dashboard was rendered on every request against a live,
-    // uncached backend call. KPIs move at most every 15 minutes, so a 60s
-    // revalidation serves the page instantly and still stays current.
-    kpis = await apiFetch<KpiOut[]>("/kpis", {
-      cache: "force-cache",
-      next: { revalidate: 60 },
-    });
-  } catch {
-    error = "KPI API'sine ulaşılamadı. Sunucu çalışıyor mu?";
-  }
-
-  const asOf = new Date().toLocaleString("tr-TR", {
-    timeZone: "UTC",
-    dateStyle: "medium",
-    timeStyle: "short",
-  });
-
-  const marketKpis = kpis.filter((k) => MARKET_KEYS.has(k.metric_key));
-  const revenueManagementKpis = kpis.filter((k) => REVENUE_MANAGEMENT_KEYS.has(k.metric_key));
-  const operationalKpis = kpis.filter(
-    (k) => !REVENUE_MANAGEMENT_KEYS.has(k.metric_key) && !MARKET_KEYS.has(k.metric_key),
-  );
-
-  // The two cards beside the chart deliberately are NOT the metrics the chart
-  // already plots -- printing the same three revenue lines twice, side by
-  // side, was the density problem this pass is trying to fix.
-  const chartKeys = new Set<string>(REVENUE_BAR_KEYS);
-  const chartCompanions = revenueManagementKpis.filter((k) => !chartKeys.has(k.metric_key));
-  const remainingRevenueKpis = revenueManagementKpis.filter(
-    (k) => !chartCompanions.slice(0, 2).some((c) => c.metric_key === k.metric_key),
-  );
+  const signals = signalsOut?.signals ?? [];
+  const fuelSignal = signals.find((signal) => signal.key === "fuel") ?? null;
+  const fuelKpi = kpis.find((kpi) => kpi.metric_key === "fuel_price") ?? null;
+  const annualSeries = annual?.series ?? [];
 
   return (
-    <div className="flex flex-col gap-10">
-      {/* The one structural hook this visual pass adds: a hero shell so the
-          night-horizon mesh has something to sit behind. Layout inside is
-          unchanged from the structural pass. */}
-      <div className="relative overflow-hidden rounded-2xl bg-hero-mesh p-5 sm:p-6">
-        <div className="flex flex-col gap-3">
-          <div className="flex flex-col gap-1">
-            <h1 className="text-2xl font-semibold tracking-tight">
-              <span className="gradient-text">Kokpit</span>
-            </h1>
-            <p className="text-sm leading-relaxed text-muted-foreground">
-              Kur tablosu, küratörlü tahminler, Market Pulse · {asOf} UTC itibarıyla
-            </p>
-          </div>
-          <MarketTicker items={marketKpis} />
-        </div>
+    <div className="flex flex-col gap-8">
+      <CockpitHeader board={board} />
+
+      <MarketPulseStrip board={board} kpis={kpis} iata={iata} />
+
+      {/* Durum + risk, side by side: the two things a reader looks at first,
+          and the reason the old hero block had to shrink to a single band. */}
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[3fr_2fr]">
+        <section className="flex flex-col gap-3">
+          <SectionHeader
+            title="Sinyal Panosu"
+            caption="Dört ayrı sürücü, dört açık eşik — tek bir bileşik skor değil. Her karonun ⓘ notu, seviyeyi hangi kuralın verdiğini söyler."
+            glowVar="var(--signal)"
+          />
+          <SignalBoard signals={signals} />
+        </section>
+
+        <section className="flex flex-col gap-3">
+          <SectionHeader
+            title="Alert Merkezi"
+            caption="Kampanya uyarıları ve yüksek şiddetli risk sinyalleri, öncelik sırasıyla."
+            glowVar="var(--critical)"
+          />
+          <AlertCenter />
+        </section>
       </div>
 
-      {error && (
-        <p className="rounded-lg border border-dashed border-border p-6 text-sm text-muted-foreground">
-          {error}
-        </p>
-      )}
-
-      <div className="flex flex-col gap-5">
-        <div className="flex flex-col gap-2">
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-            Döviz Kuru Kokpiti
-          </h2>
-          <MotionRail style={{ "--glow-color": "var(--primary)" } as React.CSSProperties} />
+      <section className="flex flex-col gap-3">
+        <SectionHeader
+          title="Bugünün İstihbaratı"
+          caption="İki ayrı üretim hattı: Market Pulse kokpitin küratörlü sayılarını, Günün Özeti haber arşivini özetler. İkisi de üreteni etiketler."
+          glowVar="var(--chart-4)"
+        />
+        <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+          <MarketPulseCard />
+          <InsightDigestCard />
         </div>
-        <FxBoard />
-      </div>
+      </section>
 
-      <div className="grid grid-cols-1 gap-8 lg:grid-cols-[3fr_2fr]">
-        <div className="flex flex-col gap-5">
-          <div className="flex flex-col gap-2">
-            <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-              Banka Tahminleri
-            </h2>
-            <MotionRail style={{ "--glow-color": "var(--chart-2)" } as React.CSSProperties} />
+      <section className="flex flex-col gap-4">
+        <SectionHeader
+          title="IATA Sektör Görünümü"
+          caption={
+            annual
+              ? `${annual.scope_tr} · şirket verisi değil, aylık veri değil`
+              : "IATA Küresel Görünüm · sektör geneli · yıllık"
+          }
+          glowVar="var(--chart-2)"
+          action={annual ? { href: annual.source_url, label: "IATA kaynağı" } : undefined}
+        />
+        <KpiStrip series={annualSeries} />
+        {annualSeries.length > 0 && (
+          <div
+            style={{ "--glow-color": "var(--chart-2)" } as React.CSSProperties}
+            className="rounded-xl border-gradient p-4 shadow-elev-1"
+          >
+            <AnnualTrendChart series={annualSeries} />
           </div>
+        )}
+      </section>
+
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[3fr_2fr]">
+        <section className="flex flex-col gap-3">
+          <SectionHeader
+            title="Makro & Kur"
+            caption="Beş canlı parite (~15 dakikada bir) ve küratörlü banka tahminleri. Tahminler asla ortalanmaz: her satır bir kurumun kendi rakamıdır."
+            glowVar="var(--primary)"
+          />
+          <FxBoard />
           <FxForecastTable />
-        </div>
-        <div className="flex flex-col gap-5">
-          <div className="flex flex-col gap-2">
-            <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-              IATA Göstergeleri
-            </h2>
-            <MotionRail style={{ "--glow-color": "var(--chart-3)" } as React.CSSProperties} />
-          </div>
-          <IataIndicatorTable />
-        </div>
+        </section>
+
+        <section className="flex flex-col gap-3">
+          <SectionHeader
+            title="Yakıt & Enerji"
+            caption="Brent'in gerçek kapanışları; jet yakıtı bunun üzerinden türetilen bir tahmindir."
+            glowVar="var(--chart-5)"
+          />
+          <FuelEnergy signal={fuelSignal} fuelKpi={fuelKpi} />
+        </section>
       </div>
 
-      <div className="flex flex-col gap-5">
-        <div className="flex flex-col gap-2">
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-            Market Pulse
-          </h2>
-          <MotionRail style={{ "--glow-color": "var(--signal)" } as React.CSSProperties} />
-        </div>
-        <MarketPulseCard />
-      </div>
+      <section className="flex flex-col gap-3">
+        <SectionHeader
+          title="Rekabet Nabzı"
+          caption="Buradaki her sayı bir haber/kampanya hacmidir. Rakip kapasitesi, doluluğu veya pazar payı verisi bu sistemde yoktur."
+          glowVar="var(--chart-3)"
+        />
+        <CompetitivePulse />
+      </section>
 
-      {!error && kpis.length === 0 && (
-        <p className="rounded-lg border border-dashed border-border p-6 text-sm text-muted-foreground">
-          Henüz KPI kaydı yok. İlk ölçümü almak için{" "}
-          <code className="rounded bg-muted px-1 py-0.5">make refresh-kpis</code>{" "}
-          komutunu çalıştırın.
-        </p>
-      )}
-
-      {/* Kokpit leads with FX/forecasts/Pulse (see the plan's own "KPI
-          kalabalığı yok" line for Faz 8) -- the wider revenue/operational KPI
-          set that used to be this page's whole content is still real and
-          still here, just collapsed by default so it frames the page instead
-          of crowding it. */}
-      {(revenueManagementKpis.length > 0 || operationalKpis.length > 0) && (
-        <details className="group rounded-xl border border-border">
-          <summary className="cursor-pointer list-none px-5 py-3 text-sm font-semibold text-muted-foreground marker:content-none">
-            <span className="inline-flex items-center gap-1.5">
-              Detaylı Göstergeler
-              <span className="text-xs font-normal text-muted-foreground/70 group-open:hidden">
-                (gelir yönetimi, operasyonel KPI&apos;lar — göster)
-              </span>
-            </span>
-          </summary>
-          <div className="flex flex-col gap-10 border-t border-border p-5">
-            {/* Gelir Yönetimi leads: it is the portal's focus, and the chart
-                carries the section rather than sitting under a wall of tiles. */}
-            {revenueManagementKpis.length > 0 && (
-              <div className="flex flex-col gap-5">
-                <div className="flex flex-col gap-2">
-                  <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-                    Gelir Yönetimi
-                  </h2>
-                  <MotionRail style={{ "--glow-color": "var(--signal)" } as React.CSSProperties} />
-                </div>
-
-                <MotionList className="grid grid-cols-1 gap-5 lg:grid-cols-4">
-                  <MotionItem className="lg:col-span-2">
-                    {/* No bg-card here on purpose: border-gradient paints the card
-                        fill itself (padding-box) so the gradient border stays
-                        visible -- a background-color would cover it. */}
-                    <div
-                      style={{ "--glow-color": "var(--signal)" } as React.CSSProperties}
-                      className="flex h-full flex-col gap-2 rounded-xl border-gradient p-5 shadow-elev-1"
-                    >
-                      <h3 className="text-sm font-semibold">
-                        Gelir tabanı{" "}
-                        <span className="font-normal text-muted-foreground">
-                          (2026 vs 2025, yıllık değişim)
-                        </span>
-                      </h3>
-                      <RevenueOverviewChart kpis={revenueManagementKpis} />
-                    </div>
-                  </MotionItem>
-                  {chartCompanions.slice(0, 2).map((kpi) => (
-                    <MotionItem key={kpi.metric_key} variant="scalePop">
-                      <KpiCard
-                        metricKey={kpi.metric_key}
-                        label={kpi.label}
-                        value={kpi.value}
-                        unit={kpi.unit || undefined}
-                        deltaPct={kpi.delta_pct ?? undefined}
-                        upIsGood={kpi.up_is_good}
-                        trend={kpi.trend}
-                        isEstimate={kpi.is_estimate}
-                        lyDeltaPct={kpi.ly_delta_pct ?? undefined}
-                        lyComparisonLabel={kpi.comparison_label}
-                      />
-                    </MotionItem>
-                  ))}
-                </MotionList>
-
-                {remainingRevenueKpis.length > 0 && <KpiGrid kpis={remainingRevenueKpis} />}
-              </div>
-            )}
-
-            {operationalKpis.length > 0 && (
-              <div className="flex flex-col gap-5">
-                <div className="flex flex-col gap-2">
-                  <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-                    Operasyonel
-                  </h2>
-                  <MotionRail style={{ "--glow-color": "var(--primary)" } as React.CSSProperties} />
-                </div>
-                <KpiGrid kpis={operationalKpis} />
-              </div>
-            )}
-          </div>
-        </details>
-      )}
+      <section className="flex flex-col gap-3">
+        <SectionHeader
+          title="Havacılık Akışı"
+          caption="Son günlerin eşiği geçen, Türkçeye çevrilmiş haberleri."
+          glowVar="var(--category-general)"
+          action={{ href: "/newspaper", label: "Gazete'ye git" }}
+        />
+        <AviationFeed />
+      </section>
     </div>
   );
 }

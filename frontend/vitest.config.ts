@@ -36,8 +36,16 @@ export default defineConfig({
         // The swimlane's clustered marker: geometry stays out of the runner,
         // but the count, the list it opens and its keyboard exits do not.
         "src/components/campaign-cluster-marker.tsx",
+        // Kokpit'in yeniden tasarımı: the page's own rules (freshness, the
+        // forecast split, feed-row mapping, level styling) plus the two
+        // components that carry real merge/ordering logic. The chart, the
+        // strips and the header are composition over already-decided numbers
+        // and are checked in a browser instead.
+        "src/components/kokpit/alert-center.tsx",
+        "src/components/kokpit/signal-board.tsx",
         "src/hooks/*.ts",
         "src/lib/campaigns.ts",
+        "src/lib/cockpit.ts",
         "src/lib/format.ts",
       ],
     },
