@@ -50,6 +50,21 @@ def _focus_weighted_importance():
     return func.coalesce(ArticleEnrichment.importance_score, 0.0) + bonus
 
 
+def _effective_tier_expr():
+    """`Source.tier`, or its trust_weight bucket -- as SQL.
+
+    The same ladder app.taxonomy.effective_source_tier walks in Python. Written
+    once here so `_sources_in_tiers` (which filters on it) and
+    `count_by_source` (which reports it) cannot disagree about what tier an
+    undeclared source counts as.
+    """
+    ladder = case(
+        *[(Source.trust_weight >= floor, name) for floor, name in TRUST_WEIGHT_TIERS],
+        else_=DEFAULT_UNDECLARED_TIER,
+    )
+    return case((Source.tier.isnot(None), Source.tier), else_=ladder)
+
+
 def _sources_in_tiers(tiers: list[str]):
     """Source ids whose EFFECTIVE tier is one of `tiers`.
 
@@ -64,12 +79,7 @@ def _sources_in_tiers(tiers: list[str]):
     the source list is short (tens of rows), and IN (subquery) cannot multiply
     an article across the LIMIT the way a join can.
     """
-    ladder = case(
-        *[(Source.trust_weight >= floor, name) for floor, name in TRUST_WEIGHT_TIERS],
-        else_=DEFAULT_UNDECLARED_TIER,
-    )
-    effective = case((Source.tier.isnot(None), Source.tier), else_=ladder)
-    return select(Source.id).where(effective.in_(tiers))
+    return select(Source.id).where(_effective_tier_expr().in_(tiers))
 
 
 def _entity_mentions(entity_type: str, value: str, *, by_code: bool = True):
@@ -132,6 +142,7 @@ class ArticleRepository:
         exclude_categories: list[str] | None = None,
         min_importance: float | None = None,
         tiers: list[str] | None = None,
+        source_names: list[str] | None = None,
     ):
         """Shared filter clause for list_recent and count, so the "load more"
         pagination in the newspaper can trust that total counts the same rows
@@ -218,6 +229,20 @@ class ArticleRepository:
             # list is paginated: filtering 30 rows client-side would leave page
             # 2 holding stories page 1's filter should have shown.
             query = query.where(Article.source_id.in_(_sources_in_tiers(tiers)))
+        if source_names:
+            # The named-outlet filter, one rung below `tiers`: a tier answers
+            # "how authoritative", a name answers "I trust Reuters and I want
+            # to read only Reuters". Matched on Source.name exactly, which is
+            # the string /articles/source-facets hands the chip row, so a chip
+            # can never send a name the filter would miss. Server-side for the
+            # same reason the tier filter is: the list is paginated, and
+            # filtering the loaded 30 rows would leave page 2 holding stories
+            # page 1's filter should have shown.
+            query = query.where(
+                Article.source_id.in_(
+                    select(Source.id).where(Source.name.in_(source_names))
+                )
+            )
         return query
 
     async def list_recent(
@@ -236,6 +261,7 @@ class ArticleRepository:
         exclude_categories: list[str] | None = None,
         min_importance: float | None = None,
         tiers: list[str] | None = None,
+        source_names: list[str] | None = None,
     ) -> list[Article]:
         query = (
             select(Article)
@@ -265,6 +291,7 @@ class ArticleRepository:
             exclude_categories=exclude_categories,
             min_importance=min_importance,
             tiers=tiers,
+            source_names=source_names,
         )
         result = await self.db.execute(query)
         return list(result.scalars().unique().all())
@@ -283,6 +310,7 @@ class ArticleRepository:
         exclude_categories: list[str] | None = None,
         min_importance: float | None = None,
         tiers: list[str] | None = None,
+        source_names: list[str] | None = None,
     ) -> int:
         # Plain COUNT, not COUNT(DISTINCT): the airline filter is a semi-join
         # now, so no clause can multiply rows, and COUNT(DISTINCT uuid) forces
@@ -301,6 +329,7 @@ class ArticleRepository:
             exclude_categories=exclude_categories,
             min_importance=min_importance,
             tiers=tiers,
+            source_names=source_names,
         )
         result = await self.db.execute(query)
         return int(result.scalar_one())
@@ -356,6 +385,60 @@ class ArticleRepository:
             query = query.where(_focus_weighted_importance() >= min_importance)
         result = await self.db.execute(query)
         return {category: count for category, count in result.all()}
+
+    async def count_by_source(
+        self,
+        limit: int = 10,
+        since: datetime | None = None,
+        category: str | None = None,
+        translated_only: bool = False,
+        exclude_categories: list[str] | None = None,
+        min_importance: float | None = None,
+    ) -> list[tuple[str, str, int]]:
+        """(source name, effective tier, article count), busiest outlet first.
+
+        The facet list behind the Gazete's "Kaynak" chip row. It has to be a
+        server-side aggregate and not a pass over the loaded page: the list is
+        paginated 30 at a time, so counting the names on screen would describe
+        page 1 rather than the window, and the chip counts would change as the
+        reader paged -- which is exactly the kind of number nobody can
+        reconcile.
+
+        Takes the same window/category/quality filters as the list, for the
+        reason `count_by_category` does: a chip promising 12 stories the
+        filtered list would never render is a chip that lies. `tiers` and
+        `source_names` are deliberately NOT accepted -- the facets describe the
+        set the source filter chooses *from*, and narrowing them by the
+        selection would make every chip but the active one vanish the moment
+        one was pressed.
+
+        Ties broken by name so a page reload cannot reshuffle two equal chips.
+        """
+        tier_expr = _effective_tier_expr()
+        count_expr = func.count()
+        query = (
+            select(Source.name, tier_expr, count_expr)
+            .select_from(Article)
+            .join(Source, Source.id == Article.source_id)
+            .where(Article.is_duplicate.is_(False), _NOT_BLACKLISTED)
+            .group_by(Source.name, tier_expr)
+            .order_by(count_expr.desc(), Source.name)
+            .limit(limit)
+        )
+        if since is not None:
+            query = query.where(Article.published_at >= since)
+        if category or translated_only or exclude_categories or min_importance is not None:
+            query = query.join(ArticleEnrichment, ArticleEnrichment.article_id == Article.id)
+            if category:
+                query = query.where(ArticleEnrichment.category == category)
+            if translated_only:
+                query = query.where(ArticleEnrichment.translated_at.isnot(None))
+            if exclude_categories:
+                query = query.where(ArticleEnrichment.category.notin_(exclude_categories))
+            if min_importance is not None:
+                query = query.where(_focus_weighted_importance() >= min_importance)
+        result = await self.db.execute(query)
+        return [(name, tier, count) for name, tier, count in result.all()]
 
     async def get_by_id(self, article_id: uuid.UUID) -> Article | None:
         result = await self.db.execute(

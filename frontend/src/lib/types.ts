@@ -73,6 +73,21 @@ export interface ArticleListOut {
   items: ArticleOut[];
 }
 
+/** `GET /articles/source-facets` -- which outlets actually filled the current
+ * window, busiest first.
+ *
+ * The options behind the Gazete's "Kaynak adı" chip row. `name` is the exact
+ * `Source.name` string `?source=` matches on, which is what makes a chip safe
+ * to send blind: it cannot ask for an outlet the filter would miss. Counted
+ * server-side because the list is paginated -- chips derived from the thirty
+ * rows on screen would describe page 1, not the window. */
+export interface ArticleSourceFacetOut {
+  name: string;
+  /** The EFFECTIVE tier, resolved exactly as `SourceOut.tier` is. */
+  tier: string;
+  count: number;
+}
+
 /** `GET /articles/{id}/sources` -- every outlet that ran this story, oldest
  * first. This is the list behind `corroborating_source_count`: the same
  * duplicate group backend/app/pipeline/verify.py counts to produce that
@@ -773,6 +788,9 @@ export interface BizEventOut {
   slug: string;
   headline: string | null;
   category: string | null;
+  /** World-region slug, carried so the Sinyaller aggregate can put a region on
+   * a card without a second query. */
+  region: string | null;
   confidence_band: string | null;
   last_seen: string;
 }
@@ -835,4 +853,74 @@ export interface BizOverviewOut {
   network_signals: BizSection<NetworkSignalGroup>;
   commercial_signals: BizSection<BizCommercialSignal>;
   strategic_developments: BizSection<BizEventOut>;
+}
+
+/* --- Sinyaller (backend/app/schemas/signals.py) --------------------------- */
+
+/** market | risk | competitor | financial -- the four filter buckets. Which
+ * real stream reaches each is documented in
+ * backend/app/services/signals_service.py; nothing is detected on this page. */
+export type SignalKind = "market" | "risk" | "competitor" | "financial";
+
+/** `unknown` is not a band: it means the driver could not be read at all, and
+ * must never render as an all-clear. */
+export type SignalSeverity = "critical" | "high" | "medium" | "low" | "unknown";
+
+/** One row of the early-warning list, from whichever stream produced it.
+ *
+ * Every field is carried FROM a stream rather than computed as a new judgement
+ * about it. `severity` in particular is a band the owning stream already
+ * published -- a campaign alert's priority, a risk cluster's severity, a
+ * Kokpit tile's level -- and `severity_basis_tr` says which. A stream that
+ * publishes no severity is mapped to `low` and says so in that sentence,
+ * rather than being given a number this page invented. */
+export interface SignalOut {
+  id: string;
+  /** Which of the seven streams produced this row. */
+  stream: string;
+  kind: SignalKind;
+  kind_label_tr: string;
+  /** What kind of thing this is inside its stream ("Yeni hat", "Kur Riski"). */
+  type_label_tr: string;
+  severity: SignalSeverity;
+  severity_label_tr: string;
+  /** How the severity was arrived at, verbatim -- the card's ⓘ note. */
+  severity_basis_tr: string;
+  title_tr: string;
+  detail_tr: string | null;
+  /** World-region slug, where the stream resolved one. */
+  region: string | null;
+  /** IATA codes the signal is about. Empty for a macro signal. */
+  airline_codes: string[];
+  /** Null where the stream is a rolling window with no point reading -- never
+   * defaulted to now, so an undated row cannot lead a recency sort. */
+  detected_at: string | null;
+  /** 0-1, only where the owning stream actually carries one. Never
+   * synthesised: a campaign alert has no confidence, a risk cluster does. */
+  confidence_score: number | null;
+  source_label: string;
+  /** In-app drill-down, or null where no page owns this stream any more. */
+  href: string | null;
+}
+
+/** One contributing stream, present whether or not it produced anything -- the
+ * same structural no-filler rule the Biz sections use, so a reader can tell
+ * "nothing happened" from "it broke". */
+export interface SignalStreamOut {
+  key: string;
+  label_tr: string;
+  kind: SignalKind;
+  count: number;
+  available: boolean;
+  empty_message: string | null;
+}
+
+export interface SignalsOut {
+  days: number;
+  total: number;
+  signals: SignalOut[];
+  streams: SignalStreamOut[];
+  /** When the composition ran -- a fact about the response, not about the
+   * newest signal in it. */
+  generated_at: string;
 }

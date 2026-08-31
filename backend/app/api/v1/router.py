@@ -17,6 +17,7 @@ from app.api.v1 import (
     recommendations,
     risks,
     search,
+    signals,
     subscribers,
     taxonomy,
     tk,
@@ -37,6 +38,7 @@ api_router.include_router(promotions.router)
 api_router.include_router(campaign_alerts.router)
 api_router.include_router(recommendations.router)
 api_router.include_router(risks.router)
+api_router.include_router(signals.router)
 api_router.include_router(subscribers.router)
 api_router.include_router(admin.router)
 api_router.include_router(taxonomy.router)

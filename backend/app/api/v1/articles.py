@@ -8,7 +8,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.cache_headers import AGGREGATES, ARTICLES, public_cache
 from app.core.db import get_db
 from app.repositories.article_repository import ArticleRepository
-from app.schemas.article import ArticleListOut, ArticleOut, ArticleSourceOut
+from app.schemas.article import (
+    ArticleListOut,
+    ArticleOut,
+    ArticleSourceFacetOut,
+    ArticleSourceOut,
+)
 from app.taxonomy import SOURCE_TIERS, effective_source_tier
 
 router = APIRouter(prefix="/articles", tags=["articles"])
@@ -135,6 +140,17 @@ async def list_articles(
         ),
     ),
     tier: list[str] | None = Query(None, description=_TIER_DESCRIPTION),
+    source: list[str] | None = Query(
+        None,
+        description=(
+            "Outlet name to keep, repeated once per value, matched against "
+            "Source.name exactly. One rung below `tier`: a tier says how "
+            "authoritative, a name says which newsroom. The valid values for a "
+            "given window are exactly what GET /articles/source-facets returns, "
+            "so a chip built from that list can never send a name this misses. "
+            "Omit for every outlet, which is the default everywhere"
+        ),
+    ),
     response: Response = None,  # type: ignore[assignment]  -- FastAPI injects it
     db: AsyncSession = Depends(get_db),
 ) -> ArticleListOut:
@@ -147,7 +163,7 @@ async def list_articles(
         region=region, since=since, airline=airline, on_date=date,
         country=country, airport=airport, translated_only=translated_only,
         exclude_categories=exclude_categories, min_importance=min_importance,
-        tiers=tiers,
+        tiers=tiers, source_names=source,
     )
     # Filtered total (same clause as the list) so "load more" knows when to stop.
     # A short page IS the end of the result set, so the count query -- the more
@@ -160,7 +176,7 @@ async def list_articles(
             category=category, subcategory=subcategory, region=region, since=since,
             airline=airline, on_date=date, country=country, airport=airport,
             translated_only=translated_only, exclude_categories=exclude_categories,
-            min_importance=min_importance, tiers=tiers,
+            min_importance=min_importance, tiers=tiers, source_names=source,
         )
     return ArticleListOut(total=total, items=[ArticleOut.model_validate(a) for a in items])
 
@@ -209,6 +225,65 @@ async def article_counts(
         exclude_categories=exclude_categories,
         min_importance=min_importance,
     )
+
+
+#: How many outlets the facet endpoint will name. Ten is what the Gazete's chip
+#: row shows before its "+N kaynak daha" expander, and thirty is roughly the
+#: whole active source catalogue -- past that the list stops being a filter and
+#: becomes a directory.
+DEFAULT_SOURCE_FACET_LIMIT = 10
+MAX_SOURCE_FACET_LIMIT = 30
+
+
+@router.get("/source-facets", response_model=list[ArticleSourceFacetOut])
+async def article_source_facets(
+    limit: int = Query(
+        DEFAULT_SOURCE_FACET_LIMIT,
+        ge=1,
+        le=MAX_SOURCE_FACET_LIMIT,
+        description="How many outlets to name, busiest first",
+    ),
+    category: str | None = Query(None, description="Category slug -- mirrors the list endpoint"),
+    days: int | None = Query(None, ge=1, le=365),
+    hours: int | None = Query(None, ge=1, le=720),
+    translated_only: bool = Query(
+        False, description="Only articles with a real Turkish translation -- Gazete's default"
+    ),
+    exclude_categories: list[str] | None = Query(
+        None, description="Category slugs to leave out -- mirrors the list endpoint"
+    ),
+    min_importance: float | None = Query(
+        None, ge=0.0, le=1.0, description="Focus-weighted importance floor -- mirrors the list"
+    ),
+    response: Response = None,  # type: ignore[assignment]
+    db: AsyncSession = Depends(get_db),
+) -> list[ArticleSourceFacetOut]:
+    """Which outlets actually filled this window, with how many stories each.
+
+    The options behind the Gazete's "Kaynak" chip row. Server-side because the
+    list is paginated: deriving the chips from the thirty rows on screen would
+    describe page 1 rather than the window, and the counts would move as the
+    reader paged.
+
+    Takes the same window/category/quality filters as the list so a chip
+    counting rows the filtered list would not render cannot exist. It
+    deliberately does NOT take `tier` or `source`: these are the options the
+    reader chooses *from*, and narrowing them by the current selection would
+    make every chip but the active one disappear the moment one was pressed.
+    """
+    public_cache(response, AGGREGATES)
+    since = _window_start(hours, days, None)
+    rows = await ArticleRepository(db).count_by_source(
+        limit=limit,
+        since=since,
+        category=category,
+        translated_only=translated_only,
+        exclude_categories=exclude_categories,
+        min_importance=min_importance,
+    )
+    return [
+        ArticleSourceFacetOut(name=name, tier=tier, count=count) for name, tier, count in rows
+    ]
 
 
 @router.get("/daily-counts")

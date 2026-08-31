@@ -16,12 +16,36 @@ import {
 } from "./gazete";
 
 describe("window chips", () => {
-  it("maps each rung to exactly one API param", () => {
+  it("maps each rung to exactly one API param, or declares it sends none", () => {
     // The API 422s on a request carrying two time windows, so a rung that
-    // claimed both would be an un-fetchable filter.
+    // claimed both would be an un-fetchable filter. "Hepsi" claims neither
+    // and has to say so out loud -- a rung that lost its hours/days by
+    // accident would otherwise become a silent whole-archive query.
     for (const option of WINDOW_OPTIONS) {
-      expect(Boolean(option.hours) !== Boolean(option.days)).toBe(true);
+      expect(Boolean(option.hours) !== Boolean(option.days)).toBe(!option.unbounded);
+      // Every rung needs a span the empty state can name.
+      expect(option.scopeLabel.length).toBeGreaterThan(0);
     }
+  });
+
+  it("sends no time param at all for Hepsi", () => {
+    // Absence IS how the API expresses "no cutoff" (see
+    // backend/app/api/v1/articles.py `_window_start`) -- there is no days=0 or
+    // sentinel to send, and inventing one would be a second way to say what an
+    // absent param already says.
+    const params = new URLSearchParams("hours=24&category=fleet");
+    applyWindowParams(params, windowOption("all"));
+    expect(params.get("hours")).toBeNull();
+    expect(params.get("days")).toBeNull();
+    expect(params.get("category")).toBe("fleet");
+  });
+
+  it("keeps 30 gün as the default rather than Hepsi", () => {
+    // Hepsi as the default would make the paper's first paint a query over the
+    // whole archive -- and the tab badges and source facets are unpaginated
+    // aggregates over whatever window they are handed.
+    expect(DEFAULT_WINDOW_ID).toBe("30d");
+    expect(windowOption(DEFAULT_WINDOW_ID).unbounded).toBeUndefined();
   });
 
   it("sends hours for the short rungs and days for the rest", () => {
@@ -62,6 +86,7 @@ describe("URL filter state", () => {
       airline: "RIVALS",
       window: "7d",
       tier: "official",
+      source: "Reuters",
       page: 3,
     };
     expect(parseFilters(serializeFilters(filters))).toEqual(filters);
@@ -116,7 +141,9 @@ describe("strip visibility", () => {
       { airline: "EK" },
       { subcategory: "pricing" },
       { tier: "official" },
+      { source: "Reuters" },
       { window: "6h" },
+      { window: "all" },
       { page: 2 },
     ]) {
       expect(hasNarrowingFilters({ ...DEFAULT_FILTERS, ...patch })).toBe(true);

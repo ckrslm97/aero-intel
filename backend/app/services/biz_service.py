@@ -65,6 +65,9 @@ def _event_payload(event: NewsEvent) -> dict:
         "slug": event.slug,
         "headline": event.title_tr,
         "category": event.category,
+        # Carried so the Sinyaller aggregate can put a region on a card without
+        # a second query -- the column is already loaded with the row.
+        "region": event.region,
         "confidence_band": event.confidence_band,
         "last_seen": event.last_seen.isoformat(),
     }

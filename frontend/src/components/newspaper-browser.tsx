@@ -20,6 +20,7 @@ import { AirlineLogo } from "@/components/airline-logo";
 import { BreakingStrip } from "@/components/gazete/breaking-strip";
 import { EventRadarStrip } from "@/components/gazete/event-radar-strip";
 import { HighlightsRow } from "@/components/gazete/highlights-row";
+import { SourceFilterRow } from "@/components/gazete/source-filter-row";
 import { Pagination } from "@/components/pagination";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiFetch } from "@/lib/api";
@@ -217,6 +218,7 @@ export function NewspaperBrowser() {
     country: countrySlug,
     airline: airlineCode,
     tier: tierId,
+    source: sourceName,
     page,
   } = filters;
   const activeWindow = windowOption(filters.window);
@@ -329,6 +331,10 @@ export function NewspaperBrowser() {
     if (regionSlug) params.set("region", regionSlug);
     if (countrySlug) params.set("country", countrySlug);
     if (airlineCode) params.set("airline", airlineCode);
+    // Repeatable on the wire even though the row is single-select -- the API
+    // unions repeated values, so the shape does not change if the row ever
+    // becomes multi-select.
+    if (sourceName) params.append("source", sourceName);
     if (tierId) {
       // One chip can stand for two tiers ("Resmî" = official + regulator);
       // repeated keys are what the API unions.
@@ -366,7 +372,7 @@ export function NewspaperBrowser() {
       cancelled = true;
       controller.abort();
     };
-  }, [categorySlug, subcategorySlug, regionSlug, countrySlug, airlineCode, tierId, activeWindow, page]);
+  }, [categorySlug, subcategorySlug, regionSlug, countrySlug, airlineCode, tierId, sourceName, activeWindow, page]);
 
   const today = new Date().toISOString().slice(0, 10);
   // "Son güncelleme": the newest thing this page actually has, taken from the
@@ -518,8 +524,11 @@ export function NewspaperBrowser() {
             regulator share one, because "from the horse's mouth" is the
             distinction a reader filters on and "airline newsroom vs
             regulator" is not. */}
+        {/* "Kaynak türü", not "Kaynak": the named-outlet row directly below is
+            also a source filter, and two rows sharing one heading would read
+            as one control that had somehow been split. */}
         <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-          Kaynak
+          Kaynak türü
         </span>
         {TIER_FILTERS.map((filter) => (
           <button
@@ -538,6 +547,19 @@ export function NewspaperBrowser() {
           </button>
         ))}
       </div>
+
+      {/* Named outlets, under the tier chips because it is the finer cut of
+          the same axis: a tier says how authoritative, a name says which
+          newsroom. Its options are counted server-side over the window above
+          -- see components/gazete/source-filter-row.tsx. */}
+      <SourceFilterRow
+        window={activeWindow}
+        category={categorySlug}
+        minImportance={MIN_IMPORTANCE}
+        excludedCategories={NEWSPAPER_EXCLUDED_CATEGORY_SLUGS}
+        value={sourceName}
+        onChange={(next) => updateFilters({ source: next })}
+      />
 
       {category.subcategories.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
@@ -743,6 +765,10 @@ export function NewspaperBrowser() {
             excludedCategories={NEWSPAPER_EXCLUDED_CATEGORY_SLUGS}
           />
           <EventRadarStrip
+            // Collapsed by default everywhere, but the Etkinlik tab is the one
+            // place the radar IS the subject -- see the component's docstring
+            // for the precedence between this and the reader's stored choice.
+            autoExpand={categorySlug === "events"}
             onOpenCalendar={
               // The radar is a teaser for the calendar that already exists;
               // the link switches to it rather than duplicating it. Only
@@ -845,8 +871,10 @@ export function NewspaperBrowser() {
           <p className="mt-1 text-sm text-muted-foreground">
             {/* The window is a filter now, so the empty state names the one
                 actually in force rather than a hard-coded 30. */}
-            Seçili dönemde ({activeWindow.label}) bu kategoride yayımlanmış haber yok.
-            Daha geniş bir zaman aralığı ya da başka bir filtre deneyin.
+            {activeWindow.unbounded
+              ? "Tüm arşivde bu kategoride, seçili filtrelerle yayımlanmış haber yok."
+              : `Seçili dönemde (${activeWindow.scopeLabel}) bu kategoride yayımlanmış haber yok.`}{" "}
+            Başka bir filtre deneyin.
           </p>
         </div>
       )}

@@ -49,6 +49,26 @@ class CampaignAlertOut(BaseModel):
     created_at: datetime
 
 
+async def open_alerts(db: AsyncSession, *, limit: int = 20) -> list[CampaignAlert]:
+    """The unacknowledged alert inbox, priority first and only then recency.
+
+    Split out of the endpoint so the Sinyaller aggregate reads the same inbox
+    the strip does rather than writing a second query for it -- one that would
+    eventually differ on the acknowledged filter or on the priority ordering,
+    and put a row on one surface that the other had already retired.
+    """
+    return list(
+        (
+            await db.execute(
+                select(CampaignAlert)
+                .where(CampaignAlert.acknowledged_at.is_(None))
+                .order_by(_PRIORITY_RANK, CampaignAlert.created_at.desc())
+                .limit(limit)
+            )
+        ).scalars().all()
+    )
+
+
 @router.get("", response_model=list[CampaignAlertOut])
 async def list_campaign_alerts(
     limit: int = Query(20, ge=1, le=100, description="How many alerts to return"),
@@ -58,12 +78,4 @@ async def list_campaign_alerts(
     # AGGREGATES rather than FRESH: alerts are written twice a day by cron, so
     # a 30-second edge cache would buy nothing that five minutes does not.
     public_cache(response, AGGREGATES)
-    rows = (
-        await db.execute(
-            select(CampaignAlert)
-            .where(CampaignAlert.acknowledged_at.is_(None))
-            .order_by(_PRIORITY_RANK, CampaignAlert.created_at.desc())
-            .limit(limit)
-        )
-    ).scalars().all()
-    return [CampaignAlertOut.model_validate(row) for row in rows]
+    return [CampaignAlertOut.model_validate(row) for row in await open_alerts(db, limit=limit)]
