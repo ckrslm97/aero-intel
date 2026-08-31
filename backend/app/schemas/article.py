@@ -142,6 +142,22 @@ class ArticleListOut(BaseModel):
     items: list[ArticleOut]
 
 
+class ArticleSourceFacetOut(BaseModel):
+    """One outlet the current window actually contains, and how much of it.
+
+    The Gazete's "Kaynak" chip row is built from these, which is what makes
+    `?source=` safe to send blind: the names here are the exact `Source.name`
+    strings the filter matches on, so a chip cannot ask for an outlet the
+    filter would miss (or offer one that would come back empty).
+    """
+
+    name: str
+    #: The EFFECTIVE tier, resolved exactly as SourceOut.tier resolves it -- so
+    #: a chip and an article card can never badge the same outlet differently.
+    tier: str
+    count: int
+
+
 class ArticleSourceOut(BaseModel):
     """One telling of a story: the canonical article, or one of its duplicates.
 

@@ -17,7 +17,7 @@ gained one, it would need require_admin exactly like /admin/status and
 POST /editions/{date}/rebuild -- this test fails loudly the moment that
 happens, rather than the gap being discovered in production.
 """
-from app.api.v1 import biz, hubs, kokpit, promotions
+from app.api.v1 import biz, hubs, kokpit, promotions, signals
 from app.api.v1.router import api_router
 
 READ_ONLY_ROUTERS = {
@@ -25,6 +25,9 @@ READ_ONLY_ROUTERS = {
     "biz": biz.router,
     "hubs": hubs.router,
     "promotions": promotions.router,
+    # Sinyaller composes six other read-only surfaces into one feed; it must
+    # never gain a way to write to any of them.
+    "signals": signals.router,
 }
 
 # CLI commands that must stay reachable only via `python -m app.cli`, never

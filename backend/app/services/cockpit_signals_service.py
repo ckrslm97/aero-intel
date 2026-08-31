@@ -37,7 +37,7 @@ from app.api.v1.promotions import new_promotion_counts
 # Both of these are the rollup that already backs a page, reused rather than
 # re-derived: a cheaper second query would eventually state a number the page
 # it links to cannot reproduce. See each function's own docstring.
-from app.api.v1.risks import UNKNOWN_COUNTRY, aggregate_risks
+from app.api.v1.risks import UNKNOWN_COUNTRY, RiskRadarOut, aggregate_risks
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.ingest.markets import fetch_history
@@ -390,8 +390,20 @@ def build_competitor_signal(
 # --- Orchestration (I/O) --------------------------------------------------
 
 
-async def cockpit_signals(db: AsyncSession) -> list[CockpitSignalOut]:
-    """Fetch each tile's driver and band it. Returned in display order."""
+async def cockpit_signals(
+    db: AsyncSession, *, radar: RiskRadarOut | None = None
+) -> list[CockpitSignalOut]:
+    """Fetch each tile's driver and band it. Returned in display order.
+
+    `radar` is an escape hatch for a caller that has already run
+    `aggregate_risks` for its own reasons -- the Sinyaller aggregate
+    (app/services/signals_service.py) renders both these tiles and the radar's
+    own high-severity signals in one response, and re-clustering a 14-day
+    window twice per request buys nothing. Passing it in is also what
+    guarantees the tile's count and the signals listed beside it come from the
+    same rollup rather than from two runs that could differ. Production's own
+    /kokpit/signals passes nothing and fetches it here, exactly as before.
+    """
     settings = get_settings()
     kpis = KpiRepository(db)
     now = datetime.now(timezone.utc)
@@ -416,7 +428,8 @@ async def cockpit_signals(db: AsyncSession) -> list[CockpitSignalOut]:
     if brent is not None:
         history = await fetch_history(settings.yahoo_finance_base_url, "BZ=F", "1y")
         percentile = percentile_of(brent.value, [value for _, value in history])
-    radar = await aggregate_risks(db, days=RISK_WINDOW_DAYS)
+    if radar is None:
+        radar = await aggregate_risks(db, days=RISK_WINDOW_DAYS)
     high_count = sum(country.severity_counts.high for country in radar.countries)
     # countries[] is already sorted worst-first. The unplaced bucket is skipped:
     # "Belirtilmemiş" is a data-quality residue, not a country to name as the

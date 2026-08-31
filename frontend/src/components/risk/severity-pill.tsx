@@ -13,10 +13,11 @@ import { cn } from "@/lib/utils";
  * precedent (see events-calendar.tsx IMPACT_META).
  *
  * The pill was written out three times (risk-radar-client, risk-map's legend,
- * biz-signals) before it lived here. Two of those three are left alone by this
- * PR on purpose -- they belong to other pages and other in-flight branches --
- * and the follow-up is noted in the PR body rather than done here, where it
- * would turn a page redesign into a cross-page refactor.
+ * biz-signals) before it lived here. The third copy is gone with biz-signals
+ * itself (the section moved to /sinyaller, which draws its own severity pill
+ * over a five-value ladder that includes `critical` and `unknown` -- see
+ * lib/signals.ts SEVERITY_STYLES); risk-map's legend is still its own copy,
+ * left alone on purpose because it belongs to another page.
  */
 export const RISK_SEVERITY_META: Record<
   string,

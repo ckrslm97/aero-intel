@@ -1,6 +1,7 @@
 import type { LucideIcon } from "lucide-react";
 
 import {
+  Activity,
   Globe2,
   LayoutDashboard,
   Megaphone,
@@ -24,9 +25,21 @@ export interface NavItem {
   icon: LucideIcon;
 }
 
-// Exactly six destinations (Faz 11 of the Faz 7 rebuild plan): Kokpit,
-// Gazete, Kampanya, Risk Radarı, Hub, Biz -- the owner's own menu line. Down
-// from nine: İçgörüler's two pieces of real content each found a home with
+// Seven destinations: Kokpit, Gazete, Kampanya, Risk Radarı, Sinyaller, Hub,
+// Biz.
+//
+// Six of them are Faz 11's own list (the owner's menu line). Sinyaller is the
+// seventh, added on the owner's explicit request to lift the signal block out
+// of Biz and give it a page: it composes seven existing streams -- Kokpit's
+// four tiles, the campaign alert inbox, the Risk Radarı's high-severity
+// clusters, Biz's rival and strategic events, the Hub page's new routes,
+// İçgörüler' airline momentum -- into one early-warning list. That is a
+// destination in its own right rather than a section of Biz, which is a page
+// about THY; nothing about "Emirates just cut fares" belongs under a heading
+// that means "us". It sits directly after Risk Radarı so the three surfaces a
+// desk checks for something to react to are adjacent.
+//
+// The six were down from nine: İçgörüler's two pieces of real content each found a home with
 // its own audience (new-route signals -> Hub's Ağ Sinyalleri tab, Öneriler ->
 // Biz's ticari sinyaller section), and Know How and Arşiv are still real
 // routes -- reachable from the topbar help menu and the Gazete masthead
@@ -44,6 +57,7 @@ export const primaryNav: NavItem[] = [
   // news story -- something a rival just did -- only with a window attached.
   { href: "/kampanyalar", label: "Kampanya", icon: Megaphone },
   { href: "/risk-radari", label: "Risk Radarı", icon: Radar },
+  { href: "/sinyaller", label: "Sinyaller", icon: Activity },
   { href: "/hublar", label: "Hub", icon: Globe2 },
   { href: "/biz", label: "Biz", icon: Star },
 ];

@@ -2,18 +2,21 @@
 
 import { motion, useReducedMotion } from "framer-motion";
 import {
+  Activity,
+  ArrowUpRight,
   ExternalLink,
   Frown,
+  Lightbulb,
   Meh,
   MessageSquareQuote,
   Smile,
   Sparkles,
   Star,
 } from "lucide-react";
+import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import { ArticleCard } from "@/components/article-card";
-import { BizSignals } from "@/components/biz-signals";
 import { CountUp } from "@/components/motion/count-up";
 import { MotionItem, MotionList } from "@/components/motion/motion-list";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -96,6 +99,34 @@ function GrowBar({
     >
       {children}
     </motion.span>
+  );
+}
+
+/** A section that moved, said out loud. Cheaper than a redirect and more
+ * honest than an empty space where a block used to be. */
+function PointerCard({
+  href,
+  icon: Icon,
+  title,
+  body,
+}: {
+  href: string;
+  icon: React.ComponentType<{ className?: string }>;
+  title: string;
+  body: string;
+}) {
+  return (
+    <Link
+      href={href}
+      className="group flex flex-col gap-1.5 rounded-xl border border-border bg-card bg-card-sheen p-4 shadow-elev-1 transition-colors hover:bg-accent/30 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+    >
+      <span className="flex items-center gap-2 text-sm font-semibold">
+        <Icon className="size-4 text-muted-foreground" />
+        {title}
+        <ArrowUpRight className="size-3.5 text-primary transition-transform group-hover:translate-x-0.5 motion-reduce:transition-none" />
+      </span>
+      <span className="text-xs leading-relaxed text-muted-foreground">{body}</span>
+    </Link>
   );
 }
 
@@ -189,10 +220,26 @@ export function BizClient() {
         </p>
       </div>
 
-      {/* Rakip / ağ / ticari / stratejik sinyaller -- pipeline v2 üzerinden,
-          bkz. backend/app/services/biz_service.py. Yolcu yorumu bloğu (aşağıda,
-          değişmedi) ayrı ve mevcut bir özellik. */}
-      <BizSignals />
+      {/* Rakip, ağ ve stratejik sinyaller buradan /sinyaller sayfasına taşındı.
+          Gerekçe: bu sayfa THY'yi anlatır ve "Emirates ücret indirdi" başlığı
+          "BİZ" başlığının altında yanlış yerdedir. Ticari öneriler kendi
+          sayfasında (/oneriler) zaten duruyordu ve orada kaldı. Bölümü sessizce
+          silmek yerine iki işaret kartı bırakılıyor: kaybolmuş bir bölümü
+          aramak, taşındığını okumaktan daha kötüdür. */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <PointerCard
+          href="/sinyaller"
+          icon={Activity}
+          title="Sinyaller artık kendi sayfasında"
+          body="Rakip sinyalleri, ağ sinyalleri ve stratejik gelişmeler; Kokpit sinyal panosu, kampanya uyarıları ve Risk Radarı ile birlikte tek erken uyarı listesinde."
+        />
+        <PointerCard
+          href="/oneriler"
+          icon={Lightbulb}
+          title="Ticari sinyaller: Öneriler"
+          body="Haber akışından türetilen ticari aksiyon önerileri, kanıtlarıyla birlikte kendi sayfasında."
+        />
+      </div>
 
       {/* Stat tiles */}
       <MotionList className="grid grid-cols-1 gap-5 sm:grid-cols-3">

@@ -23,17 +23,35 @@ export interface WindowOption {
   label: string;
   hours?: number;
   days?: number;
+  /** True for the one rung that sends no time param at all. Carried as a flag
+   * rather than inferred from `!hours && !days`, so a rung added without
+   * either by mistake fails the type check instead of silently becoming a
+   * whole-archive query. */
+  unbounded?: boolean;
+  /** How the empty state names this rung: "Seçili dönemde (son 6 saat)". The
+   * chip label is a control ("6 saat"); this is the same window written as a
+   * span, which is what a sentence needs. */
+  scopeLabel: string;
 }
 
-/** 30 günes the default, unchanged: the paper has always shown a 30-day window
- * and a shorter default would silently empty the list for anyone who bookmarked
- * it. The two short rungs are what the hour param was added for. */
+/** 30 gün stays the default, unchanged: the paper has always shown a 30-day
+ * window and a shorter default would silently empty the list for anyone who
+ * bookmarked it. The two short rungs are what the hour param was added for.
+ *
+ * "Hepsi" is available but deliberately NOT the default. It sends no `days`
+ * and no `hours`, which the API already reads as "no cutoff" -- so as a
+ * default it would make the first paint of the paper a query over the entire
+ * archive, and the tab badges (`/articles/counts`) and the source facets are
+ * unpaginated aggregates over whatever window they are given. It is a rung a
+ * reader chooses, having chosen to wait for it.
+ */
 export const WINDOW_OPTIONS: readonly WindowOption[] = [
-  { id: "6h", label: "6 saat", hours: 6 },
-  { id: "24h", label: "24 saat", hours: 24 },
-  { id: "3d", label: "3 gün", days: 3 },
-  { id: "7d", label: "7 gün", days: 7 },
-  { id: "30d", label: "30 gün", days: 30 },
+  { id: "6h", label: "6 saat", hours: 6, scopeLabel: "son 6 saat" },
+  { id: "24h", label: "24 saat", hours: 24, scopeLabel: "son 24 saat" },
+  { id: "3d", label: "3 gün", days: 3, scopeLabel: "son 3 gün" },
+  { id: "7d", label: "7 gün", days: 7, scopeLabel: "son 7 gün" },
+  { id: "30d", label: "30 gün", days: 30, scopeLabel: "son 30 gün" },
+  { id: "all", label: "Hepsi", unbounded: true, scopeLabel: "tüm arşiv" },
 ] as const;
 
 export const DEFAULT_WINDOW_ID = "30d";
@@ -54,6 +72,9 @@ export function windowOption(id: string | null): WindowOption {
 export function applyWindowParams(params: URLSearchParams, option: WindowOption): URLSearchParams {
   params.delete("hours");
   params.delete("days");
+  // "Hepsi" writes neither, which is exactly how the API expresses "no
+  // cutoff" -- there is no `days=0` or sentinel to send, and inventing one
+  // would be a second way to say what an absent param already says.
   if (option.hours) params.set("hours", String(option.hours));
   else if (option.days) params.set("days", String(option.days));
   return params;
@@ -146,6 +167,17 @@ export interface GazeteFilters {
   airline: string | null;
   window: string;
   tier: string | null;
+  /** One named outlet, exactly as `/articles/source-facets` spelled it.
+   *
+   * Single-select on screen, repeatable on the wire: the API takes `?source=`
+   * once per value, but a chip row that let a reader accumulate outlets would
+   * put an unbounded list of names in the shared link, and the tier chips next
+   * to it are single-select for the same reason. Not validated against a list
+   * here the way `tier` is -- the valid names are the window's own facets,
+   * which only the server knows; an outlet that produced nothing simply
+   * returns an empty page, which is what the empty state is for.
+   */
+  source: string | null;
   page: number;
 }
 
@@ -159,6 +191,7 @@ export const DEFAULT_FILTERS: GazeteFilters = {
   airline: null,
   window: DEFAULT_WINDOW_ID,
   tier: null,
+  source: null,
   page: 1,
 };
 
@@ -189,6 +222,7 @@ export function parseFilters(params: URLSearchParams): GazeteFilters {
       ? windowId!
       : DEFAULT_WINDOW_ID,
     tier: TIER_FILTERS.some((filter) => filter.id === tier) ? tier : null,
+    source: params.get("source"),
     page: Number.isFinite(page) && page >= 1 ? Math.floor(page) : 1,
   };
 }
@@ -206,6 +240,7 @@ export function serializeFilters(filters: GazeteFilters): URLSearchParams {
   if (filters.airline) params.set("airline", filters.airline);
   if (filters.window !== DEFAULT_WINDOW_ID) params.set("window", filters.window);
   if (filters.tier) params.set("tier", filters.tier);
+  if (filters.source) params.set("source", filters.source);
   if (filters.page > 1) params.set("page", String(filters.page));
   return params;
 }
@@ -228,6 +263,7 @@ export function hasNarrowingFilters(filters: GazeteFilters): boolean {
       filters.country ||
       filters.airline ||
       filters.tier ||
+      filters.source ||
       filters.window !== DEFAULT_WINDOW_ID ||
       filters.page > 1,
   );
