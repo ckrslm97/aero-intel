@@ -8,9 +8,12 @@ import {
   coverageBadge,
   EMPTY_RISK_FILTERS,
   filterRiskCountries,
+  headlinePresentation,
   liveFeedItems,
+  partitionByVisibility,
   riskSourceTierLabel,
   riskTypeBreakdown,
+  staleBadge,
   UNKNOWN_COUNTRY,
 } from "@/lib/risk";
 
@@ -68,6 +71,116 @@ describe("confidenceBand", () => {
     // "We did not compute this" and "we computed this and it came out weak"
     // are different facts; only the second is a judgement about the story.
     expect(confidenceBand(null)).toBeNull();
+  });
+});
+
+describe("staleBadge", () => {
+  const now = new Date("2026-08-30T12:00:00Z");
+  const at = (iso: string | null) =>
+    riskItem({ is_fresh: false, is_updated: false, last_reported_at: iso, published_at: iso });
+
+  it("marks a signal nobody has written about in over a week", () => {
+    expect(staleBadge(at("2026-08-20T12:00:00Z"), 30, now)?.label).toBe("ESKİ");
+  });
+
+  it("says nothing about the event, only about the coverage", () => {
+    // Same discipline as coverageBadge. A wildfire can burn for a month with
+    // the wires having moved on after day three, and this page has no lifecycle
+    // data that could tell the difference.
+    expect(staleBadge(at("2026-08-01T12:00:00Z"), 90, now)?.title).toContain(
+      "olayın bittiği anlamına gelmez",
+    );
+  });
+
+  it("leaves the boundary alone -- exactly seven days is not yet old", () => {
+    expect(staleBadge(at("2026-08-23T12:00:00Z"), 30, now)).toBeNull();
+    expect(staleBadge(at("2026-08-23T11:00:00Z"), 30, now)?.label).toBe("ESKİ");
+  });
+
+  it("is drawn only in the wide windows", () => {
+    // In a 7g or 14g view almost everything is past the threshold, so the tag
+    // would fire on most of the list and carry no information.
+    const old = at("2026-08-10T12:00:00Z");
+    expect(staleBadge(old, 7, now)).toBeNull();
+    expect(staleBadge(old, 14, now)).toBeNull();
+    expect(staleBadge(old, 30, now)?.label).toBe("ESKİ");
+    expect(staleBadge(old, 90, now)?.label).toBe("ESKİ");
+  });
+
+  it("never contradicts a freshness badge", () => {
+    // Impossible by arithmetic -- both halves cannot hold -- but a card
+    // carrying "Yeni" and "ESKİ" at once would be the worst thing on the page,
+    // so the rule is enforced rather than assumed.
+    const fresh = riskItem({
+      is_fresh: true,
+      last_reported_at: "2026-08-01T12:00:00Z",
+      published_at: "2026-08-01T12:00:00Z",
+    });
+    expect(staleBadge(fresh, 90, now)).toBeNull();
+    const updated = riskItem({
+      is_fresh: false,
+      is_updated: true,
+      last_reported_at: "2026-08-01T12:00:00Z",
+      published_at: "2026-08-01T12:00:00Z",
+    });
+    expect(staleBadge(updated, 90, now)).toBeNull();
+  });
+
+  it("says nothing when there is no date to judge", () => {
+    expect(staleBadge(at(null), 90, now)).toBeNull();
+  });
+});
+
+describe("partitionByVisibility", () => {
+  it("splits the weak tail out without reordering either half", () => {
+    const { normal, low } = partitionByVisibility([
+      riskItem({ id: "a" }),
+      riskItem({ id: "b", visibility: "low" }),
+      riskItem({ id: "c" }),
+      riskItem({ id: "d", visibility: "low" }),
+    ]);
+    expect(normal.map((i) => i.id)).toEqual(["a", "c"]);
+    expect(low.map((i) => i.id)).toEqual(["b", "d"]);
+  });
+
+  it("treats an unfamiliar band as a normal signal", () => {
+    // A band the backend grows later must render as a signal, not vanish into
+    // a collapsed block nobody opens.
+    const { normal, low } = partitionByVisibility([riskItem({ id: "x", visibility: "brand-new" })]);
+    expect(normal.map((i) => i.id)).toEqual(["x"]);
+    expect(low).toEqual([]);
+  });
+});
+
+describe("headlinePresentation", () => {
+  it("offers the source-language original behind a translated headline", () => {
+    const shown = headlinePresentation(
+      riskItem({
+        headline: "Rodos'ta orman yangını: tahliye sürüyor",
+        headline_original: "Wildfires force evacuation of Rhodes",
+        is_translated: true,
+      }),
+    );
+    expect(shown.text).toBe("Rodos'ta orman yangını: tahliye sürüyor");
+    expect(shown.original).toBe("Wildfires force evacuation of Rhodes");
+    expect(shown.untranslated).toBe(false);
+  });
+
+  it("flags an untranslated headline instead of letting it pass as Turkish", () => {
+    const shown = headlinePresentation(
+      riskItem({ headline: "Wildfires force evacuation of Rhodes", is_translated: false }),
+    );
+    expect(shown.untranslated).toBe(true);
+    // Nothing to reveal -- the text shown IS the original, and a tooltip
+    // repeating the words underneath it is noise a screen reader reads twice.
+    expect(shown.original).toBeNull();
+  });
+
+  it("does not echo the headline back at itself when the two are the same", () => {
+    const shown = headlinePresentation(
+      riskItem({ headline: "Aynı başlık", headline_original: "Aynı başlık", is_translated: true }),
+    );
+    expect(shown.original).toBeNull();
   });
 });
 

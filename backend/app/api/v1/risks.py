@@ -134,6 +134,22 @@ class RiskItemOut(BaseModel):
     #: can say so instead of silently showing a partial chronology.
     members_truncated: bool = False
 
+    #: "normal" | "low" -- how loudly the page is entitled to state this
+    #: signal. Decided here rather than in the browser for the same reason the
+    #: weighted score is: the map, the ranking and the list all draw the same
+    #: set, and three client-side re-derivations of "is this one weak" would be
+    #: three chances to disagree. See visibility_for() for the calibration.
+    visibility: str = "normal"
+
+    #: The primary's source-language headline, when `headline` is a
+    #: translation of it. None when the two are the same string -- there is
+    #: nothing for the UI to reveal on hover in that case.
+    headline_original: str | None = None
+    #: Whether `headline` is Turkish produced by the translator. False means
+    #: the card is showing source-language text, which the page says out loud
+    #: with the app's existing "otomatik çeviri yok" tag rather than silently.
+    is_translated: bool = False
+
 
 class SeverityCountsOut(BaseModel):
     high: int
@@ -155,6 +171,11 @@ class RiskCountryOut(BaseModel):
 class RiskRadarOut(BaseModel):
     days: int
     total: int
+    #: How many clusters the confidence floor removed from this window. Served
+    #: rather than swallowed: a page that quietly drops rows is a page whose
+    #: counts nobody can reconcile, and "3 sinyal eşiğin altında kaldı" is a
+    #: fact the reader is entitled to. See CONFIDENCE_FLOOR.
+    suppressed_low_confidence: int = 0
     countries: list[RiskCountryOut]
     # Feed-wide totals per type/family, so the filter chips can show counts
     # without the client flattening every group to count them.
@@ -225,6 +246,97 @@ MEMBER_CAP = 12
 AVIATION_OPERATIONAL_TYPES = frozenset(
     {"accident_incident", "disruption", "airport_disruption", "atc_disruption", "restriction"}
 )
+
+
+# ---------------------------------------------------------------------------
+# CONFIDENCE GATING
+#
+# `confidence_score` on this page comes from app/pipeline/verify.py:
+#
+#     0.4 + 0.15 * (corroborating_sources - 1) + 0.3 * avg_source_trust
+#
+# It is not a 0-100 "how sure are we" scale, and the thresholds below were
+# measured rather than chosen, because guessing at them produces numbers that
+# either hide the whole radar or hide nothing.
+#
+# MEASUREMENT (local Postgres, 484 enriched articles, 18 of them risk-classified,
+# 18 distinct sources; taken while writing this):
+#
+#   * corroborating_source_count == 1 on 484/484 rows. Nothing in this corpus
+#     ever formed a duplicate group, so every score is the single-source case
+#     and the formula collapses to `0.4 + 0.3 * trust_weight` -- a relabelling
+#     of the source's trust weight and nothing more.
+#   * Whole feed:   0.565 (3.3%) | 0.58 (40.3%) | 0.595 (9.3%) | 0.61 (33.5%)
+#                 | 0.655 (2.1%) | 0.67 (4.3%), plus 7.2% of curated/seeded rows
+#                   carrying a hand-set 0.8/0.9 that the formula never produced.
+#   * Risk subset:  0.58 x4 (22%) | 0.595 x2 (11%) | 0.61 x12 (67%).
+#                   p10 = 0.58, median = 0.61.
+#   * The seeded source catalogue spans trust 0.45-0.95, so the theoretical
+#     single-source range is 0.535-0.685; the live corpus exercises 0.565-0.67
+#     of it.
+#
+# WHY A 70/85 SCALE DOES NOT TRANSFER. On this formula one article can never
+# reach 0.70: that needs trust > 1.0. A 0.85 gate would empty the page, and a
+# 0.70 gate would keep only clusters with a second independent source (the
+# corroboration bonus alone puts a two-source cluster at >= 0.715). The two
+# thresholds below sit where this distribution actually has structure.
+#
+# CONFIDENCE_FLOOR = 0.58 -- the 10th percentile of the enriched corpus.
+#   Strictly below it lies exactly the trust < 0.60 band, i.e. the weakest
+#   aggregators: 3.3% of the feed and 0 of today's 18 risk rows. Cutting AT
+#   0.58 instead of below it would remove 40% of the feed in a single step,
+#   because the distribution is discrete and 0.58 is its mode -- which is why
+#   the floor is `< FLOOR` and not `<= FLOOR`.
+#
+# CONFIDENCE_LOW_BAND = 0.61 -- the median of the risk subset, and the score of
+#   a 0.70-trust source, which is this catalogue's default trade-press weight.
+#   Below it: a story told once, by an outlet we weight below the default.
+#   6 of today's 18 risk rows (33%). Those are de-emphasised, not hidden.
+#
+# MULTI-SOURCE EXEMPTION. Neither threshold applies to a cluster more than one
+# outlet reported. Corroboration is the evidence this score is mostly made of,
+# and a weak outlet that a second newsroom independently backed is a stronger
+# signal than the arithmetic -- built from the primary's row alone -- can see.
+# ---------------------------------------------------------------------------
+
+#: Below this, a single-source cluster is not published at all.
+CONFIDENCE_FLOOR = 0.58
+
+#: Below this (and at or above the floor), a single-source cluster is published
+#: as `visibility="low"`: same facts, quieter presentation.
+CONFIDENCE_LOW_BAND = 0.61
+
+#: The formula's own arithmetic minimum: 0.4 + 0.15 * 0 + 0.3 * 0. A score
+#: BELOW this cannot have come out of pipeline/verify.py at all, so it means
+#: the confidence pass never ran for that row -- ArticleEnrichment.confidence_
+#: score is a NOT NULL column defaulting to 0.0, which is exactly what an
+#: unscored row carries. Those are published normally: the gate acts on
+#: evidence of weakness, and a number nobody computed is not evidence.
+#: Treating "we did not measure this" as "we measured it and it was bad" would
+#: be inventing the very reading the gate claims to be applying.
+CONFIDENCE_UNSCORED_BELOW = 0.4
+
+
+def visibility_for(
+    confidence: float | None, distinct_sources: int, corroborating_sources: int | None
+) -> str:
+    """"normal" | "low" | "hidden" for one cluster.
+
+    `distinct_sources` is how many different outlets clustered into this
+    signal; `corroborating_sources` is the primary's own duplicate-group size.
+    Either one being >1 means a second newsroom told this story, which is the
+    exemption -- they are two different mechanisms (event clustering vs.
+    near-duplicate detection) for detecting the same fact.
+    """
+    if distinct_sources > 1 or (corroborating_sources or 1) > 1:
+        return "normal"
+    if confidence is None or confidence < CONFIDENCE_UNSCORED_BELOW:
+        return "normal"
+    if confidence < CONFIDENCE_FLOOR:
+        return "hidden"
+    if confidence < CONFIDENCE_LOW_BAND:
+        return "low"
+    return "normal"
 
 
 def aviation_link_for(risk_type: str, risk_family: str, airport_count: int) -> str:
@@ -300,6 +412,7 @@ async def aggregate_risks(db: AsyncSession, days: int = 14) -> RiskRadarOut:
     grouped: dict[str, list[RiskItemOut]] = {}
     type_counts: dict[str, int] = {}
     family_counts: dict[str, int] = {}
+    suppressed = 0
 
     # Three outlets covering one eruption used to be three cards, independently
     # classified, and they could disagree on severity and even on which
@@ -365,6 +478,19 @@ async def aggregate_risks(db: AsyncSession, days: int = 14) -> RiskRadarOut:
         if family is None:
             continue
 
+        # The publish gate. Distinct SOURCES, not member count: one outlet
+        # republishing its own story twice is one telling, and counting it as
+        # corroboration would let a weak source exempt itself.
+        distinct_sources = len({m.source_id for m in members})
+        visibility = visibility_for(
+            primary_enrichment.confidence_score,
+            distinct_sources,
+            primary_enrichment.corroborating_source_count,
+        )
+        if visibility == "hidden":
+            suppressed += 1
+            continue
+
         # The publication chronology. `by_published` is already the cluster in
         # publication order, which is the only timeline this data has: these are
         # the moments outlets WROTE about the event, never the moments the event
@@ -410,9 +536,29 @@ async def aggregate_risks(db: AsyncSession, days: int = 14) -> RiskRadarOut:
         ]
 
         published = primary.published_at
+        # The headline, both ways round. `headline` stays "the best text we
+        # have" so no caller has to re-derive the fallback chain, but the page
+        # also has to be able to say WHICH it is showing: an untranslated row
+        # gets the app's quiet "otomatik çeviri yok" tag instead of passing as
+        # Turkish, and a translated one carries the source-language original so
+        # a reader can check the wording against it. `translated_at is not
+        # None` is the same test schemas/article.py's is_translated uses --
+        # never implied, always earned.
+        source_headline = primary_enrichment.headline or primary.title
+        translated_headline = (
+            primary_enrichment.headline_tr
+            if primary_enrichment.translated_at is not None and primary_enrichment.headline_tr
+            else None
+        )
         item = RiskItemOut(
             id=str(primary.id),
-            headline=primary_enrichment.headline_tr or primary_enrichment.headline or primary.title,
+            headline=translated_headline or source_headline,
+            headline_original=(
+                source_headline
+                if translated_headline and source_headline != translated_headline
+                else None
+            ),
+            is_translated=translated_headline is not None,
             url=primary.url,
             source_name=primary.source.name if primary.source else "",
             published_at=published,
@@ -447,6 +593,7 @@ async def aggregate_risks(db: AsyncSession, days: int = 14) -> RiskRadarOut:
             aviation_link=aviation_link_for(risk_type, family, len(airports_by_code)),
             members=member_rows[:MEMBER_CAP],
             members_truncated=len(member_rows) > MEMBER_CAP,
+            visibility=visibility,
         )
         grouped.setdefault(country, []).append(item)
         type_counts[risk_type] = type_counts.get(risk_type, 0) + 1
@@ -466,11 +613,17 @@ async def aggregate_risks(db: AsyncSession, days: int = 14) -> RiskRadarOut:
                 count=len(items),
                 score=score,
                 severity_counts=SeverityCountsOut(**counts),
-                # Within a country, worst first -- then newest. A reader
-                # scanning a country section should meet its worst event first.
+                # Within a country: confident signals first, then worst first,
+                # then newest. A reader scanning a country section should meet
+                # its worst well-sourced event first, and the low-confidence
+                # tail last -- which is also where the page collapses it into
+                # its own "Düşük güvenli sinyaller" block. Severity does not
+                # promote a weak signal past a solid one: how bad the story
+                # would be if true is not evidence that it is.
                 items=sorted(
                     items,
                     key=lambda i: (
+                        i.visibility == "low",
                         -RISK_SEVERITY_WEIGHT.get(i.severity, 1),
                         -(i.published_at.timestamp() if i.published_at else 0),
                     ),
@@ -492,6 +645,7 @@ async def aggregate_risks(db: AsyncSession, days: int = 14) -> RiskRadarOut:
         # the page's own "X / Y sinyal" counter needs Y to be a number X can
         # actually reach.
         total=sum(len(items) for items in grouped.values()),
+        suppressed_low_confidence=suppressed,
         countries=countries,
         type_counts=type_counts,
         family_counts=family_counts,

@@ -100,6 +100,47 @@ describe("RiskDetailDrawer", () => {
     expect(screen.getByText("Ajans")).toBeInTheDocument();
   });
 
+  it("hangs the source-language original off a translated headline", async () => {
+    // The Turkish is a machine's paraphrase. A paraphrase whose original is
+    // nowhere on the page cannot be checked against anything, and the drawer
+    // is precisely where a reader goes to check a signal.
+    render(
+      <RiskDetailDrawer
+        item={riskItem({
+          headline: "Rodos'ta orman yangını: tahliye sürüyor",
+          headline_original: "Wildfires force evacuation of Rhodes",
+          is_translated: true,
+        })}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByRole("heading", { name: "Rodos'ta orman yangını: tahliye sürüyor" }),
+    ).toHaveAttribute("title", "Wildfires force evacuation of Rhodes");
+    expect(screen.queryByText("otomatik çeviri yok")).not.toBeInTheDocument();
+  });
+
+  it("says an untranslated headline is untranslated rather than letting it pass", () => {
+    render(
+      <RiskDetailDrawer
+        item={riskItem({
+          headline: "Wildfires force evacuation of Rhodes",
+          is_translated: false,
+        })}
+        onClose={vi.fn()}
+      />,
+    );
+
+    // The app's existing wording, reused verbatim -- a reader who learned it on
+    // the archive drawer must not have to learn a second phrase here.
+    expect(screen.getByText("otomatik çeviri yok")).toBeInTheDocument();
+    // ...and nothing to reveal on hover: the text shown IS the original.
+    expect(
+      screen.getByRole("heading", { name: "Wildfires force evacuation of Rhodes" }),
+    ).not.toHaveAttribute("title");
+  });
+
   it("closes on Escape", async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();

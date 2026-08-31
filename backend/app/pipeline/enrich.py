@@ -442,11 +442,25 @@ async def translate_pending_articles(db: AsyncSession, limit: int = 12) -> int:
     which can't translate) stays English. This backfills it a batch at a time
     without ever un-publishing an article the way a full re-enrich would.
 
-    Ordered by importance, then recency. Freshest-first was fine while the
-    backlog was small, but once the heuristic path started absorbing the
-    overflow (see LOCAL_FANOUT) the queue filled with routine wire copy, and
-    strict recency spent the translation budget on whatever happened to arrive
-    last rather than on the stories the desk opens the site for.
+    Ordered by risk classification, then importance, then recency.
+    Freshest-first was fine while the backlog was small, but once the heuristic
+    path started absorbing the overflow (see LOCAL_FANOUT) the queue filled
+    with routine wire copy, and strict recency spent the translation budget on
+    whatever happened to arrive last rather than on the stories the desk opens
+    the site for.
+
+    Risk-classified rows go first because Risk Radarı is the one surface with
+    no fallback for an untranslated row. Everywhere else an English headline is
+    a headline; there, the page is a Turkish disaster board, and a FIFO queue
+    left it reading half in English for days at a time -- risk articles are a
+    small minority of the feed, so under `importance_score DESC` they sat
+    behind whatever the day's loudest business story was, every run.
+
+    Budget-neutral, and deliberately so: this changes the ORDER of the queue,
+    never its size. The same `limit` articles are translated per run and the
+    same number of provider calls is made -- the risk backlog simply drains
+    first, and the rest of the queue keeps its existing importance/recency
+    order behind it.
 
     Only rows with translated_at IS NULL are touched, which by construction
     excludes the curated events (they carry translation_provider='curated' and a
@@ -467,6 +481,11 @@ async def translate_pending_articles(db: AsyncSession, limit: int = 12) -> int:
             ArticleEnrichment.translated_at.is_(None),
         )
         .order_by(
+            # False sorts before True in Postgres, so "risk_type IS NULL"
+            # ascending puts the risk-classified rows at the front. Written as
+            # the IS NULL test rather than as a CASE so the planner can use the
+            # column directly.
+            ArticleEnrichment.risk_type.is_(None).asc(),
             ArticleEnrichment.importance_score.desc().nulls_last(),
             Article.published_at.desc().nulls_last(),
         )

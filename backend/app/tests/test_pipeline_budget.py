@@ -527,3 +527,74 @@ async def test_translation_backlog_serves_the_important_stories_first(db_session
         if row.translated_at is not None
     ]
     assert translated == ["decisive"]
+
+
+async def test_risk_classified_rows_jump_the_translation_queue(db_session, monkeypatch):
+    """Risk Radarı is the one surface with no fallback for an untranslated row.
+
+    Everywhere else an English headline is still a headline; there the page is
+    a Turkish disaster board, and risk articles are a small enough minority of
+    the feed that under `importance_score DESC` they sat behind the day's
+    loudest business story on every single run. Budget-neutral: the same
+    `limit` rows are translated, in a different order.
+    """
+    from datetime import timedelta
+
+    from app.pipeline.enrich import translate_pending_articles
+
+    class Translator:
+        name = "test-translator"
+
+        async def translate(self, text, target="tr"):
+            return f"tr:{text}"
+
+    monkeypatch.setattr("app.pipeline.enrich.get_llm_provider", lambda: Translator())
+
+    source = Source(name="RiskQueue", url="https://example.com/rq", source_type="rss")
+    db_session.add(source)
+    await db_session.flush()
+
+    async def _untranslated(slug, importance, published_at, risk_type=None):
+        article = Article(
+            source_id=source.id, url=f"https://example.com/rq/{slug}", title=slug,
+            raw_content="body", published_at=published_at, fetched_at=NOW,
+            content_hash=slug, status="enriched",
+        )
+        db_session.add(article)
+        await db_session.flush()
+        db_session.add(
+            ArticleEnrichment(
+                article_id=article.id, headline=slug, summary="s",
+                category="safety", importance_score=importance,
+                risk_type=risk_type,
+            )
+        )
+        await db_session.flush()
+
+    # The risk story loses on BOTH of the old sort keys -- lowest importance
+    # and oldest -- so it can only come first if risk_type is read at all.
+    await _untranslated("loud-business-story", 0.95, NOW)
+    await _untranslated("middling", 0.50, NOW - timedelta(days=1))
+    await _untranslated("rhodes-wildfire", 0.10, NOW - timedelta(days=3), risk_type="wildfire")
+    await db_session.commit()
+
+    assert await translate_pending_articles(db_session, limit=1) == 1
+
+    from sqlalchemy import select
+
+    rows = list((await db_session.execute(select(ArticleEnrichment))).scalars())
+    translated = [row.headline for row in rows if row.translated_at is not None]
+    assert translated == ["rhodes-wildfire"]
+    # Budget-neutral, stated as an assertion: one call in, one row out, and the
+    # rest of the queue is untouched rather than additionally translated.
+    assert len([row for row in rows if row.translated_at is None]) == 2
+
+    # ...and behind the risk rows the old order is intact: importance, then
+    # recency. The next run takes the loud business story, not the middling one.
+    assert await translate_pending_articles(db_session, limit=1) == 1
+    translated = [
+        row.headline
+        for row in (await db_session.execute(select(ArticleEnrichment))).scalars()
+        if row.translated_at is not None
+    ]
+    assert sorted(translated) == ["loud-business-story", "rhodes-wildfire"]
