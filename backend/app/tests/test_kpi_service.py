@@ -19,35 +19,69 @@ async def fake_history(base_url, symbol, period):
     ]
 
 
-async def test_refresh_all_kpis_records_real_and_estimated_metrics(db_session, monkeypatch):
-    async def fake_airborne(base_url):
-        return 100
+# Every symbol the refresh job asks for a live quote, derived from the service's
+# own tables rather than transcribed. Five copies of a hand-written dict used to
+# live in this file, and adding a currency pair meant editing all five -- which
+# is exactly what broke when EUR/TRY and GBP/USD were added.
+QUOTES: dict[str, float] = {
+    "BZ=F": 80.0,
+    **{symbol: 70.0 for _, symbol, _, _ in kpi_service.LIVE_ENERGY_CONTRACTS},
+    **{
+        symbol: rate
+        for (_, symbol, _, _, _), rate in zip(
+            kpi_service.LIVE_FX_PAIRS,
+            (40.0, 43.0, 1.08, 1.35, 149.0, 0.84, 7.2),
+            strict=True,
+        )
+    },
+}
 
-    async def fake_quote(base_url, symbol):
-        return {
-            "BZ=F": 80.0,
-            "TRY=X": 40.0,
-            "EURUSD=X": 1.08,
-            "JPY=X": 149.0,
-            "EURGBP=X": 0.84,
-            "CNY=X": 7.2,
-        }[symbol]
+# What one full refresh writes, stated as its parts so a new pair or contract
+# moves these counts on its own.
+_AIRBORNE_ROWS = 2  # flights_airborne + the derived flights_today
+_BRENT_ROWS = 2  # oil_price + the derived fuel_price
+_ENERGY_ROWS = len(kpi_service.LIVE_ENERGY_CONTRACTS)
+_FX_PRIMARY_ROWS = len(kpi_service.LIVE_FX_PAIRS)
+_FX_CROSSCHECK_ROWS = len(kpi_service.LIVE_FX_PAIRS)
+_LY_ROWS = 2  # oil_price_ly + fx_usd_try_ly
 
-    async def fake_frankfurter(base_currency, quote_currency):
-        return 40.2
+LIVE_ROWS = (
+    _AIRBORNE_ROWS
+    + _BRENT_ROWS
+    + _ENERGY_ROWS
+    + _FX_PRIMARY_ROWS
+    + _FX_CROSSCHECK_ROWS
+    + _LY_ROWS
+)
 
+
+async def fake_airborne(base_url):
+    return 100
+
+
+async def fake_quote(base_url, symbol):
+    return QUOTES[symbol]
+
+
+async def fake_frankfurter(base_currency, quote_currency):
+    return 40.2
+
+
+def _stub_feeds(monkeypatch, *, history=fake_history, frankfurter=fake_frankfurter):
     monkeypatch.setattr(kpi_service, "fetch_airborne_count", fake_airborne)
     monkeypatch.setattr(kpi_service, "fetch_quote", fake_quote)
-    monkeypatch.setattr(kpi_service, "fetch_history", fake_history)
-    monkeypatch.setattr(kpi_service, "fetch_frankfurter_rate", fake_frankfurter)
+    monkeypatch.setattr(kpi_service, "fetch_history", history)
+    monkeypatch.setattr(kpi_service, "fetch_frankfurter_rate", frankfurter)
+
+
+async def test_refresh_all_kpis_records_real_and_estimated_metrics(db_session, monkeypatch):
+    _stub_feeds(monkeypatch)
 
     recorded = await kpi_service.refresh_all_kpis(db_session)
 
-    # 16 live rows -- flights_airborne, flights_today, oil_price, fuel_price,
-    # five FX pairs (primary + Frankfurter cross-check each), and the two
-    # stored last-year market prices -- plus one row per published IATA
-    # figure, which an empty database has none of yet.
-    assert recorded == 16 + len(kpi_service.latest_published_estimates())
+    # Every live row, plus one row per published IATA figure, which an empty
+    # database has none of yet.
+    assert recorded == LIVE_ROWS + len(kpi_service.latest_published_estimates())
 
     result = await db_session.execute(select(KPI).where(KPI.metric_key == "flights_airborne"))
     airborne = result.scalar_one()
@@ -81,65 +115,75 @@ async def test_refresh_all_kpis_records_real_and_estimated_metrics(db_session, m
     )
 
 
+async def test_refresh_records_the_new_energy_contracts_as_their_own_metrics(
+    db_session, monkeypatch
+):
+    """WTI and Henry Hub gas are traded contracts in their own right, not
+    something derived from Brent -- each gets its own primary row, its own
+    unit, and is marked as a real reading rather than an estimate."""
+    _stub_feeds(monkeypatch)
+
+    await kpi_service.refresh_all_kpis(db_session)
+
+    for metric_key, symbol, unit, _label in kpi_service.LIVE_ENERGY_CONTRACTS:
+        row = (
+            await db_session.execute(select(KPI).where(KPI.metric_key == metric_key))
+        ).scalar_one()
+        assert row.value == QUOTES[symbol]
+        assert row.unit == unit
+        assert row.is_estimate is False
+        assert row.is_primary is True
+        assert symbol in row.source
+
+
+async def test_refresh_records_every_live_fx_pair_including_the_new_ones(db_session, monkeypatch):
+    """EUR/TRY and GBP/USD were added to the board by the Kokpit revision; a
+    pair declared in LIVE_FX_PAIRS but never written would show as a
+    permanently empty card."""
+    _stub_feeds(monkeypatch)
+
+    await kpi_service.refresh_all_kpis(db_session)
+
+    for metric_key, symbol, _base, _quote, unit in kpi_service.LIVE_FX_PAIRS:
+        row = (
+            await db_session.execute(
+                select(KPI).where(KPI.metric_key == metric_key, KPI.is_primary.is_(True))
+            )
+        ).scalar_one()
+        assert row.value == QUOTES[symbol]
+        assert row.unit == unit
+
+    assert "fx_eur_try" in kpi_service.FX_PAIR_LABELS
+    assert kpi_service.FX_PAIR_LABELS["fx_eur_try"] == "EUR/TRY"
+    assert kpi_service.FX_PAIR_LABELS["fx_gbp_usd"] == "GBP/USD"
+
+
 async def test_refresh_does_not_rewrite_published_figures_that_have_not_moved(db_session, monkeypatch):
     """The second run of the day must add live readings only.
 
     Re-recording an unchanged IATA figure every 15 minutes is what previously
     turned one number into ~100 identical rows and flattened the trend line.
     """
-    async def fake_airborne(base_url):
-        return 100
-
-    async def fake_quote(base_url, symbol):
-        return {
-            "BZ=F": 80.0,
-            "TRY=X": 40.0,
-            "EURUSD=X": 1.08,
-            "JPY=X": 149.0,
-            "EURGBP=X": 0.84,
-            "CNY=X": 7.2,
-        }[symbol]
-
-    async def fake_frankfurter(base_currency, quote_currency):
-        return 40.2
-
-    monkeypatch.setattr(kpi_service, "fetch_airborne_count", fake_airborne)
-    monkeypatch.setattr(kpi_service, "fetch_quote", fake_quote)
-    monkeypatch.setattr(kpi_service, "fetch_history", fake_history)
-    monkeypatch.setattr(kpi_service, "fetch_frankfurter_rate", fake_frankfurter)
+    _stub_feeds(monkeypatch)
 
     await kpi_service.refresh_all_kpis(db_session)
     second_run = await kpi_service.refresh_all_kpis(db_session)
 
-    assert second_run == 16  # the live rows, and nothing else
+    assert second_run == LIVE_ROWS  # the live rows, and nothing else
 
 
 async def test_refresh_all_kpis_skips_frankfurter_row_when_unavailable(db_session, monkeypatch):
-    async def fake_airborne(base_url):
-        return 100
-
-    async def fake_quote(base_url, symbol):
-        return {
-            "BZ=F": 80.0,
-            "TRY=X": 40.0,
-            "EURUSD=X": 1.08,
-            "JPY=X": 149.0,
-            "EURGBP=X": 0.84,
-            "CNY=X": 7.2,
-        }[symbol]
-
     async def fake_frankfurter_unavailable(base_currency, quote_currency):
         return None
 
-    monkeypatch.setattr(kpi_service, "fetch_airborne_count", fake_airborne)
-    monkeypatch.setattr(kpi_service, "fetch_quote", fake_quote)
-    monkeypatch.setattr(kpi_service, "fetch_history", fake_history)
-    monkeypatch.setattr(kpi_service, "fetch_frankfurter_rate", fake_frankfurter_unavailable)
+    _stub_feeds(monkeypatch, frankfurter=fake_frankfurter_unavailable)
 
     recorded = await kpi_service.refresh_all_kpis(db_session)
 
-    # five fewer than a full run -- no cross-check row for any of the five pairs
-    assert recorded == 11 + len(kpi_service.latest_published_estimates())
+    # One fewer row per pair -- no cross-check row for any of them.
+    assert recorded == (
+        LIVE_ROWS - _FX_CROSSCHECK_ROWS + len(kpi_service.latest_published_estimates())
+    )
 
     result = await db_session.execute(select(KPI).where(KPI.metric_key == "fx_usd_try"))
     fx_rows = result.scalars().all()
@@ -181,26 +225,7 @@ async def test_refresh_stores_last_year_market_prices_off_the_request_path(db_se
     """The dashboard must never call Yahoo while serving a request, so the
     refresh job stores each market metric's price a year ago under a
     "<metric>_ly" key, outside the live series that feeds the sparkline."""
-    async def fake_airborne(base_url):
-        return 100
-
-    async def fake_quote(base_url, symbol):
-        return {
-            "BZ=F": 80.0,
-            "TRY=X": 40.0,
-            "EURUSD=X": 1.08,
-            "JPY=X": 149.0,
-            "EURGBP=X": 0.84,
-            "CNY=X": 7.2,
-        }[symbol]
-
-    async def fake_frankfurter(base_currency, quote_currency):
-        return 40.2
-
-    monkeypatch.setattr(kpi_service, "fetch_airborne_count", fake_airborne)
-    monkeypatch.setattr(kpi_service, "fetch_quote", fake_quote)
-    monkeypatch.setattr(kpi_service, "fetch_history", fake_history)
-    monkeypatch.setattr(kpi_service, "fetch_frankfurter_rate", fake_frankfurter)
+    _stub_feeds(monkeypatch)
 
     await kpi_service.refresh_all_kpis(db_session)
 
@@ -216,33 +241,14 @@ async def test_refresh_stores_last_year_market_prices_off_the_request_path(db_se
 
 
 async def test_refresh_survives_a_yahoo_history_outage(db_session, monkeypatch):
-    async def fake_airborne(base_url):
-        return 100
-
-    async def fake_quote(base_url, symbol):
-        return {
-            "BZ=F": 80.0,
-            "TRY=X": 40.0,
-            "EURUSD=X": 1.08,
-            "JPY=X": 149.0,
-            "EURGBP=X": 0.84,
-            "CNY=X": 7.2,
-        }[symbol]
-
     async def broken_history(base_url, symbol, period):
         raise RuntimeError("yahoo down")
 
-    async def fake_frankfurter(base_currency, quote_currency):
-        return 40.2
-
-    monkeypatch.setattr(kpi_service, "fetch_airborne_count", fake_airborne)
-    monkeypatch.setattr(kpi_service, "fetch_quote", fake_quote)
-    monkeypatch.setattr(kpi_service, "fetch_history", broken_history)
-    monkeypatch.setattr(kpi_service, "fetch_frankfurter_rate", fake_frankfurter)
+    _stub_feeds(monkeypatch, history=broken_history)
 
     # The live readings still land; only the LY rows are missing.
     recorded = await kpi_service.refresh_all_kpis(db_session)
-    assert recorded == 14 + len(kpi_service.latest_published_estimates())
+    assert recorded == LIVE_ROWS - _LY_ROWS + len(kpi_service.latest_published_estimates())
     assert (
         await db_session.execute(select(KPI).where(KPI.metric_key == "oil_price_ly"))
     ).scalar_one_or_none() is None

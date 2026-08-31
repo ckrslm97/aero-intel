@@ -44,6 +44,56 @@ class FxForecastOut(BaseModel):
     publication_date: date
     source_url: str
     note_tr: str | None
+    #: The date this forecast is FOR, so a chart can place its marker on a time
+    #: axis. Derived, never published: see `forecast_target_date` in
+    #: app/api/v1/kokpit.py for the exact mapping and its limits. None where
+    #: the institution's own wording supports no honest date at all -- such a
+    #: row keeps its place in the table and simply gets no marker.
+    target_date: date | None = None
+    #: How `target_date` was arrived at, in Turkish, for the chart's tooltip.
+    #: None alongside a None target_date.
+    target_date_basis_tr: str | None = None
+
+
+class EnergyMetricOut(BaseModel):
+    """One row of Kokpit's "Yakıt & Enerji" panel.
+
+    Every percentage here is arithmetic over that contract's own daily closes
+    (see app/services/energy_service.py). None means the series does not
+    support the figure -- never zero, and never a shorter window wearing a
+    longer window's label. There is deliberately no supply/geopolitical "risk
+    matrix" field: this system ingests prices, not supply balances.
+    """
+
+    metric_key: str
+    label_tr: str
+    unit: str
+    value: float | None
+    as_of: datetime | None
+    day_change_pct: float | None
+    week_change_pct: float | None
+    month_change_pct: float | None
+    ytd_change_pct: float | None
+    #: 0-100: where today's close sits in its own last year of closes.
+    percentile_1y: float | None
+    #: Annualised realised volatility over the last ~21 sessions, in percent.
+    volatility_30d_pct: float | None
+    sparkline: list[float]
+    source: str
+    source_url: str
+    href: str
+    #: True for the derived jet-fuel row, false for a traded contract.
+    is_estimate: bool
+    #: The derivation, printed next to the number rather than tucked away.
+    note_tr: str | None
+
+
+class EnergyBoardOut(BaseModel):
+    metrics: list[EnergyMetricOut]
+    #: How the volatility and percentile columns were computed, verbatim, so
+    #: the panel can print its own method instead of asserting a number.
+    volatility_method_tr: str
+    percentile_method_tr: str
 
 
 class IataIndicatorOut(BaseModel):

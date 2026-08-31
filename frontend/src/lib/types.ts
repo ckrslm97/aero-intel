@@ -634,6 +634,47 @@ export interface FxForecastOut {
   publication_date: string;
   source_url: string;
   note_tr: string | null;
+  /** The date this forecast is FOR -- derived server-side purely so a chart
+   * has an x coordinate for the marker, never published by the institution.
+   * `horizon_label` above stays the only thing the table prints. null where
+   * the wording supports no honest date, in which case the row appears in the
+   * table and simply has no marker on the chart. */
+  target_date: string | null;
+  /** How `target_date` was arrived at, for the marker's tooltip. */
+  target_date_basis_tr: string | null;
+}
+
+/** One row of "Yakıt & Enerji". Mirrors `EnergyMetricOut` in
+ * backend/app/schemas/kokpit.py: every percentage is arithmetic over that
+ * contract's own daily closes, and every null means the series does not
+ * support the figure -- never zero. */
+export interface EnergyMetricOut {
+  metric_key: string;
+  label_tr: string;
+  unit: string;
+  value: number | null;
+  as_of: string | null;
+  day_change_pct: number | null;
+  week_change_pct: number | null;
+  month_change_pct: number | null;
+  ytd_change_pct: number | null;
+  /** 0-100: where today's close sits inside its own last year of closes. */
+  percentile_1y: number | null;
+  /** Annualised REALISED volatility over ~21 sessions. Not implied -- there is
+   * no options data in this system. */
+  volatility_30d_pct: number | null;
+  sparkline: number[];
+  source: string;
+  source_url: string;
+  href: string;
+  is_estimate: boolean;
+  note_tr: string | null;
+}
+
+export interface EnergyBoardOut {
+  metrics: EnergyMetricOut[];
+  volatility_method_tr: string;
+  percentile_method_tr: string;
 }
 
 export interface IataIndicatorOut {

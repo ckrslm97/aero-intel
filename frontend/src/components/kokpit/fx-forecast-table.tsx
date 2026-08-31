@@ -4,6 +4,7 @@ import { ExternalLink } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 
 import { DataSourceError, LastUpdatedStamp, StaleDataBanner } from "@/components/data-source-error";
+import { FxForecastChart } from "@/components/kokpit/fx-forecast-chart-lazy";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDataSource } from "@/hooks/use-data-source";
@@ -123,6 +124,20 @@ export function FxForecastTable() {
     [rows, pair, horizon],
   );
 
+  /** The pair the chart draws. The filter chips drive it; with "Tümü"
+   * selected it falls back to USD/TRY -- the rate every other surface on this
+   * page anchors on -- and to whatever pair exists if USD/TRY has no rows. */
+  const chartPair = useMemo(() => {
+    if (pair) return pair;
+    if (pairs.includes("USD/TRY")) return "USD/TRY";
+    return pairs[0] ?? null;
+  }, [pair, pairs]);
+
+  const chartRows = useMemo(
+    () => (rows ?? []).filter((row) => row.currency_pair === chartPair),
+    [rows, chartPair],
+  );
+
   // Grouped by pair only -- see ForecastRangeBar for why the horizons are not
   // bucketed. A pair with a single published forecast gets no bar: a "range"
   // of one is just the number, and it is already in the table below.
@@ -145,8 +160,13 @@ export function FxForecastTable() {
     }
     return [...groups.values()]
       .filter((group) => group.rows.length > 1)
+      // The charted pair is deliberately excluded: the chart below already
+      // draws its spread on a real date axis, and printing the same range
+      // twice, once flattened and once dated, invites the reader to think
+      // they are two different measurements.
+      .filter((group) => group.pair !== chartPair)
       .sort((a, b) => a.pair.localeCompare(b.pair));
-  }, [filtered]);
+  }, [filtered, chartPair]);
 
   if (!loaded) {
     return <Skeleton className="h-64 w-full rounded-xl" />;
@@ -194,6 +214,25 @@ export function FxForecastTable() {
           </button>
         ))}
       </div>
+
+      {chartPair && chartRows.length > 0 && (
+        <div
+          style={{ "--glow-color": "var(--primary)" } as React.CSSProperties}
+          className="rounded-xl border-gradient p-3 shadow-elev-1"
+        >
+          <div className="mb-1 flex flex-wrap items-baseline gap-x-2">
+            <h4 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              {chartPair} · gerçekleşen kur ve kurum tahminleri
+            </h4>
+            {!pair && (
+              <span className="text-[10px] text-muted-foreground/70">
+                başka bir parite için yukarıdan seçin
+              </span>
+            )}
+          </div>
+          <FxForecastChart pair={chartPair} rows={chartRows} />
+        </div>
+      )}
 
       {ranges.length > 0 && (
         <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">

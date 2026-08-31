@@ -1,22 +1,29 @@
 "use client";
 
-import { ArrowDownRight, ArrowUpRight, Fuel, Minus } from "lucide-react";
+import { ArrowDownRight, ArrowUpRight, Fuel, Info, Minus } from "lucide-react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useCallback, useState } from "react";
 
 import { DataSourceError } from "@/components/data-source-error";
+import { MotionItem, MotionList } from "@/components/motion/motion-list";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDataSource } from "@/hooks/use-data-source";
 import { apiFetch } from "@/lib/api";
 import { signalLevelStyle } from "@/lib/cockpit";
 import { formatRate, formatSignedPct } from "@/lib/format";
-import type { CockpitSignal, KpiDetailOut, KpiOut, KpiPeriod } from "@/lib/types";
+import type {
+  CockpitSignal,
+  EnergyBoardOut,
+  EnergyMetricOut,
+  KpiDetailOut,
+  KpiPeriod,
+} from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const KpiDetailChart = dynamic(
   () => import("@/components/charts/kpi-detail-chart").then((m) => m.KpiDetailChart),
-  { ssr: false, loading: () => <Skeleton className="h-[200px] w-full rounded-lg" /> },
+  { ssr: false, loading: () => <Skeleton className="h-[180px] w-full rounded-lg" /> },
 );
 
 const PERIODS: { id: KpiPeriod; label: string }[] = [
@@ -52,30 +59,138 @@ function DeltaPill({ deltaPct }: { deltaPct: number | null }) {
   );
 }
 
-/** "Yakıt & Enerji": Brent's real history, and the jet-fuel number derived
- * from it, with the derivation printed rather than implied.
+/** A percent change, or an em dash. Never a zero standing in for "unknown". */
+function Change({ value }: { value: number | null }) {
+  if (value === null) {
+    return (
+      <span className="text-muted-foreground/60" title="Bu pencere için yeterli geçmiş yok">
+        —
+      </span>
+    );
+  }
+  return (
+    <span
+      className={cn(
+        "font-semibold tabular-nums",
+        value === 0 ? "text-muted-foreground" : value > 0 ? "text-critical" : "text-good",
+      )}
+    >
+      {formatSignedPct(value)}
+    </span>
+  );
+}
+
+/** One row of the indicator grid: the contract, its price, and the five
+ * figures that ARE derivable from its own closes. */
+function EnergyRow({ metric }: { metric: EnergyMetricOut }) {
+  return (
+    <MotionItem
+      variant="scalePop"
+      style={{ "--glow-color": "var(--chart-5)" } as React.CSSProperties}
+      className="grid grid-cols-[minmax(6.5rem,1.2fr)_repeat(5,minmax(2.6rem,1fr))] items-baseline gap-x-2 gap-y-0.5 rounded-lg px-2 py-1.5 text-[11px] transition-colors hover:bg-accent/40"
+    >
+      <Link
+        href={metric.href}
+        title={metric.note_tr ?? metric.source}
+        className="flex min-w-0 flex-col rounded focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+      >
+        <span className="truncate font-medium">{metric.label_tr}</span>
+        <span className="flex items-baseline gap-1">
+          <span className="font-semibold tabular-nums dark:text-glow">
+            {metric.value === null ? "—" : formatRate(metric.value)}
+          </span>
+          <span className="text-[9px] text-muted-foreground">{metric.unit}</span>
+        </span>
+      </Link>
+      <span className="text-right">
+        <Change value={metric.week_change_pct} />
+      </span>
+      <span className="text-right">
+        <Change value={metric.month_change_pct} />
+      </span>
+      <span className="text-right">
+        <Change value={metric.ytd_change_pct} />
+      </span>
+      <span className="text-right tabular-nums">
+        {metric.percentile_1y === null ? (
+          <span className="text-muted-foreground/60">—</span>
+        ) : (
+          // Neutral: a high percentile is a high cost base, but the fuel
+          // SIGNAL tile is what bands that -- colouring it here would be a
+          // second, unstated threshold.
+          <span className="font-semibold">%{metric.percentile_1y.toFixed(0)}</span>
+        )}
+      </span>
+      <span className="text-right tabular-nums">
+        {metric.volatility_30d_pct === null ? (
+          <span className="text-muted-foreground/60">—</span>
+        ) : (
+          <span className="font-semibold">%{metric.volatility_30d_pct.toFixed(0)}</span>
+        )}
+      </span>
+    </MotionItem>
+  );
+}
+
+function IndicatorGrid({ board }: { board: EnergyBoardOut }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="grid grid-cols-[minmax(6.5rem,1.2fr)_repeat(5,minmax(2.6rem,1fr))] gap-x-2 px-2 text-[9px] font-semibold uppercase tracking-wider text-muted-foreground">
+        <span>Kontrat</span>
+        <span className="text-right">1 hf</span>
+        <span className="text-right">1 ay</span>
+        <span className="text-right">YBB</span>
+        <span
+          className="cursor-help text-right"
+          title={board.percentile_method_tr}
+        >
+          1y dilim
+        </span>
+        <span
+          className="cursor-help text-right"
+          title={board.volatility_method_tr}
+        >
+          30g vol
+        </span>
+      </div>
+      <MotionList className="flex flex-col">
+        {board.metrics.map((metric) => (
+          <EnergyRow key={metric.metric_key} metric={metric} />
+        ))}
+      </MotionList>
+      <p className="flex items-start gap-1 px-2 text-[10px] leading-relaxed text-muted-foreground">
+        <Info className="mt-px size-3 shrink-0" aria-hidden />
+        <span>
+          YBB = yılbaşından bugüne. Her yüzde, o kontratın kendi günlük kapanışları üzerinden
+          hesaplanır; bir pencereyi taşıyacak veri yoksa “—” yazar, sıfır yazmaz. Arz, rafineri
+          kapasitesi veya jeopolitik risk gibi bir “risk matrisi” burada yoktur — bu sistem fiyat
+          serisi toplar, arz dengesi toplamaz.
+        </span>
+      </p>
+    </div>
+  );
+}
+
+/** "Yakıt & Enerji": Brent's real history, the jet-fuel number derived from
+ * it, and the two other energy contracts this system now records -- each with
+ * the indicators its own series actually supports.
  *
- * Two honesty requirements shape this panel:
+ * Three honesty requirements shape this panel:
  *
  * * Jet fuel is not a quote. It is Brent plus IATA's published crack-spread
  *   assumption, and the caption says exactly that on the same line as the
- *   number -- not in a tooltip, not in a footnote.
+ *   number. Its PERCENTAGES are computed over the derived series, not copied
+ *   from Brent's -- adding a constant does not preserve percent changes.
  * * The risk chip is NOT recomputed here. It is the same `fuel` signal the
  *   Sinyal Panosu renders, passed in from the same fetch, so the two cannot
  *   band the same Brent price differently.
+ * * There is no supply/geopolitical risk matrix. Every row of one would have
+ *   been invented; see the note the grid prints for itself.
  */
-export function FuelEnergy({
-  signal,
-  fuelKpi,
-}: {
-  signal: CockpitSignal | null;
-  /** The backend's own derived jet-fuel reading, so the crack spread is never
-   * re-added in the browser. */
-  fuelKpi: KpiOut | null;
-}) {
+export function FuelEnergy({ signal }: { signal: CockpitSignal | null }) {
   const [period, setPeriod] = useState<KpiPeriod>("1m");
 
-  const fetcher = useCallback(
+  const brentFetcher = useCallback(
     (abort: AbortSignal) =>
       apiFetch<KpiDetailOut>(`/kpis/oil_price?period=${period}`, {
         cache: "default",
@@ -83,14 +198,22 @@ export function FuelEnergy({
       }),
     [period],
   );
-  const { data, error, loaded, retry, lastUpdated } = useDataSource(fetcher, [period]);
+  const { data, error, loaded, retry, lastUpdated } = useDataSource(brentFetcher, [period]);
+
+  const energyFetcher = useCallback(
+    (abort: AbortSignal) =>
+      apiFetch<EnergyBoardOut>("/kokpit/energy", { cache: "default", signal: abort }),
+    [],
+  );
+  const energy = useDataSource(energyFetcher, []);
+
   const style = signalLevelStyle(signal?.level ?? "unknown");
 
   return (
     <div className="flex h-full flex-col gap-3 rounded-xl border border-border bg-card bg-card-sheen p-4 shadow-elev-1">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <Fuel className="size-4 text-chart-5" aria-hidden />
-        <h3 className="text-sm font-semibold">Brent &amp; Jet Yakıtı</h3>
+        <h3 className="text-sm font-semibold">Enerji Kontratları</h3>
         {signal && (
           <span
             title={signal.method_tr}
@@ -118,12 +241,15 @@ export function FuelEnergy({
       </div>
 
       {!loaded ? (
-        <Skeleton className="h-[240px] w-full rounded-lg" />
+        <Skeleton className="h-[220px] w-full rounded-lg" />
       ) : error && !data ? (
         <DataSourceError onRetry={retry} lastUpdated={lastUpdated} />
       ) : !data ? null : (
         <>
           <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Brent
+            </span>
             <span className="text-2xl font-semibold tabular-nums dark:text-glow">
               {formatRate(data.value)}
             </span>
@@ -138,30 +264,12 @@ export function FuelEnergy({
           </div>
 
           {data.history.length > 1 ? (
-            <div className="[&_>div]:!h-[200px]">
+            <div className="[&_>div]:!h-[180px]">
               <KpiDetailChart history={data.history} period={data.period} unit={data.unit} />
             </div>
           ) : (
             <p className="rounded-lg border border-dashed border-border p-6 text-center text-xs text-muted-foreground">
               Bu dönem için geçmiş veri yok.
-            </p>
-          )}
-
-          {/* The derived number, with its derivation on the same line. Never a
-              jet-fuel index quote -- there is no licensed feed for one here.
-              The VALUE is the backend's own fuel_price reading rather than
-              `data.value + 57` computed in the browser: the crack spread is a
-              constant kpi_service.py owns, and a second copy of it here would
-              have been one more place to forget when IATA revises it (which is
-              exactly how the history endpoint ended up stuck on a stale
-              1.18x multiplier -- fixed in this same change). */}
-          {fuelKpi && (
-            <p className="rounded-lg bg-muted/50 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
-              <span className="font-semibold text-foreground">
-                Jet yakıtı ≈ {formatRate(fuelKpi.value)} {fuelKpi.unit}
-              </span>{" "}
-              — tahmini: Brent + 57$ crack varsayımı (IATA Küresel Görünüm, Haziran 2026). Lisanslı
-              bir jet yakıtı endeksi kotasyonu değildir.
             </p>
           )}
 
@@ -176,6 +284,19 @@ export function FuelEnergy({
           </a>
         </>
       )}
+
+      {/* The dense half: the four contracts and everything their own series
+          supports. Fills what used to be empty space under the chart with
+          real, re-runnable arithmetic instead of an invented risk matrix. */}
+      <div className="mt-auto border-t border-border pt-2">
+        {!energy.loaded ? (
+          <Skeleton className="h-24 w-full rounded-lg" />
+        ) : energy.error && !energy.data ? (
+          <DataSourceError onRetry={energy.retry} lastUpdated={energy.lastUpdated} />
+        ) : energy.data ? (
+          <IndicatorGrid board={energy.data} />
+        ) : null}
+      </div>
     </div>
   );
 }
