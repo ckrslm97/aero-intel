@@ -32,6 +32,12 @@ on:
           - check-data-quality
           - mark-legacy-campaigns-superseded
           - backfill-campaign-classes
+          - purge-blacklisted-articles
+      dry_run:
+        description: "purge-blacklisted-articles only: count the matching rows and write nothing. Run this first."
+        required: false
+        type: boolean
+        default: false
       days:
         description: "re-enrich only: limit to articles fetched in the last N days (blank = all)"
         required: false
@@ -83,6 +89,7 @@ jobs:
           DAYS: ${{ inputs.days }}
           LIMIT: ${{ inputs.limit }}
           FULL_SURFACE: ${{ inputs.full_surface }}
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
           case "${{ inputs.task }}" in
@@ -159,6 +166,17 @@ jobs:
               # open alerts acknowledged. Heuristic-only -- no LLM calls, so
               # it is safe to re-run after any change to the keyword tables.
               python -m app.cli backfill-campaign-classes ;;
+            purge-blacklisted-articles)
+              # Retires archived articles from blacklisted domains (Reddit) by
+              # setting status=rejected_blacklist -- kept, never deleted, and
+              # excluded from every listing. Idempotent, so a second dispatch
+              # reports zero new work rather than doing damage. Dispatch it
+              # once with dry_run checked to see the blast radius first.
+              if [ "${DRY_RUN}" = "true" ]; then
+                python -m app.cli purge-blacklisted-articles --dry-run
+              else
+                python -m app.cli purge-blacklisted-articles
+              fi ;;
             *)
               echo "Unknown task: ${{ inputs.task }}" >&2
               exit 1 ;;

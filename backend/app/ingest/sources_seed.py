@@ -136,6 +136,12 @@ FREE_RSS_SOURCES: list[SourceSeed] = [
     # r/TurkishAirlines stays: it feeds BİZ's customer-voice channel
     # (app/ingest/tk_reviews_live.py), a deliberately different use of Reddit
     # from "treat it as a news source", and is not seeded here at all.
+    #
+    # Round 10: removing the seeds turned out to be half the fix. Reddit kept
+    # arriving as *items inside the Google News radars* below, because
+    # reddit.com ranks for consumer-travel phrases and Google News hands back
+    # whatever ranked. app/ingest/blacklist.py now drops those at ingest, so
+    # this list and the item filter enforce the same ban from both ends.
     # Google News topic radars: keyless aggregator RSS scoped to the newspaper's
     # focus areas (RM / pricing / NDC / ancillary / demand) and the user's main
     # rivals. Trust sits low because items come from arbitrary publishers; our
@@ -368,6 +374,132 @@ FREE_RSS_SOURCES: list[SourceSeed] = [
         "https://news.google.com/rss/search?q=%22Qatar+Airways%22+sale+fares&hl=en-US&gl=US&ceid=US:en",
         "rss", "airline", 0.45, tier="aggregator",
     ),
+    # ---------------------------------------------------------------------
+    # Round-10: the rest of the tracked carriers, plus generic fare-sale
+    # radars. Round 9 left five of the tracked carriers without a campaign
+    # query of their own and had no language coverage outside TR/EN at all,
+    # which is why "hala çok az kampanya tespit ediliyor" survived it: a
+    # Turkish desk does not report a KLM sale and an English desk does not
+    # report an Air France one.
+    #
+    # Same bar as round 9, re-applied: fetched live on 2026-08-31, HTTP 200,
+    # >= 5 items, then the newest ~20 headlines read one by one and scored for
+    # actual fare-campaign content (a sale, a discount, a booking window) as
+    # opposed to loyalty/award news, route launches or product reviews. The
+    # measured ratio is recorded per source. Anything under ~50% was rejected
+    # and written up in DROPPED_CANDIDATES -- five candidates were, including
+    # both Lufthansa attempts and the Dutch KLM one, so this list is shorter
+    # than the carrier roster on purpose.
+    #
+    # Budget note: everything here flows through the existing relevance gate
+    # (PROMO_WITH_AVIATION_BONUS) and then the business-class rulepacks, so
+    # loyalty and product junk that slips past the query is still filtered
+    # after ingest. That is a safety net, not a licence -- precision at the
+    # query level is what keeps the LLM stage affordable, which is why the
+    # ratio above is measured rather than assumed.
+    #
+    # Percent-encoding: same rule as round 9 and now load-bearing in four more
+    # scripts. news.google.com answers HTTP 400 to a raw non-ASCII `q`, so the
+    # Turkish, German and Arabic queries below MUST stay encoded.
+    # ---------------------------------------------------------------------
+    # Per-carrier radars for the tracked carriers round 9 missed.
+    # ~95% fare content -- the densest English-language carrier radar in the
+    # list. The trick is the exact phrases: Emirates PR says "special fares",
+    # and quoting it excludes the NerdWallet/Simple Flying explainer genre that
+    # sank the looser "Emirates flight sale fares" attempt (~35%, dropped).
+    SourceSeed(
+        "Google News · Emirates Special Fares",
+        "https://news.google.com/rss/search?q=%22Emirates%22%20%22flight%20sale%22%20OR%20%22special%20fares%22%20OR%20%22fare%20sale%22&hl=en-US&gl=US&ceid=US:en",
+        "rss", "airline", 0.5, tier="aggregator",
+    ),
+    # ~95% fare content. SIA runs named, dated public sales ("Time To Fly",
+    # "Global Fare Sale") and the Singapore consumer desks cover every one of
+    # them with the fare and the booking deadline in the headline.
+    SourceSeed(
+        "Google News · Singapore Airlines Promo Fares",
+        "https://news.google.com/rss/search?q=%22Singapore%20Airlines%22%20promotion%20fares%20OR%20%22promo%20fares%22&hl=en-SG&gl=SG&ceid=SG:en",
+        "rss", "airline", 0.5, tier="aggregator",
+    ),
+    # ~85% fare content, and the only French-language input this product has.
+    # Note it catches Transavia and KLM alongside AF, because the French press
+    # reports the group's seasonal promos as one story -- which is also the
+    # closest thing to KLM campaign coverage that survived verification.
+    SourceSeed(
+        "Google News · Air France Promotions",
+        "https://news.google.com/rss/search?q=%22Air%20France%22%20promotion%20vols%20OR%20%22billets%20pas%20chers%22&hl=fr&gl=FR&ceid=FR:fr",
+        "rss", "airline", 0.5, tier="aggregator", language="fr",
+    ),
+    # ~75% fare content. Unusual shape: over half the items are BA's own media
+    # centre, so this radar is effectively an official-announcement feed for a
+    # carrier that publishes no RSS -- it stays tier="aggregator" because that
+    # is how it arrives and what the confidence scorer should assume, but it is
+    # the reason the trust weight sits at the top of the aggregator band.
+    SourceSeed(
+        "Google News · British Airways Sale Fares",
+        "https://news.google.com/rss/search?q=%22British%20Airways%22%20sale%20fares&hl=en-GB&gl=GB&ceid=GB:en",
+        "rss", "airline", 0.55, tier="aggregator",
+    ),
+    # ~70% fare content. TK's own campaigns already arrive in Turkish at ~95%
+    # (the THY radar above); this is the outbound half -- the US/Canada sales
+    # the Turkish desks do not cover, which are the ones a rival's revenue
+    # desk would actually be watching.
+    SourceSeed(
+        "Google News · Turkish Airlines Sale Fares",
+        "https://news.google.com/rss/search?q=%22Turkish%20Airlines%22%20sale%20OR%20promotion%20fares&hl=en-US&gl=US&ceid=US:en",
+        "rss", "airline", 0.5, tier="aggregator",
+    ),
+    # ~78% fare content but only 9 items in the whole feed -- AJet is barely
+    # covered in English and one publisher (turkiyetoday.com) writes most of
+    # it. Kept because the density is real and the cost of a nine-item feed is
+    # nil; re-check it rather than trusting it if AJet coverage ever matters
+    # more than it does today.
+    SourceSeed(
+        "Google News · AJet Sale Fares",
+        "https://news.google.com/rss/search?q=%22AJet%22%20sale%20OR%20promotion%20fares&hl=en-US&gl=US&ceid=US:en",
+        "rss", "airline", 0.5, tier="aggregator",
+    ),
+    # Generic fare-sale radars -- four, not one per carrier. A carrier query
+    # only finds a sale once someone names the carrier; these catch the sale
+    # itself, including from carriers nobody thought to track, and they are the
+    # cheapest way to widen recall without another twenty seeds.
+    # ~100% fare content, 100 items, and every single sampled headline was a
+    # Turkish carrier campaign with the price in it. The best feed in this
+    # file by density, national desks included (AA, NTV, CNN Türk, Milliyet).
+    SourceSeed(
+        "Google News · Uçak Bileti Kampanya",
+        "https://news.google.com/rss/search?q=u%C3%A7ak%20bileti%20kampanya%20indirim&hl=tr&gl=TR&ceid=TR:tr",
+        "rss", "airline", 0.5, tier="aggregator", language="tr",
+    ),
+    # ~100% fare content. Covers the Gulf carriers in their home market, where
+    # QR/EK/EY announce discounts that the English-language desks pick up days
+    # later or not at all -- plus Saudia, flynas and EgyptAir, which no other
+    # feed in this file reaches. First Arabic-language source in the product.
+    SourceSeed(
+        "Google News · عروض طيران (Körfez Kampanyaları)",
+        "https://news.google.com/rss/search?q=%D8%B9%D8%B1%D9%88%D8%B6%20%D8%B7%D9%8A%D8%B1%D8%A7%D9%86%20%D8%AA%D8%B0%D8%A7%D9%83%D8%B1%20%D8%AE%D8%B5%D9%85&hl=ar&gl=SA&ceid=SA:ar",
+        "rss", "airline", 0.5, tier="aggregator", language="ar",
+    ),
+    # ~80% fare content, 100 items. Carrier-agnostic by design: the sampled
+    # items were mostly Philippine Airlines and the US low-cost carriers, i.e.
+    # not the tracked roster -- that is the point of a generic radar, and the
+    # relevance gate is what decides whether an untracked carrier's flash sale
+    # is worth an enrichment call.
+    SourceSeed(
+        "Google News · Flash Sale Radarı",
+        "https://news.google.com/rss/search?q=airline%20%22flash%20sale%22%20fares&hl=en-US&gl=US&ceid=US:en",
+        "rss", "airline", 0.45, tier="aggregator",
+    ),
+    # ~63% fare content -- the weakest feed added this round, and the second
+    # German query tried: "Flugangebote Sale OR Aktion" returned nine items at
+    # ~55%, and the plain "Lufthansa Angebot" shape was a disaster (see
+    # DROPPED_CANDIDATES). Kept at a lower trust weight because German fare
+    # coverage is dominated by loyalty blogs and this is the only wording that
+    # reached the majority bar; it is the only German input the product has.
+    SourceSeed(
+        "Google News · Flugtickets Rabattaktion",
+        "https://news.google.com/rss/search?q=Airline%20Rabattaktion%20OR%20Sonderangebot%20Flugtickets%20g%C3%BCnstig&hl=de&gl=DE&ceid=DE:de",
+        "rss", "airline", 0.4, tier="aggregator", language="de",
+    ),
 ]
 
 # Documented drops -- candidates fetched at round-7 build time that failed the
@@ -458,6 +590,39 @@ FREE_RSS_SOURCES: list[SourceSeed] = [
 #                                   are, not promoted into the campaign radars.
 #   Simple Flying / AeroTime / AirlineGeeks  ~0% fare-campaign content when sampled for it.
 #   Lufthansa, KLM English RSS      0 bytes. The endpoint answers, with nothing in it.
+# Round-10 campaign-radar candidates (sampled 2026-08-31). All eight returned
+# HTTP 200 and a valid feed -- every rejection below is on CONTENT, at the
+# ~50% fare-campaign bar, which is the bar worth re-reading before anyone
+# "fixes the gap" by re-adding one of them:
+#   "Lufthansa Angebot OR Sparangebot Flug" (de)   ~5%. The trap is the word: German
+#                                   "Angebot" means supply as much as offer, so the feed
+#                                   came back as capacity news -- "Lufthansa reduziert
+#                                   Angebot nach New York", "streicht 20.000 Flüge".
+#                                   Correct German, wrong meaning.
+#   "Lufthansa" fare sale OR promotion (en)        ~25%. Miles & More award charts and
+#                                   Allegris cabin news, not fares.
+#   Lufthansa Rabatt OR Aktion Flugtickets (de)    ~40%, and 50% outright loyalty --
+#                                   meilenoptimieren.com alone wrote half the sample.
+#                                   Third attempt at LH and the closest; still under
+#                                   the bar. LH campaigns reach us only through the
+#                                   multi-carrier "Rakip Kampanyalar" radar for now.
+#   KLM aanbieding OR ticketactie vliegtickets (nl) ~15%. Dutch KLM coverage in the
+#                                   sample window was labour disputes and strikes.
+#                                   KL is instead partly covered by the French
+#                                   Air France radar, which reports the group's
+#                                   promos as one story.
+#   "Pegasus Airlines" sale OR promotion fares (en) ~22%. Route launches plus Reuters
+#                                   Middle-East cancellation factboxes. PC is already
+#                                   at ~100% via "Pegasus kampanya bilet" (tr), so
+#                                   this added nothing but volume.
+#   "Emirates" flight sale fares (en)              ~35%, and Emirates airline sale
+#                                   discount fares booking (en-AE) ~30% -- both drowned
+#                                   in "Emirates Business Class: What to Know" explainers.
+#                                   The quoted-phrase version above is what worked.
+#   Flugangebote Sale OR Aktion Flugtickets (de)   ~55% but only 9 items, a third of
+#                                   them loyalty. Superseded by the Rabattaktion query.
+#   Fluggesellschaft Sparpreise OR Ticketaktion (de) 10 items, all ten Corendon press
+#                                   releases from one publisher. Not a radar, a newsroom.
 # Off-topic / too broad to be worth the ingest budget: Economist Business,
 # BBC Business, MercoPress, Flying Magazine, Rotor & Wing, Aerospace Testing
 # International, Aerospace Manufacturing & Design -- all returned valid feeds

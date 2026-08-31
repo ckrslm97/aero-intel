@@ -11,6 +11,7 @@ from bs4 import BeautifulSoup
 
 from app.core.logging import get_logger
 from app.ingest.base import RawArticle
+from app.ingest.blacklist import blacklisted_domain
 
 logger = get_logger(__name__)
 
@@ -61,6 +62,22 @@ def _entry_published_at(entry: feedparser.FeedParserDict) -> datetime | None:
     return datetime(*parsed[:6], tzinfo=timezone.utc)
 
 
+def _entry_publisher_url(entry: feedparser.FeedParserDict) -> str | None:
+    """The publisher a Google News item actually came from.
+
+    Google News wraps every `link` in an opaque news.google.com redirect (see
+    app/ingest/blacklist.py for why it cannot be decoded), but it also emits
+    `<source url="https://www.reddit.com">Reddit</source>` naming the
+    publisher. feedparser exposes that as entry.source["href"]. Publisher feeds
+    generally have no <source> element at all, which is fine -- their own
+    `link` is already the real URL.
+    """
+    source = entry.get("source")
+    if not source:
+        return None
+    return source.get("href")
+
+
 # A Google News radar returns ~100 items every run and eight of them drive most
 # of the daily volume. Publisher feeds carry maybe 10-30 items of their own
 # reporting, so they are worth taking whole; aggregator queries are a firehose
@@ -103,10 +120,23 @@ class RssSourceAdapter:
             return []
 
         articles: list[RawArticle] = []
+        blocked = 0
         for entry in parsed.entries:
             url = entry.get("link")
             title = entry.get("title")
             if not url or not title:
+                continue
+            # Blacklisted publishers are dropped here, before an Article row
+            # exists -- the cheapest point in the pipeline and the only one
+            # where the feed's own <source> metadata is still available. Both
+            # candidates are checked because an aggregator item's own link is
+            # a news.google.com wrapper that tells us nothing about who wrote
+            # the piece; see app/ingest/blacklist.py.
+            banned = blacklisted_domain(url) or blacklisted_domain(
+                _entry_publisher_url(entry)
+            )
+            if banned:
+                blocked += 1
                 continue
             articles.append(
                 RawArticle(
@@ -128,7 +158,23 @@ class RssSourceAdapter:
         # missing is the alarm -- a rotted feed logged "rss_fetch_ok count=0"
         # forever and looked healthy on the dashboard. Warn instead, so a
         # source that silently dies is visible in the ingestion error log.
+        if blocked:
+            # Logged separately from the fetch summary so "how much Reddit is
+            # still being offered to us" stays a readable number rather than a
+            # silent subtraction -- if this ever drops to zero across every
+            # aggregator, the blacklist has stopped earning its keep.
+            logger.info(
+                "rss_blacklisted_items_dropped",
+                source=self.source_name,
+                dropped=blocked,
+                parsed_entries=len(parsed.entries),
+            )
+
         if not articles:
+            # A feed emptied *by the blacklist* is working as designed, not
+            # rotted, so it must not raise the dead-source alarm below.
+            if blocked:
+                return []
             logger.warning(
                 "rss_no_usable_entries",
                 source=self.source_name,

@@ -436,6 +436,42 @@ async def _backfill_campaign_classes() -> None:
         )
 
 
+async def _purge_blacklisted_articles(dry_run: bool) -> None:
+    """Retire archived articles from blacklisted domains (Reddit).
+
+    Idempotent, and reports the denominator: "0 of 4.312" is a result, "0" on
+    its own could equally mean the matcher is broken. --dry-run counts without
+    writing, which is how this should be run first against a live database.
+    """
+    from app.pipeline.blacklist_purge import (
+        count_blacklisted_articles,
+        purge_blacklisted_articles,
+        total_article_count,
+    )
+
+    async with AsyncSessionLocal() as db:
+        total = await total_article_count(db)
+        if dry_run:
+            counts = await count_blacklisted_articles(db)
+            print(
+                f"[kuru çalışma] {total} makalenin {counts['pending']} tanesi kara "
+                f"listeye takılıyor, {counts['already_purged']} tanesi zaten "
+                "temizlenmiş — hiçbir satır değiştirilmedi"
+            )
+            return
+
+        result = await purge_blacklisted_articles(db)
+        breakdown = ", ".join(
+            f"{domain}: {count}" for domain, count in sorted(result["by_domain"].items())
+        )
+        print(
+            f"Toplam {total} makale tarandı — kara liste eşleşmesi "
+            f"{result['scanned']}, bu çalışmada temizlenen {result['purged']}"
+            + (f" ({breakdown})" if breakdown else "")
+            + f", zaten temizlenmiş {result['already_purged']}"
+        )
+
+
 async def _seed_kpi_history() -> None:
     from app.ingest.historical_seed import seed_kpi_history
 
@@ -749,6 +785,7 @@ def main() -> None:
             "check-data-quality",
             "mark-legacy-campaigns-superseded",
             "backfill-campaign-classes",
+            "purge-blacklisted-articles",
         ],
     )
     parser.add_argument(
@@ -797,7 +834,9 @@ def main() -> None:
         help=(
             "deep-scan: fetch and record scrape_runs telemetry without handing "
             "changed pages to extraction. The bot-wall go/no-go gate -- the run "
-            "log is written either way, which is what makes the gate readable."
+            "log is written either way, which is what makes the gate readable. "
+            "purge-blacklisted-articles: count the matching rows and write "
+            "nothing, so the blast radius is knowable before it is applied."
         ),
     )
     parser.add_argument(
@@ -889,6 +928,8 @@ def main() -> None:
         asyncio.run(_mark_legacy_campaigns_superseded())
     elif args.command == "backfill-campaign-classes":
         asyncio.run(_backfill_campaign_classes())
+    elif args.command == "purge-blacklisted-articles":
+        asyncio.run(_purge_blacklisted_articles(args.dry_run))
 
 
 if __name__ == "__main__":
