@@ -12,6 +12,7 @@ import type { IataIndicatorOut } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const METRIC_LABEL_TR: Record<string, string> = {
+  net_profit: "Net kâr",
   ebit: "Faiz ve vergi öncesi kâr (EBIT)",
   load_factor: "Doluluk oranı",
   passenger_demand: "Yolcu talebi",
@@ -22,6 +23,39 @@ const KIND_LABEL: Record<IataIndicatorOut["kind"], string> = {
   actual: "Gerçekleşme",
   forecast: "Tahmin",
 };
+
+/** "Önceki tahmin: 72,8 (Ara 2025) ↓" -- one muted line, only where the
+ * previous edition's figure is recorded. IATA revises its own forecasts
+ * between editions and the revision is often the story (the 2026 net-profit
+ * line went from $41bn to $23bn); a card showing only the current number
+ * prints the conclusion and drops the news. Rendered as plain text rather
+ * than a delta chip on purpose: this is not a market move, it is the same
+ * publisher changing its mind, and it must not read like one. */
+function RevisionNote({ row }: { row: IataIndicatorOut }) {
+  if (row.previous_value === null || row.previous_publication_date === null) return null;
+
+  const edition = new Date(row.previous_publication_date).toLocaleDateString("tr-TR", {
+    month: "short",
+    year: "numeric",
+  });
+  const revisedDown = row.value < row.previous_value;
+  const arrow = row.value === row.previous_value ? "→" : revisedDown ? "↓" : "↑";
+  const arrowLabel =
+    row.value === row.previous_value
+      ? "değişmedi"
+      : revisedDown
+        ? "aşağı revize edildi"
+        : "yukarı revize edildi";
+
+  return (
+    <p className="mt-1 text-[11px] text-muted-foreground">
+      Önceki tahmin: {row.previous_value.toLocaleString("tr-TR")} ({edition}){" "}
+      <span aria-label={arrowLabel} title={arrowLabel}>
+        {arrow}
+      </span>
+    </p>
+  );
+}
 
 const tab = (active: boolean) =>
   cn(
@@ -86,6 +120,7 @@ export function IataIndicatorTable() {
                 {row.value.toLocaleString("tr-TR")}
                 <span className="ml-1 text-sm font-normal text-muted-foreground">{row.unit}</span>
               </p>
+              <RevisionNote row={row} />
               {row.interpretation_tr && (
                 <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
                   {row.interpretation_tr}

@@ -48,6 +48,15 @@ CARGO_REVENUE_BN = (101, 140, 210, 206, 139, 147, 151, 162)
 ANCILLARY_REVENUE_BN = (130, 55, 61, 95, 122, 137, 146, 165)
 EBIT_BN = (43.1, -110.9, -43.5, 11.3, 66.1, 70.7, 76.4, 48.0)
 
+# --- Tables 6/7: industry net post-tax profit, USD billion (verbatim) ---
+# IATA reports net profit on its own line, next to but not derived from EBIT,
+# and restates the same series per region in Table 12. Kept as a separate
+# constant for the reason curated_seed.py names EBIT "ebit": they are different
+# claims about the same year, and 2026 is where that matters most -- $48.0bn of
+# operating profit becomes $23.0bn after interest and tax. Only the EBIT line
+# feeds the derived cost arithmetic below; net profit is published, not derived.
+NET_PROFIT_BN = (26.4, -137.7, -40.4, -3.5, 40.5, 37.7, 45.0, 23.0)
+
 # DERIVED -- arithmetic on the rows above, using IATA's own definitions:
 #   ASK   = RPK / passenger load factor      (load factor is defined as RPK/ASK)
 #   yield = passenger revenue / RPK

@@ -689,6 +689,11 @@ export interface IataIndicatorOut {
   publication_date: string;
   source_url: string;
   interpretation_tr: string | null;
+  /** What the previous edition of the same IATA report printed for this period.
+   * Null on actuals and on forecasts whose prior edition is unverified. */
+  previous_value: number | null;
+  previous_publication_date: string | null;
+  previous_source_url: string | null;
 }
 
 export interface MarketPulseCitationOut {

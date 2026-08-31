@@ -86,6 +86,9 @@ class CuratedRepository:
         interpretation_tr: str | None = None,
         entered_by: str = "curated",
         reviewed_at: datetime | None = None,
+        previous_value: float | None = None,
+        previous_publication_date: date | None = None,
+        previous_source_url: str | None = None,
     ) -> tuple[IataIndicator, bool]:
         existing = (
             await self.db.execute(
@@ -113,6 +116,9 @@ class CuratedRepository:
                 interpretation_tr=interpretation_tr,
                 entered_by=entered_by,
                 reviewed_at=reviewed_at,
+                previous_value=previous_value,
+                previous_publication_date=previous_publication_date,
+                previous_source_url=previous_source_url,
             )
             self.db.add(row)
             return row, True
@@ -126,6 +132,12 @@ class CuratedRepository:
         existing.interpretation_tr = interpretation_tr
         existing.entered_by = entered_by
         existing.reviewed_at = reviewed_at
+        # Assigned unconditionally, including back to None: the seed file is the
+        # source of truth, so dropping a `previous_*` from it must clear the
+        # stored one rather than leave a stale revision line on the card.
+        existing.previous_value = previous_value
+        existing.previous_publication_date = previous_publication_date
+        existing.previous_source_url = previous_source_url
         return existing, False
 
     async def fx_forecasts(

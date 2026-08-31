@@ -26,12 +26,46 @@ def test_iata_indicator_entries_cover_actual_and_forecast_for_every_metric():
         assert kinds == {"actual", "forecast"}, f"{metric} missing an actual/forecast pair"
 
 
-def test_iata_ebit_is_not_mislabelled_as_net_profit():
-    # See the module docstring: EBIT and net profit are different figures --
-    # naming this one "net_profit" would misstate a real number.
-    metrics = {e["metric"] for e in IATA_INDICATOR_ENTRIES}
-    assert "ebit" in metrics
-    assert "net_profit" not in metrics
+def test_ebit_and_net_profit_are_separate_rows_with_separate_values():
+    # EBIT and net profit are different figures, and IATA publishes both. The
+    # table used to carry only EBIT; it now carries both under the names the
+    # report uses, which is only safe as long as they never collapse into each
+    # other -- if a transcription error made them equal, this is where it shows.
+    by_metric = {
+        (e["metric"], e["kind"]): e["value"]
+        for e in IATA_INDICATOR_ENTRIES
+        if e["metric"] in {"ebit", "net_profit"}
+    }
+    assert by_metric[("ebit", "forecast")] == 48.0
+    assert by_metric[("net_profit", "forecast")] == 23.0
+    assert by_metric[("ebit", "actual")] == 76.4
+    assert by_metric[("net_profit", "actual")] == 45.0
+
+
+def test_only_forecast_rows_carry_a_previous_edition_figure():
+    # An actual is a measurement, not a restated projection -- see "Revision
+    # tracking" in app/models/curated.py.
+    for entry in IATA_INDICATOR_ENTRIES:
+        if entry["kind"] == "actual":
+            assert entry.get("previous_value") is None, entry["metric"]
+
+
+def test_every_previous_figure_names_the_edition_that_printed_it():
+    revised = [e for e in IATA_INDICATOR_ENTRIES if e.get("previous_value") is not None]
+    assert revised  # the June 2026 report revises the December 2025 one
+    for entry in revised:
+        # A prior value without its own citation is an unattributable number.
+        assert entry["previous_publication_date"] < entry["publication_date"]
+        assert entry["previous_source_url"].startswith("https://www.iata.org/")
+        assert entry["previous_source_url"] != entry["source_url"]
+
+
+def test_the_2026_net_profit_forecast_records_iatas_halving():
+    forecast = next(
+        e for e in IATA_INDICATOR_ENTRIES if e["metric"] == "net_profit" and e["kind"] == "forecast"
+    )
+    assert forecast["previous_value"] == 41.0
+    assert forecast["value"] == 23.0
 
 
 async def test_seed_curated_data_is_idempotent(db_session):
