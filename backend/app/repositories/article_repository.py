@@ -5,6 +5,7 @@ from sqlalchemy import case, exists, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer, selectinload
 
+from app.ingest.blacklist import BLACKLIST_STATUS
 from app.models.article import Article, ArticleEnrichment
 from app.models.entity import ArticleEntity, Entity
 from app.models.source import Source
@@ -14,6 +15,15 @@ from app.taxonomy import DEFAULT_UNDECLARED_TIER, FOCUS_BONUS, RIVAL_CODES, TRUS
 # that omit dates -- day-based views (the archive) fall back to fetched_at so
 # every article belongs to exactly one day.
 _DAY_EXPR = func.coalesce(Article.published_at, Article.fetched_at)
+
+# Articles retired by the domain blacklist (app/ingest/blacklist.py) must not
+# appear in any listing. Marking them `is_duplicate` would have hidden them
+# with one fewer line, but it would also have been a lie -- is_duplicate means
+# "this is another telling of article X" and feeds the corroboration count in
+# pipeline/verify.py, which would then be counting Reddit threads as
+# independent sources. Filtering on the status is the honest mechanism: the row
+# keeps saying what it is, and the listing keeps saying what it shows.
+_NOT_BLACKLISTED = Article.status != BLACKLIST_STATUS
 
 
 def _focus_weighted_importance():
@@ -126,7 +136,7 @@ class ArticleRepository:
         """Shared filter clause for list_recent and count, so the "load more"
         pagination in the newspaper can trust that total counts the same rows
         the list returns (rather than every article ever ingested)."""
-        query = query.where(Article.is_duplicate.is_(False))
+        query = query.where(Article.is_duplicate.is_(False), _NOT_BLACKLISTED)
         if since is not None:
             query = query.where(Article.published_at >= since)
         if on_date is not None:
@@ -310,7 +320,7 @@ class ArticleRepository:
         day_col = func.date_trunc("day", func.timezone("UTC", _DAY_EXPR))
         query = (
             select(day_col, func.count())
-            .where(Article.is_duplicate.is_(False), _DAY_EXPR >= cutoff)
+            .where(Article.is_duplicate.is_(False), _NOT_BLACKLISTED, _DAY_EXPR >= cutoff)
             .group_by(day_col)
         )
         result = await self.db.execute(query)
@@ -328,7 +338,7 @@ class ArticleRepository:
         query = (
             select(ArticleEnrichment.category, func.count())
             .join(Article, Article.id == ArticleEnrichment.article_id)
-            .where(Article.is_duplicate.is_(False))
+            .where(Article.is_duplicate.is_(False), _NOT_BLACKLISTED)
             .group_by(ArticleEnrichment.category)
         )
         if since is not None:
