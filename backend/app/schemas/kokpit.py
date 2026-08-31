@@ -110,6 +110,12 @@ class IataIndicatorOut(BaseModel):
     publication_date: date
     source_url: str
     interpretation_tr: str | None
+    # What the previous edition of the same report printed for this period.
+    # None on actuals and on any forecast whose prior edition is unverified --
+    # see "Revision tracking" in app/models/curated.py.
+    previous_value: float | None = None
+    previous_publication_date: date | None = None
+    previous_source_url: str | None = None
 
 
 class MarketPulseCitationOut(BaseModel):

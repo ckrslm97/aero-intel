@@ -16,6 +16,24 @@ def test_every_event_has_a_citable_official_url():
         assert event.url.startswith("https://"), event.name
 
 
+def test_every_event_url_is_unique():
+    # seed_events is idempotent *by URL*: two events sharing one would collapse
+    # into a single row and the second would silently overwrite the first on
+    # every re-run. Recurring events that share an organiser page (RSNA, the
+    # IATA symposia, NBAA-BACE) each cite the page that lists their own edition.
+    urls = [e.url for e in EVENTS]
+    assert len(urls) == len(set(urls))
+
+
+def test_turkiye_events_are_filed_under_middle_east():
+    # app/taxonomy.py files Turkey under middle-east on purpose (revenue desks
+    # benchmark it against the Gulf). An event slipping into "europe" would
+    # vanish from the region the rest of the app looks for it in.
+    for event in EVENTS:
+        if event.country == "Türkiye":
+            assert event.region == "middle-east", event.name
+
+
 def test_event_regions_are_real_taxonomy_slugs():
     # A typo here would silently hide the event from its region filter.
     valid_regions = set(COUNTRY_TO_REGION.values())
@@ -66,7 +84,19 @@ async def test_seeding_twice_does_not_duplicate(db_session):
     assert count.scalar_one() == len(EVENTS)
 
 
-@pytest.mark.parametrize("region", ["europe", "middle-east", "africa", "north-america", "asia"])
+@pytest.mark.parametrize(
+    "region",
+    [
+        "europe",
+        "middle-east",
+        "africa",
+        "north-america",
+        "south-america",
+        "asia",
+        "southeast-asia",
+        "oceania",
+    ],
+)
 def test_calendar_spans_the_major_regions(region):
     # The Etkinlik tab has a region picker; a calendar covering only Europe
     # would leave most of it empty.

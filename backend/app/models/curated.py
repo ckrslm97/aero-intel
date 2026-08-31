@@ -31,6 +31,15 @@ belongs in the 2026 cell.
 `kind` keeps forecasts and actuals apart at the schema level. The monthly
 traffic actuals ARE automated, from stable per-month slugs -- but a forecast and
 a measurement are different claims about the world and must never share a card.
+
+**Revision tracking.** A forecast row also carries the number the *previous*
+edition of the same report printed for the same period. IATA halving its 2026
+net-profit forecast from $41bn to $23bn between December 2025 and June 2026 is
+the story; a card showing only "$23bn" prints the conclusion and throws away
+the news. The three `previous_*` columns are nullable and stay NULL for actuals
+(a measurement has no earlier forecast of itself) and for any forecast whose
+prior edition we have not verified -- an unattributed "previous" number would
+be worse than none, exactly like an invented event impact level.
 """
 from datetime import date, datetime
 
@@ -124,3 +133,12 @@ class IataIndicator(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     reviewed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+
+    #: What the *previous* edition of the same report printed for this same
+    #: period, so a card can show the revision rather than only its outcome.
+    #: See "Revision tracking" in the module docstring. All three are filled in
+    #: together or not at all: a prior value without the edition that printed it
+    #: is an unattributable number, which is what this table exists to avoid.
+    previous_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    previous_publication_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    previous_source_url: Mapped[str | None] = mapped_column(String(600), nullable=True)
