@@ -8,7 +8,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 // rejected by the compiler inside one ("Please move it into a Client
 // Component") -- so the lazy import has to live in a client module of its own
 // rather than inline at the call site. Components that are already
-// `"use client"` (kokpit/market-pulse-strip.tsx, kokpit/fx-board.tsx) declare
+// `"use client"` (kokpit/market-strip.tsx, kokpit/fuel-energy.tsx) declare
 // theirs inline for exactly that reason.
 //
 // The skeleton is 320px to match the chart plus its tab row, so the section

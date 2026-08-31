@@ -40,14 +40,25 @@ YAHOO_BRENT_URL = "https://finance.yahoo.com/quote/BZ=F"
 YAHOO_FX_URL = "https://finance.yahoo.com/quote/TRY=X"
 FRANKFURTER_URL = "https://www.frankfurter.app/"
 
-# Kokpit's five live pairs. USD/TRY is first because it is the metric every
+# Kokpit's live pairs. USD/TRY is first because it is the metric every
 # other part of the app already reads (fuel/oil cards' peer comparisons, the
-# original dashboard). The other four are Kokpit-only -- nothing outside
-# app/api/v1/kokpit.py reads their metric_key.
+# original dashboard). The rest are Kokpit-only -- nothing outside
+# app/api/v1/kokpit.py and app/api/v1/kpis.py reads their metric_key.
+#
+# EUR/TRY and GBP/USD were added by the Kokpit revision: the compact market
+# strip prints a euro-denominated TRY rate (most of the cost base that is not
+# dollar-denominated is euro-denominated) and sterling as a major in its own
+# right rather than only through the EUR/GBP cross. Both Yahoo symbols and
+# both Frankfurter legs were verified against the live endpoints before being
+# added. They start with NO stored history at all, so every delta on them is
+# None until the 15-minute cron has run for a day/week -- which the UI prints
+# as "yeterli geçmiş yok" rather than as a 0%.
 # (metric_key, Yahoo symbol, Frankfurter base, Frankfurter quote, unit)
 LIVE_FX_PAIRS: tuple[tuple[str, str, str, str, str], ...] = (
     ("fx_usd_try", "TRY=X", "USD", "TRY", "TRY"),
+    ("fx_eur_try", "EURTRY=X", "EUR", "TRY", "TRY"),
     ("fx_eur_usd", "EURUSD=X", "EUR", "USD", "USD"),
+    ("fx_gbp_usd", "GBPUSD=X", "GBP", "USD", "USD"),
     ("fx_usd_jpy", "JPY=X", "USD", "JPY", "JPY"),
     ("fx_eur_gbp", "EURGBP=X", "EUR", "GBP", "GBP"),
     ("fx_usd_cny", "CNY=X", "USD", "CNY", "CNY"),
@@ -57,7 +68,9 @@ LIVE_FX_PAIRS: tuple[tuple[str, str, str, str, str], ...] = (
 # and the Market Pulse grounding builder so both name a pair identically.
 FX_PAIR_LABELS: dict[str, str] = {
     "fx_usd_try": "USD/TRY",
+    "fx_eur_try": "EUR/TRY",
     "fx_eur_usd": "EUR/USD",
+    "fx_gbp_usd": "GBP/USD",
     "fx_usd_jpy": "USD/JPY",
     "fx_eur_gbp": "EUR/GBP",
     "fx_usd_cny": "USD/CNY",
@@ -69,6 +82,23 @@ FX_PAIR_LABELS: dict[str, str] = {
 # an additive spread, not a multiplier: an earlier 1.18x rule of thumb put jet
 # fuel ~40% below what IATA actually publishes.
 JET_FUEL_CRACK_SPREAD_USD = 57.0
+
+# The other two energy contracts Kokpit's "Yakıt & Enerji" panel reads, kept
+# next to Brent rather than derived from it. WTI is the US crude benchmark --
+# its spread to Brent is itself a signal, and averaging the two into one "oil
+# price" would erase that. Henry Hub gas is the ground-side energy cost
+# (terminals, catering, ground power), quoted in $/MMBtu, a different unit
+# entirely -- which is why it is a metric of its own and never blended into a
+# "fuel index".
+#
+# Both symbols were verified against the live Yahoo chart endpoint before
+# being added. Neither is derived, estimated or interpolated: each is that
+# contract's own front-month settlement, exactly as Brent already is.
+# (metric_key, Yahoo symbol, unit, Turkish label)
+LIVE_ENERGY_CONTRACTS: tuple[tuple[str, str, str, str], ...] = (
+    ("wti_price", "CL=F", "$/bbl", "WTI ham petrol"),
+    ("natgas_price", "NG=F", "$/MMBtu", "Doğal gaz (Henry Hub)"),
+)
 
 
 def latest_published_estimates() -> dict[str, tuple[float, str]]:
@@ -152,6 +182,25 @@ async def refresh_all_kpis(db: AsyncSession) -> int:
             True,
             now,
             YAHOO_BRENT_URL,
+        )
+        recorded += 1
+
+    # WTI and Henry Hub gas, each recorded as its own contract. No cross-check
+    # source: Frankfurter publishes currencies, not commodities, and inventing
+    # a second energy provider to claim corroboration would be worse than
+    # saying plainly that these are single-sourced -- which the KPI card does.
+    for metric_key, symbol, unit, _label in LIVE_ENERGY_CONTRACTS:
+        price = await fetch_quote(settings.yahoo_finance_base_url, symbol)
+        if price is None:
+            continue
+        repo.record(
+            metric_key,
+            price,
+            unit,
+            f"Yahoo Finance ({symbol})",
+            False,
+            now,
+            f"https://finance.yahoo.com/quote/{symbol}",
         )
         recorded += 1
 

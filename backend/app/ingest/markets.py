@@ -35,12 +35,20 @@ async def fetch_quote(base_url: str, symbol: str) -> float | None:
 
 
 # UI period -> Yahoo Finance (range, interval) query params.
+#
+# "1y_daily" is NOT a UI period: /kpis/{metric}?period= is regex-restricted to
+# the five above (app/api/v1/kpis.py), so nothing can request it over HTTP. It
+# exists for app/services/energy_service.py, which needs one year of DAILY
+# closes to compute a percentile, a year-to-date change and a 30-day
+# volatility from a single fetch. The plain "1y" is weekly, and a 30-day
+# volatility over four weekly points is not a volatility.
 HISTORY_RANGES: dict[str, tuple[str, str]] = {
     "1w": ("5d", "15m"),
     "1m": ("1mo", "1d"),
     "3m": ("3mo", "1d"),
     "6m": ("6mo", "1wk"),
     "1y": ("1y", "1wk"),
+    "1y_daily": ("1y", "1d"),
 }
 
 

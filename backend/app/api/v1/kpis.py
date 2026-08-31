@@ -29,7 +29,21 @@ KPI_DISPLAY: dict[str, tuple[str, bool]] = {
     "load_factor": ("Küresel doluluk oranı", True),
     "fuel_price": ("Jet yakıtı fiyatı", False),
     "oil_price": ("Brent petrol", False),
+    "wti_price": ("WTI ham petrol", False),
+    "natgas_price": ("Doğal gaz (Henry Hub)", False),
+    # Every live pair Kokpit's market strip prints, so each of its cards has a
+    # real /kpi/<metric_key> page to open rather than a dead link. `up_is_good`
+    # is False across the board only because KpiOut has no third state: a
+    # currency pair moving is neither good nor bad, and the surfaces that
+    # render these (market-strip.tsx, fx-board deltas) use a NEUTRAL delta tone
+    # for exactly that reason. Nothing on Kokpit colours an FX move.
     "fx_usd_try": ("USD/TRY", False),
+    "fx_eur_try": ("EUR/TRY", False),
+    "fx_eur_usd": ("EUR/USD", False),
+    "fx_gbp_usd": ("GBP/USD", False),
+    "fx_usd_jpy": ("USD/JPY", False),
+    "fx_eur_gbp": ("EUR/GBP", False),
+    "fx_usd_cny": ("USD/CNY", False),
     "departures": ("Uçuş kalkışları (yıllık)", True),
     "total_aviation_revenue_ytd": ("Havacılık geliri (yolcu + ek gelir)", True),
     "passenger_revenue_ytd": ("Yolcu geliri", True),
@@ -44,9 +58,22 @@ KPI_DISPLAY: dict[str, tuple[str, bool]] = {
 # metric_key -> Yahoo Finance symbol, for metrics with a real historical
 # archive we can pull on demand rather than waiting for our own history to
 # accumulate. "fuel_price" reuses oil's history (see get_kpi_detail).
+#
+# Every pair added here gets a real multi-year chart on its detail page from
+# the first minute it exists, which is the whole point: the newly-added
+# EUR/TRY and GBP/USD have no stored history of OUR own yet, and without an
+# external archive their detail pages would have shown a single point.
 YAHOO_HISTORY_SYMBOLS: dict[str, str] = {
     "oil_price": "BZ=F",
+    "wti_price": "CL=F",
+    "natgas_price": "NG=F",
     "fx_usd_try": "TRY=X",
+    "fx_eur_try": "EURTRY=X",
+    "fx_eur_usd": "EURUSD=X",
+    "fx_gbp_usd": "GBPUSD=X",
+    "fx_usd_jpy": "JPY=X",
+    "fx_eur_gbp": "EURGBP=X",
+    "fx_usd_cny": "CNY=X",
 }
 
 PERIOD_TO_TIMEDELTA: dict[str, timedelta] = {

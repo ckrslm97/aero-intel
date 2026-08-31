@@ -2,7 +2,9 @@
 Pulse. See app/models/curated.py and app/services/market_pulse_service.py for
 why these are hand-curated rather than scraped.
 """
-from datetime import datetime, timedelta, timezone
+import calendar
+import re
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,6 +23,8 @@ from app.schemas.kokpit import (
     AnnualSeriesBoardOut,
     AnnualSeriesOut,
     CockpitSignalsOut,
+    EnergyBoardOut,
+    EnergyMetricOut,
     FxForecastOut,
     IataIndicatorOut,
     KokpitFxBoardOut,
@@ -29,6 +33,11 @@ from app.schemas.kokpit import (
     MarketPulseOut,
 )
 from app.services.cockpit_signals_service import cockpit_signals
+from app.services.energy_service import (
+    PERCENTILE_METHOD_TR,
+    VOLATILITY_METHOD_TR,
+    energy_metrics,
+)
 from app.services.kpi_service import FX_PAIR_LABELS, LIVE_FX_PAIRS
 
 router = APIRouter(prefix="/kokpit", tags=["kokpit"])
@@ -92,6 +101,121 @@ async def get_fx_board(response: Response, db: AsyncSession = Depends(get_db)) -
     return KokpitFxBoardOut(pairs=pairs, peg=SAR_PEG)
 
 
+# --- Forecast target dates ------------------------------------------------
+#
+# WHY A DATE IS DERIVED AT ALL, AND WHAT IT IS ALLOWED TO MEAN
+# -----------------------------------------------------------
+# app/ingest/curated_seed.py stores each institution's horizon in that
+# institution's OWN wording, and leaves `horizon_months` None wherever the
+# wording is not itself a month count -- because, in its words, "converting
+# those to a number would be our arithmetic presented as their forecast".
+#
+# That rule is not repealed here. `horizon_label` remains the only thing the
+# forecast TABLE prints, verbatim, and it is still never rewritten. What this
+# adds is a strictly separate, clearly-labelled *plotting coordinate*: a chart
+# with a time axis needs an x for each marker, and "Q4 2026" has no x.
+#
+# The mapping is therefore deliberately conservative and self-declaring:
+#
+#   +Nm            -> publication_date + N months.  The institution's own
+#                     count; no judgement involved.
+#   end-YYYY       -> 31 December YYYY.  "End of 2026" means end of 2026.
+#   year-end       -> 31 December of the PUBLICATION year.  A mid-2026 note
+#                     saying "year-end" means its own year, not a later one.
+#   QN YYYY        -> the quarter's MIDPOINT (Q1 15 Feb, Q2 15 May, Q3 15 Aug,
+#                     Q4 15 Nov).  A quarter is a span, and pinning it to
+#                     either edge would claim a precision the bank did not
+#                     give; the midpoint at least states that it is a span
+#                     being reduced, which `target_date_basis_tr` says out loud
+#                     in every tooltip.
+#   anything else  -> None.  The row keeps its place in the table and simply
+#                     gets no marker on the chart.
+#
+# Every derived date carries its basis into the payload, so no surface can
+# print one as if the institution had published it.
+
+_MONTH_END_DAY_DECEMBER = 31
+
+#: Quarter -> (month, day) midpoint. Stated as data so a test asserts the four
+#: values directly rather than re-deriving them.
+QUARTER_MIDPOINTS: dict[int, tuple[int, int]] = {
+    1: (2, 15),
+    2: (5, 15),
+    3: (8, 15),
+    4: (11, 15),
+}
+
+_QUARTER_RE = re.compile(r"^q([1-4])\s*(\d{4})$")
+_END_YEAR_RE = re.compile(r"^end[-\s]?(\d{4})$")
+_MONTHS_RE = re.compile(r"^\+?(\d{1,3})\s*m$")
+
+
+def _add_months(start: date, months: int) -> date:
+    total = start.month - 1 + months
+    year = start.year + total // 12
+    month = total % 12 + 1
+    # Clamp rather than roll over: 31 Aug + 6m is 28/29 Feb, not 3 March.
+    last_day = calendar.monthrange(year, month)[1]
+    return date(year, month, min(start.day, last_day))
+
+
+def forecast_target_date(
+    *, horizon_months: int | None, horizon_label: str, publication_date: date
+) -> tuple[date | None, str | None]:
+    """The date a forecast is FOR, plus the Turkish sentence explaining how it
+    was arrived at. See the block comment above for the whole mapping and for
+    why this never touches `horizon_label` itself."""
+    label = horizon_label.strip().lower()
+
+    if horizon_months is not None:
+        target = _add_months(publication_date, horizon_months)
+        return target, f"Kurumun kendi vadesi ({horizon_label}) yayın tarihine eklendi."
+
+    months_match = _MONTHS_RE.match(label)
+    if months_match:
+        target = _add_months(publication_date, int(months_match.group(1)))
+        return target, f"Kurumun kendi vadesi ({horizon_label}) yayın tarihine eklendi."
+
+    end_year_match = _END_YEAR_RE.match(label)
+    if end_year_match:
+        year = int(end_year_match.group(1))
+        return (
+            date(year, 12, _MONTH_END_DAY_DECEMBER),
+            f"“{horizon_label}” yıl sonu olarak 31 Aralık {year} kabul edildi.",
+        )
+
+    if label in {"year-end", "yıl sonu", "yil sonu"}:
+        year = publication_date.year
+        return (
+            date(year, 12, _MONTH_END_DAY_DECEMBER),
+            f"“{horizon_label}” yayın yılının sonu, yani 31 Aralık {year} kabul edildi.",
+        )
+
+    quarter_match = _QUARTER_RE.match(label)
+    if quarter_match:
+        quarter, year = int(quarter_match.group(1)), int(quarter_match.group(2))
+        month, day = QUARTER_MIDPOINTS[quarter]
+        return (
+            date(year, month, day),
+            (
+                f"“{horizon_label}” bir çeyrek aralığıdır; grafikte çeyreğin "
+                f"orta noktası ({day}.{month:02d}.{year}) kullanıldı."
+            ),
+        )
+
+    return None, None
+
+
+def _with_target_date(row) -> FxForecastOut:
+    out = FxForecastOut.model_validate(row)
+    target, basis = forecast_target_date(
+        horizon_months=row.horizon_months,
+        horizon_label=row.horizon_label,
+        publication_date=row.publication_date,
+    )
+    return out.model_copy(update={"target_date": target, "target_date_basis_tr": basis})
+
+
 @router.get("/fx-forecasts", response_model=list[FxForecastOut])
 async def get_fx_forecasts(
     response: Response,
@@ -102,7 +226,48 @@ async def get_fx_forecasts(
     public_cache(response, CURATED)
     repo = CuratedRepository(db)
     rows = await repo.fx_forecasts(currency_pair=pair, horizon_months=horizon_months)
-    return [FxForecastOut.model_validate(row) for row in rows]
+    return [_with_target_date(row) for row in rows]
+
+
+@router.get("/energy", response_model=EnergyBoardOut)
+async def get_energy_board(response: Response) -> EnergyBoardOut:
+    """Brent, WTI, Henry Hub gas and the derived jet-fuel row, each with the
+    changes/percentile/volatility computed from its own daily closes.
+
+    Takes no database session: every figure here is arithmetic over Yahoo's
+    published history, and reading it from the same place the KPI detail page
+    reads it keeps the two from disagreeing.
+    """
+    # FX rather than CURATED: these move with the market, on the same cadence
+    # as the FX board they sit beside.
+    public_cache(response, FX)
+    metrics = [
+        EnergyMetricOut(
+            metric_key=row.metric_key,
+            label_tr=row.label_tr,
+            unit=row.unit,
+            value=row.indicators.value,
+            as_of=row.indicators.as_of,
+            day_change_pct=row.indicators.day_change_pct,
+            week_change_pct=row.indicators.week_change_pct,
+            month_change_pct=row.indicators.month_change_pct,
+            ytd_change_pct=row.indicators.ytd_change_pct,
+            percentile_1y=row.indicators.percentile_1y,
+            volatility_30d_pct=row.indicators.volatility_30d_pct,
+            sparkline=row.indicators.sparkline,
+            source=row.source,
+            source_url=row.source_url,
+            href=row.href,
+            is_estimate=row.is_estimate,
+            note_tr=row.note_tr,
+        )
+        for row in await energy_metrics()
+    ]
+    return EnergyBoardOut(
+        metrics=metrics,
+        volatility_method_tr=VOLATILITY_METHOD_TR,
+        percentile_method_tr=PERCENTILE_METHOD_TR,
+    )
 
 
 @router.get("/iata", response_model=list[IataIndicatorOut])

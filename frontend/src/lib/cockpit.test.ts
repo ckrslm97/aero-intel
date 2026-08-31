@@ -1,16 +1,21 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  freshnessOf,
+  forecastBuckets,
   forecastSplitIndex,
+  freshnessOf,
   HIGH_IMPACT_IMPORTANCE,
   latestAsOf,
   LIVE_WINDOW_MINUTES,
+  MEDIAN_MIN_INSTITUTIONS,
+  sentimentTotals,
   signalLevelStyle,
   splitForecast,
   toFeedRow,
+  topByImportance,
+  type FeedRow,
 } from "./cockpit";
-import type { AnnualPoint, ArticleOut } from "./types";
+import type { AnnualPoint, ArticleOut, FxForecastOut } from "./types";
 
 const NOW = new Date("2026-08-30T12:00:00Z");
 const minutesAgo = (minutes: number) =>
@@ -186,5 +191,175 @@ describe("toFeedRow", () => {
     expect(row.region).toBeNull();
     expect(row.sentiment).toBeNull();
     expect(row.highImpact).toBe(false);
+  });
+
+  it("carries the raw importance and severity through, unenriched as null", () => {
+    // "no enrichment at all" and "scored zero" must stay distinguishable: only
+    // the first is allowed to sink a row silently in topByImportance.
+    expect(toFeedRow(article()).importance).toBe(0.4);
+    expect(toFeedRow(article({ importance_score: 0 })).importance).toBe(0);
+    expect(toFeedRow(article({}, { enrichment: null })).importance).toBeNull();
+    expect(toFeedRow(article({ risk_severity: "medium" })).riskSeverity).toBe("medium");
+    expect(toFeedRow(article({}, { enrichment: null })).riskSeverity).toBeNull();
+  });
+
+  describe("topByImportance", () => {
+    const row = (id: string, importance: number | null): FeedRow => ({
+      id,
+      headline: id,
+      url: `https://example.test/${id}`,
+      category: "general",
+      region: null,
+      publishedAt: null,
+      sourceName: "Reuters",
+      highImpact: false,
+      sentiment: null,
+      importance,
+      riskSeverity: null,
+    });
+
+    it("ranks by the enrichment's own score, most important first", () => {
+      const ranked = topByImportance([row("a", 0.3), row("b", 0.9), row("c", 0.6)]);
+      expect(ranked.map((entry) => entry.id)).toEqual(["b", "c", "a"]);
+    });
+
+    it("takes only the requested count", () => {
+      const ranked = topByImportance(
+        [row("a", 0.3), row("b", 0.9), row("c", 0.6), row("d", 0.7)],
+        3,
+      );
+      expect(ranked).toHaveLength(3);
+      expect(ranked.map((entry) => entry.id)).toEqual(["b", "d", "c"]);
+    });
+
+    it("sorts unenriched stories last but never drops them", () => {
+      const ranked = topByImportance([row("unenriched", null), row("scored", 0.1)]);
+      expect(ranked.map((entry) => entry.id)).toEqual(["scored", "unenriched"]);
+      expect(ranked).toHaveLength(2);
+    });
+
+    it("does not mutate the caller's array", () => {
+      const input = [row("a", 0.1), row("b", 0.9)];
+      topByImportance(input);
+      expect(input.map((entry) => entry.id)).toEqual(["a", "b"]);
+    });
+  });
+});
+
+describe("sentimentTotals", () => {
+  const rows = [
+    { category: "network", positive: 3, neutral: 5, negative: 1 },
+    { category: "fleet", positive: 2, neutral: 4, negative: 6 },
+  ];
+
+  it("sums the per-category counts the insights endpoint returns", () => {
+    const totals = sentimentTotals(rows);
+    expect(totals).toEqual({ positive: 5, neutral: 9, negative: 7, total: 21 });
+  });
+
+  it("returns a zero total rather than a fabricated split for no data", () => {
+    // The bar renders "henüz sınıflandırılmış haber yok" off this, never a
+    // three-way 33% split of nothing.
+    expect(sentimentTotals([]).total).toBe(0);
+    expect(sentimentTotals(undefined).total).toBe(0);
+  });
+});
+
+describe("forecastBuckets", () => {
+  const forecast = (overrides: Partial<FxForecastOut> = {}): FxForecastOut => ({
+    institution: "Danske Bank",
+    currency_pair: "USD/TRY",
+    horizon_label: "+12m",
+    horizon_months: 12,
+    value: 66,
+    publication_date: "2026-08-21",
+    source_url: "https://example.test/danske",
+    note_tr: null,
+    target_date: "2027-08-21",
+    target_date_basis_tr: "Kurumun kendi vadesi eklendi.",
+    ...overrides,
+  });
+
+  it("groups by the date a forecast targets and reports the spread", () => {
+    const buckets = forecastBuckets([
+      forecast({ institution: "A", value: 50, target_date: "2026-12-31" }),
+      forecast({ institution: "B", value: 54, target_date: "2026-12-31" }),
+    ]);
+
+    expect(buckets).toHaveLength(1);
+    expect(buckets[0].min).toBe(50);
+    expect(buckets[0].max).toBe(54);
+    expect(buckets[0].institutionCount).toBe(2);
+  });
+
+  it("draws NO median below three institutions on one date", () => {
+    // Two numbers have a midpoint, not a consensus. Drawing one would be the
+    // averaging backend/app/ingest/curated_seed.py forbids, moved into a chart.
+    const one = forecastBuckets([forecast({ institution: "A", target_date: "2026-12-31" })]);
+    expect(one[0].median).toBeNull();
+
+    const two = forecastBuckets([
+      forecast({ institution: "A", value: 50, target_date: "2026-12-31" }),
+      forecast({ institution: "B", value: 54, target_date: "2026-12-31" }),
+    ]);
+    expect(two[0].median).toBeNull();
+  });
+
+  it("draws the median at exactly three institutions and labels the count", () => {
+    const buckets = forecastBuckets([
+      forecast({ institution: "A", value: 50, target_date: "2026-12-31" }),
+      forecast({ institution: "B", value: 54, target_date: "2026-12-31" }),
+      forecast({ institution: "C", value: 61, target_date: "2026-12-31" }),
+    ]);
+
+    expect(MEDIAN_MIN_INSTITUTIONS).toBe(3);
+    expect(buckets[0].median).toBe(54);
+    expect(buckets[0].institutionCount).toBe(3);
+  });
+
+  it("counts institutions, not rows -- one bank twice is still one opinion", () => {
+    const buckets = forecastBuckets([
+      forecast({ institution: "A", value: 50, target_date: "2026-12-31" }),
+      forecast({ institution: "A", value: 52, target_date: "2026-12-31", horizon_label: "+4m" }),
+      forecast({ institution: "B", value: 54, target_date: "2026-12-31" }),
+    ]);
+
+    expect(buckets[0].institutionCount).toBe(2);
+    expect(buckets[0].median).toBeNull();
+  });
+
+  it("never blends across horizons -- different target dates are different buckets", () => {
+    const buckets = forecastBuckets([
+      forecast({ institution: "A", value: 50, target_date: "2026-12-31" }),
+      forecast({ institution: "B", value: 54, target_date: "2026-12-31" }),
+      forecast({ institution: "C", value: 90, target_date: "2027-08-21" }),
+    ]);
+
+    expect(buckets.map((bucket) => bucket.targetDate)).toEqual(["2026-12-31", "2027-08-21"]);
+    // Three institutions overall, but no single date has three: no median.
+    expect(buckets.every((bucket) => bucket.median === null)).toBe(true);
+  });
+
+  it("drops rows whose horizon could not be dated, rather than guessing an x", () => {
+    const buckets = forecastBuckets([
+      forecast({ institution: "A", target_date: "2026-12-31" }),
+      forecast({ institution: "B", target_date: null, target_date_basis_tr: null }),
+    ]);
+
+    expect(buckets).toHaveLength(1);
+    expect(buckets[0].rows).toHaveLength(1);
+  });
+
+  it("returns buckets in chronological order", () => {
+    const buckets = forecastBuckets([
+      forecast({ target_date: "2027-08-21" }),
+      forecast({ target_date: "2026-11-15" }),
+      forecast({ target_date: "2026-12-31" }),
+    ]);
+    expect(buckets.map((bucket) => bucket.targetDate)).toEqual([
+      "2026-11-15",
+      "2026-12-31",
+      "2027-08-21",
+    ]);
   });
 });
