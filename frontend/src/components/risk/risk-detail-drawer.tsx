@@ -4,7 +4,12 @@ import { motion, useReducedMotion } from "framer-motion";
 import { ExternalLink, MapPin, Newspaper, X } from "lucide-react";
 import { useEffect, useRef } from "react";
 
-import { ConfidencePill, CoverageBadge, TypePill } from "@/components/risk/risk-meta";
+import {
+  ConfidencePill,
+  CoverageBadge,
+  TypePill,
+  UntranslatedTag,
+} from "@/components/risk/risk-meta";
 import { SeverityPill } from "@/components/risk/severity-pill";
 import {
   drawerPanel,
@@ -14,7 +19,7 @@ import {
   reduceVariants,
 } from "@/lib/motion";
 import { worldRegions } from "@/lib/nav";
-import { aviationLinkLabel, riskSourceTierLabel } from "@/lib/risk";
+import { aviationLinkLabel, headlinePresentation, riskSourceTierLabel } from "@/lib/risk";
 import type { RiskItem } from "@/lib/types";
 
 const REGION_NAME: Record<string, string> = Object.fromEntries(
@@ -116,6 +121,7 @@ export function RiskDetailDrawer({
 
   const aviation = aviationLinkLabel(item.aviation_link);
   const place = [item.city, item.country].filter(Boolean).join(" · ") || "Belirtilmedi";
+  const headline = headlinePresentation(item);
 
   return (
     // Mounted and unmounted outright -- deliberately NOT wrapped in
@@ -190,12 +196,19 @@ export function RiskDetailDrawer({
               animate="show"
               className="flex flex-1 flex-col gap-6 overflow-y-auto px-6 py-6"
             >
-              <motion.h2
-                variants={entry}
-                className="text-xl font-semibold leading-snug tracking-tight text-card-foreground"
-              >
-                {item.headline}
-              </motion.h2>
+              <motion.div variants={entry} className="flex flex-col items-start gap-2">
+                <h2
+                  // The source-language original on hover, exactly as the card
+                  // offers it: the drawer is where a reader goes to check a
+                  // signal, and a translation whose original is hidden is the
+                  // one thing on this panel that cannot be checked.
+                  title={headline.original ?? undefined}
+                  className="text-xl font-semibold leading-snug tracking-tight text-card-foreground"
+                >
+                  {headline.text}
+                </h2>
+                {headline.untranslated && <UntranslatedTag />}
+              </motion.div>
 
               <motion.div
                 variants={entry}

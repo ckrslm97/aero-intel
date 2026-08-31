@@ -113,6 +113,96 @@ export function coverageBadge(
   return null;
 }
 
+/** How old the newest article about a signal has to be before the card says
+ * so. Seven days, because the backend's own freshness vocabulary stops at 24h
+ * ("Yeni", "Güncellendi") and everything past that currently renders
+ * identically -- a story nobody has written about in three weeks looks exactly
+ * like one from Tuesday. */
+export const STALE_COVERAGE_DAYS = 7;
+
+/** The shortest window in which the "ESKİ" tag is drawn at all. In a 7g or 14g
+ * view nothing can be much older than the tag's own threshold, so it would fire
+ * on most of the list and say nothing; it only carries information once the
+ * window is wide enough for genuinely old coverage to sit next to today's. */
+export const STALE_TAG_MIN_WINDOW = 30;
+
+/** "ESKİ", or nothing.
+ *
+ * A pure display rule over data the payload already carries, and deliberately
+ * a statement about the COVERAGE, exactly like coverageBadge: "nobody has
+ * written about this in over a week" is a fact about the feed. It is NOT
+ * "the event is over" -- there is no lifecycle anywhere in this data, and a
+ * wildfire can burn for a month with the wires having moved on after day three.
+ *
+ * Mutually exclusive with coverageBadge by construction, and enforced rather
+ * than assumed: a signal whose newest article is inside 24h cannot also be one
+ * nobody has written about in a week, so the fresh badges win outright and a
+ * card never carries two contradictory age tags. */
+export function staleBadge(
+  item: Pick<RiskItem, "is_fresh" | "is_updated" | "last_reported_at" | "published_at">,
+  windowDays: number,
+  now: Date = new Date(),
+): { label: string; title: string } | null {
+  if (windowDays < STALE_TAG_MIN_WINDOW) return null;
+  if (coverageBadge(item)) return null;
+
+  const iso = item.last_reported_at ?? item.published_at;
+  if (!iso) return null;
+  const at = new Date(iso).getTime();
+  if (Number.isNaN(at)) return null;
+
+  const ageDays = (now.getTime() - at) / 86_400_000;
+  if (ageDays <= STALE_COVERAGE_DAYS) return null;
+
+  return {
+    label: "ESKİ",
+    title:
+      `Bu sinyal hakkındaki en yeni haber ${STALE_COVERAGE_DAYS} günden eski. ` +
+      "Yayın akışıyla ilgili bir bilgidir; olayın bittiği anlamına gelmez.",
+  };
+}
+
+/** Split a country's items into the ones the page states normally and the ones
+ * it states quietly.
+ *
+ * The server already sorts low-visibility items to the end of each group (see
+ * risks.py), so this preserves order rather than re-sorting -- the two lists
+ * concatenated are the group exactly as the API sent it. An unknown visibility
+ * value counts as normal: a new band the backend grows should render as a
+ * signal, not silently drop into a collapsed block nobody opens. */
+export function partitionByVisibility(items: RiskItem[]): {
+  normal: RiskItem[];
+  low: RiskItem[];
+} {
+  const normal: RiskItem[] = [];
+  const low: RiskItem[] = [];
+  for (const item of items) (item.visibility === "low" ? low : normal).push(item);
+  return { normal, low };
+}
+
+/** Which headline text to draw, and what to say about it.
+ *
+ * `original` is what the source published, offered as a hover title so a
+ * reader can check the Turkish against it -- the translation is a machine's
+ * paraphrase, and hiding the sentence it paraphrased makes it uncheckable.
+ * `untranslated` drives the app's existing quiet "otomatik çeviri yok" tag
+ * (article-analysis-drawer.tsx): source-language text on a Turkish page is
+ * fine, and passing it off as Turkish is not. */
+export function headlinePresentation(
+  item: Pick<RiskItem, "headline" | "headline_original" | "is_translated">,
+): { text: string; original: string | null; untranslated: boolean } {
+  return {
+    text: item.headline,
+    // Never echo the shown text back as its own tooltip: a title attribute
+    // repeating the words underneath it is noise a screen reader reads twice.
+    original:
+      item.is_translated && item.headline_original && item.headline_original !== item.headline
+        ? item.headline_original
+        : null,
+    untranslated: !item.is_translated,
+  };
+}
+
 export interface RiskFilters {
   family: string | null;
   type: string | null;

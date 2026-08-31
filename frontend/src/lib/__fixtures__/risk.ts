@@ -42,6 +42,13 @@ export function riskItem(overrides: Partial<RiskItem> = {}): RiskItem {
       },
     ],
     members_truncated: false,
+    // The thin shape again: an ordinary, publishable signal whose headline is
+    // whatever the source wrote. "low" and "translated" are states a fixture
+    // must ask for, so a component that only ever renders the happy path
+    // cannot pass by accident.
+    visibility: "normal",
+    headline_original: null,
+    is_translated: false,
     ...overrides,
   };
 }

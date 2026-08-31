@@ -54,13 +54,14 @@ from app.core.logging import get_logger
 from app.llm.classify import classify_article
 from app.llm.classify_prompt import campaign_topic_fragment
 from app.llm.gazetteer import COUNTRY_ALIASES, fold_for_match
+from app.llm.heuristic import RETROSPECTIVE_REASON, is_retrospective
 from app.models.article import Article
 from app.models.entity import ArticleEntity
 from app.models.news_event import NewsEvent
 from app.pipeline.clustering import EventCandidate, cluster, entity_codes, pick_primary, tier_for_source
 from app.pipeline.confidence import ConfidenceInput, is_publishable, score
 from app.pipeline.language import resolve as resolve_language
-from app.pipeline.outcomes import OutcomeState
+from app.pipeline.outcomes import Outcome, OutcomeState
 from app.pipeline.promo_dedup import (
     campaign_tier_for_article,
     candidate_from_row,
@@ -342,10 +343,22 @@ async def run_pipeline_v2(db: AsyncSession, *, limit: int = DEFAULT_BATCH_SIZE) 
         risk_score_detail = None
         aviation_impact_note = None
         risk_assessed_at = None
-        if result.risk.state is not OutcomeState.FAILED:
+        # A second validation layer over the model's own "is this a risk"
+        # verdict, the same shape as the campaign one below: it can only ever
+        # narrow. An anniversary piece is a real disaster told years after the
+        # fact, and nothing in this pipeline carries an event date -- only the
+        # publication time, which would put a 2023 earthquake on today's radar.
+        # See app/llm/heuristic.py's RETROSPECTIVE GUARD.
+        risk_outcome = result.risk
+        if risk_outcome.state is OutcomeState.CLASSIFIED and is_retrospective(primary.title):
+            risk_outcome = Outcome.not_applicable(
+                RETROSPECTIVE_REASON, certainty=risk_outcome.certainty
+            )
+
+        if risk_outcome.state is not OutcomeState.FAILED:
             risk_assessed_at = now
-            if result.risk.state is OutcomeState.CLASSIFIED:
-                risk = result.risk.payload
+            if risk_outcome.state is OutcomeState.CLASSIFIED:
+                risk = risk_outcome.payload
                 risk_type = risk.category
                 risk_family = risk_category_family_of(risk.category)
                 risk_severity = risk.severity
@@ -372,7 +385,7 @@ async def run_pipeline_v2(db: AsyncSession, *, limit: int = DEFAULT_BATCH_SIZE) 
                 # cost another model call on an article we no longer keep.
                 aviation_impact_note = risk.aviation_impact_note
             else:
-                not_applicable["risk"] = result.risk.reason
+                not_applicable["risk"] = risk_outcome.reason
 
         # A second validation layer on top of the model's own "is this a
         # campaign" verdict: agents/campaign_airline.py catches the

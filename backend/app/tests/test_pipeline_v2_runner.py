@@ -276,6 +276,66 @@ async def test_a_risk_verdict_is_persisted_with_a_score(db_session, monkeypatch)
     assert event["aviation_impact_note"] == "Hava üssü operasyonları etkilendi."
 
 
+async def test_an_anniversary_piece_is_vetoed_as_retrospective(db_session, monkeypatch):
+    """The model, correctly, sees a devastating earthquake and says "risk".
+    It is right about the hazard and wrong about the day: nothing in this
+    pipeline carries an event date, only a publication time, so a commemoration
+    filed this morning becomes a signal from this morning.
+
+    A second validation layer over the model's verdict, the same shape as the
+    campaign one -- it can only narrow, and it records WHY rather than quietly
+    dropping the field.
+    """
+    async def _anniversary(title, content, *, topic_fragment=""):
+        return ClassificationResult(
+            article=Outcome.classified(
+                Classification(
+                    category="general", subcategory=None,
+                    title_tr="Kahramanmaraş depreminin yıl dönümü",
+                    summary_tr="Depremde hayatını kaybedenler anıldı.",
+                    confidence=0.9, airlines=[], airports=[], countries=["Turkey"],
+                ),
+                certainty=0.9,
+            ),
+            risk=Outcome.classified(
+                RiskAssessment(
+                    category="natural_disaster", severity="high", probability=0.9,
+                    aviation_impact_score=0.5, country="Turkey", city=None,
+                    aviation_impact_note="Havalimanları o dönem kapanmıştı.",
+                ),
+                certainty=0.9,
+            ),
+            campaign=Outcome.not_applicable("not_a_campaign"),
+        )
+
+    monkeypatch.setattr(runner_module, "classify_article", _anniversary)
+
+    source = await _source(db_session)
+    await _article(
+        db_session, source, "https://a.example/anma",
+        "Havalimanlarında deprem yıl dönümü anma törenleri: Türk Hava Yolları "
+        "uçuş programını değiştirdi",
+        content=(
+            "6 Şubat depremlerinde hayatını kaybedenler havalimanlarında düzenlenen "
+            "törenlerle anıldı. Türk Hava Yolları ve AJet, anma günü nedeniyle Hatay "
+            "Havalimanı ve Adana Havalimanı seferlerinde tarife değişikliğine gitti. "
+            "Depremde bölgedeki havalimanları günlerce yalnızca yardım uçuşlarına açık "
+            "kalmış, pistteki hasar nedeniyle uçak trafiği durmuştu."
+        ),
+    )
+    await db_session.commit()
+
+    await run_pipeline_v2(db_session, limit=10)
+
+    event = (await db_session.execute(NewsEvent.__table__.select())).mappings().one()
+    # The event is still published -- it is a real, relevant aviation story.
+    # Only its risk verdict is withdrawn, and the reason is on the record.
+    assert event["risk_type"] is None
+    assert event["risk_severity"] is None
+    assert event["risk_score"] is None
+    assert event["not_applicable_reasons"]["risk"] == "retrospective"
+
+
 async def test_a_non_risk_event_carries_no_score_breakdown_and_no_impact_note(db_session):
     """The default stub answers NOT_APPLICABLE for risk. Both new columns must
     stay null rather than land as an empty dict and an empty string -- "no

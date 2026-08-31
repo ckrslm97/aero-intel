@@ -523,6 +523,19 @@ export interface RiskItem {
   /** The publication chronology, oldest first. Capped server-side. */
   members: RiskMember[];
   members_truncated: boolean;
+  /** "normal" | "low" -- how loudly the page may state this signal. Decided
+   * server-side from the confidence score and the number of corroborating
+   * outlets (see backend/app/api/v1/risks.py CONFIDENCE GATING); items below
+   * the publish floor never arrive here at all. "low" items are rendered
+   * de-emphasised in a collapsed block, never hidden. */
+  visibility: string;
+  /** The source-language headline, when `headline` is a translation of it.
+   * Null when the two are the same string -- there is nothing to reveal. */
+  headline_original: string | null;
+  /** Whether `headline` is translator-produced Turkish. False means the card
+   * is showing source-language text, which the page says out loud with the
+   * app's "otomatik çeviri yok" tag rather than letting it pass as Turkish. */
+  is_translated: boolean;
 }
 
 export interface RiskSeverityCounts {
@@ -545,6 +558,10 @@ export interface RiskCountry {
 export interface RiskRadarOut {
   days: number;
   total: number;
+  /** How many signals the confidence floor removed from this window. Served so
+   * the page can state it: a list that quietly drops rows is a list whose
+   * counts nobody can reconcile. */
+  suppressed_low_confidence: number;
   countries: RiskCountry[];
   type_counts: Record<string, number>;
   family_counts: Record<string, number>;

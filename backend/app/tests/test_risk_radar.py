@@ -22,6 +22,7 @@ from app.llm.heuristic import (
     detect_risk_severity,
     detect_risk_type,
     fold_text,
+    is_retrospective,
 )
 from app.models.article import Article, ArticleEnrichment
 from app.models.entity import ArticleEntity, Entity
@@ -234,6 +235,146 @@ def test_production_false_positives_stay_unclassified(title, content):
     assert detect_risk_type(title, content) is None
 
 
+# The retrospective/anniversary family. Kept in its own list rather than folded
+# into PRODUCTION_FALSE_POSITIVES because that one carries a specific claim --
+# every row measured over 30 days of production articles -- and these were
+# written from the wire conventions the guard targets, not harvested from that
+# run. Same discipline, different provenance, so a different name.
+#
+# All of them describe REAL disasters. That is the point: nothing here is a
+# misclassification of the hazard, it is a misplacement in time. Publication
+# time is the only clock this pipeline has, so an anniversary piece filed this
+# morning becomes a signal from this morning unless the headline's own voice
+# stops it. See app/llm/heuristic.py's RETROSPECTIVE GUARD.
+RETROSPECTIVE_FALSE_POSITIVES = [
+    pytest.param(
+        "Kahramanmaraş depreminin yıl dönümünde anma töreni düzenlendi",
+        "6 Şubat depremlerinde hayatını kaybedenler anıldı. On binlerce kişi "
+        "öldü, on bir ilde binalar yıkıldı, yüz binlerce kişi tahliye edildi.",
+        id="turkish_anniversary_commemoration",
+    ),
+    pytest.param(
+        "Remembering Hurricane Katrina, 20 Years On",
+        "The hurricane killed more than 1,800 people and destroyed swathes of "
+        "New Orleans after it made landfall in 2005.",
+        id="english_anniversary_retrospective",
+    ),
+    pytest.param(
+        "On This Day In 1988: The Ramstein Airshow Disaster That Killed 70",
+        "A mid-air collision sent a burning jet into the crowd; 70 people died "
+        "and hundreds were injured at the air base.",
+        id="on_this_day_column",
+    ),
+    pytest.param(
+        "In 2011 A Tsunami And Earthquake Struck Fukushima — How Japan Rebuilt "
+        "Its Regional Airports",
+        "The magnitude 9.0 earthquake and the tsunami that followed destroyed "
+        "the region, killed thousands and forced a mass evacuation.",
+        # The year+past-tense trigger rather than a marker phrase: this headline
+        # never says "anniversary", it just narrates.
+        id="old_year_with_past_tense_narration",
+    ),
+]
+
+
+@pytest.mark.parametrize(("title", "content"), RETROSPECTIVE_FALSE_POSITIVES)
+def test_retrospective_coverage_is_not_a_live_signal(title, content):
+    assert detect_risk_type(title, content) is None
+
+
+def test_the_retrospective_guard_reads_the_headline_not_the_body():
+    """Live coverage reaches backwards all the time -- "the worst since 2020",
+    "a similar quake 20 years ago" -- and vetoing on that would suppress the
+    event the article is actually reporting. The guard is title-scoped for
+    exactly this case."""
+    assert detect_risk_type(
+        "Elazığ'da deprem: havalimanı geçici olarak kapatıldı",
+        "2020 depreminden bu yana bölgedeki en büyük sarsıntı. Onlarca kişi "
+        "hayatını kaybetti, ekipler enkaz altında arama yapıyor.",
+    ) == "earthquake"
+
+
+def test_a_year_alone_and_past_tense_alone_are_both_harmless():
+    """Neither half of the second trigger fires on its own. A current-year
+    headline is not history, and a headline with no year is just a headline."""
+    assert is_retrospective("2026 hurricane season forecast raised again") is False
+    assert is_retrospective("Storm was severe, airports say") is False
+    # Both halves, and now it is a retelling.
+    assert is_retrospective("Storm of 2019 was the worst on record", year_now=2026) is True
+
+
+# Weak tiers found by probing the shipped rules rather than by a production
+# run -- each one classified as a live risk event before the fix beside it, and
+# each fix narrows the vocabulary rather than widening it.
+CONTEXT_HARDENING_FALSE_POSITIVES = [
+    pytest.param(
+        "Royal Canadian Air Force CH-148 Cyclone helicopters grounded after fleet inspection",
+        "The Cyclone fleet returned to service after a maintenance directive "
+        "from the air force.",
+        # "cyclone" was a STRONG storm keyword and the weather-named-aircraft
+        # discount only knew Typhoon, Tornado and Hurricane -- the CH-148
+        # Cyclone is an in-service RCAF type and slipped straight through.
+        id="cyclone_the_maritime_helicopter",
+    ),
+    pytest.param(
+        "Sikorsky delivers final CH-148 Cyclone to Canada",
+        "The Cyclone is the RCAF maritime helicopter replacing the Sea King.",
+        id="cyclone_type_designation_in_a_delivery_story",
+    ),
+    pytest.param(
+        "Ryanair and Lufthansa at war over Frankfurt slots",
+        "The two carriers are at war over capacity at the hub after the "
+        "regulator's ruling.",
+        # "at war" was strong, so the commercial construction the other war
+        # metaphors were already masked for ("fare war", "bidding war") walked
+        # in through a different door.
+        id="at_war_over_is_the_commercial_construction",
+    ),
+    pytest.param(
+        "Así se lava un Boeing 747: el proceso completo",
+        "Cada cuánto se lava un avión y cómo se hace el lavado exterior en el hangar.",
+        # Same shape as the Spanish "junta" bug: "lava" is the third-person
+        # present of *lavar*, and it was a STRONG volcano keyword.
+        id="spanish_lava_is_a_verb_not_a_volcano",
+    ),
+    pytest.param(
+        "Uçakta yakıt hortumu arızası tespit edildi",
+        "Teknik ekip hidrolik hortum değişimi yaptı; uçak servise döndü.",
+        # "hortum" is Turkish for both "tornado" and "hose", and it was strong.
+        id="turkish_hortum_is_also_a_hose",
+    ),
+]
+
+
+@pytest.mark.parametrize(("title", "content"), CONTEXT_HARDENING_FALSE_POSITIVES)
+def test_context_hardening_cases_stay_unclassified(title, content):
+    assert detect_risk_type(title, content) is None
+
+
+def test_the_hardening_never_suppresses_the_real_hazard():
+    """Each fix above is a narrowing, and a narrowing is only correct if the
+    thing it was aimed at still gets through. A real cyclone brings no
+    military-aviation vocabulary, a real hortum flattens greenhouses, and a
+    real lava flow is a compound."""
+    assert detect_risk_type(
+        "Cyclone Chido batters Mayotte, airport closed",
+        "The cyclone destroyed homes and killed dozens across the island.",
+    ) == "storm"
+    assert detect_risk_type(
+        "Antalya'da hortum: seralar yıkıldı, yaralılar var",
+        "Şiddetli hortum seraları yıktı; birçok kişi yaralı, ekipler bölgede.",
+    ) == "storm"
+    assert detect_risk_type(
+        "Etna'da lava akıntısı Catania Havalimanı'nı kapattı",
+        "Volkanik kül bulutu nedeniyle uçuşlar iptal edildi, köyler tahliye edildi.",
+    ) == "volcano"
+    # "at war" without the commercial "over" is still a war.
+    assert detect_risk_type(
+        "Sudan has been at war since April",
+        "Airstrikes and shelling continue; thousands have been killed.",
+    ) == "war"
+
+
 def test_weather_named_aircraft_guard_does_not_suppress_real_weather():
     """The discount is aimed at the aircraft, not at the hazard -- a real
     typhoon or hurricane must survive it."""
@@ -401,8 +542,15 @@ def test_non_risk_article_classifies_to_all_none():
 
 async def _risk_article(
     db, source, *, url, risk_type, severity, country, city=None, days_ago=1,
-    title="t", entities=(), summary_tr=None, confidence_score=0.0,
+    title="t", entities=(), summary_tr=None,
+    # The corpus median (see risks.py CONFIDENCE_GATING), not 0.0. Two reasons:
+    # 0.0 is a score pipeline/verify.py's formula cannot produce -- its floor is
+    # 0.4 -- so a fixture claiming it was never describing a real row, and every
+    # test below that is not about the confidence gate wants an ordinary,
+    # publishable signal rather than one the gate is entitled to drop.
+    confidence_score=0.61,
     corroborating_source_count=1,
+    headline_tr=None, translated_at=None,
 ):
     from app.taxonomy import risk_family_of as family_of
 
@@ -429,6 +577,8 @@ async def _risk_article(
             risk_severity=severity,
             risk_country=country,
             risk_city=city,
+            headline_tr=headline_tr,
+            translated_at=translated_at,
             summary_tr=summary_tr,
             confidence_score=confidence_score,
             corroborating_source_count=corroborating_source_count,
@@ -967,6 +1117,241 @@ async def test_an_unsummarised_signal_reports_none_not_an_empty_string(db_sessio
 
     out = await list_risks(days=14, response=Response(), db=db_session)
     assert out.countries[0].items[0].summary_tr is None
+
+
+# --------------------------------------------------------------------------
+# API: the confidence gate
+#
+# The thresholds are measured, not chosen -- see app/api/v1/risks.py's
+# CONFIDENCE GATING block for the distribution they came out of. What these
+# tests pin down is the shape of the rule: where each boundary sits, that
+# corroboration overrides it, and that a row nobody scored is not treated as a
+# row that scored badly.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("score", "expected"),
+    [
+        # Below the floor: the weakest single aggregator (trust < 0.60).
+        (0.535, None), (0.565, None), (0.5799, None),
+        # The floor itself is published -- `< FLOOR`, never `<= FLOOR`. 0.58 is
+        # the mode of the whole feed (40% of it), so cutting AT it would empty
+        # the page rather than trim its tail.
+        (0.58, "low"), (0.595, "low"), (0.6099, "low"),
+        # The corpus median and up.
+        (0.61, "normal"), (0.67, "normal"), (0.9, "normal"),
+    ],
+)
+async def test_confidence_thresholds_decide_publish_and_emphasis(db_session, score, expected):
+    source = await _source(db_session, f"SC{score}")
+    await _risk_article(
+        db_session, source, url=f"https://c.com/{score}", risk_type="flood",
+        severity="high", country="France", confidence_score=score,
+    )
+    await db_session.commit()
+
+    from fastapi import Response
+
+    out = await list_risks(days=14, response=Response(), db=db_session)
+
+    if expected is None:
+        assert out.total == 0
+        assert out.countries == []
+        # Counted, not swallowed: a page that silently drops rows is a page
+        # whose numbers nobody can reconcile.
+        assert out.suppressed_low_confidence == 1
+    else:
+        assert out.total == 1
+        assert out.suppressed_low_confidence == 0
+        assert out.countries[0].items[0].visibility == expected
+
+
+async def test_corroboration_exempts_a_cluster_from_the_floor(db_session):
+    """A second newsroom telling the same story is the evidence this score is
+    mostly made of, and the primary's own row cannot see it: confidence is
+    computed from the duplicate group, not from the cluster. Two outlets below
+    the floor still publish -- and publish at full emphasis, because the thing
+    the floor is looking for (a lone weak telling) is not what this is."""
+    weak_a = await _source(db_session, "WeakA")
+    weak_b = await _source(db_session, "WeakB")
+    turkey = await _entity(db_session, "country", "Turkey")
+
+    for source, url in ((weak_a, "https://w.com/a"), (weak_b, "https://w.com/b")):
+        await _risk_article(
+            db_session, source, url=url,
+            title="İzmir'de 6.2 büyüklüğünde deprem: havalimanı kapatıldı",
+            risk_type="earthquake", severity="high", country="Turkey", city="Izmir",
+            confidence_score=0.535, entities=(turkey,),
+        )
+    await db_session.commit()
+
+    from fastapi import Response
+
+    out = await list_risks(days=14, response=Response(), db=db_session)
+
+    assert out.total == 1
+    assert out.suppressed_low_confidence == 0
+    signal = out.countries[0].items[0]
+    assert signal.source_count == 2
+    assert signal.visibility == "normal"
+
+
+async def test_one_outlet_republishing_itself_is_not_corroboration(db_session):
+    """The exemption counts distinct SOURCES, not cluster members. An outlet
+    that runs its own story twice has told it once, and letting that clear the
+    floor would let any weak source exempt itself."""
+    source = await _source(db_session, "SelfRepub")
+    greece = await _entity(db_session, "country", "Greece")
+
+    for url in ("https://r.com/first", "https://r.com/second"):
+        await _risk_article(
+            db_session, source, url=url,
+            title="Rodos'ta orman yangını: 3.000 kişi tahliye edildi",
+            risk_type="wildfire", severity="high", country="Greece", city="Rhodes",
+            confidence_score=0.535, entities=(greece,),
+        )
+    await db_session.commit()
+
+    from fastapi import Response
+
+    out = await list_risks(days=14, response=Response(), db=db_session)
+    assert out.total == 0
+    assert out.suppressed_low_confidence == 1
+
+
+async def test_a_duplicate_group_also_exempts_even_without_a_cluster(db_session):
+    """The other corroboration mechanism. Near-duplicate detection
+    (`corroborating_source_count`) and event clustering are two different
+    passes that answer the same question, and either answering "more than one"
+    is enough."""
+    source = await _source(db_session, "DupGroup")
+    await _risk_article(
+        db_session, source, url="https://d.com/1", risk_type="storm",
+        severity="medium", country="Japan",
+        confidence_score=0.55, corroborating_source_count=3,
+    )
+    await db_session.commit()
+
+    from fastapi import Response
+
+    out = await list_risks(days=14, response=Response(), db=db_session)
+    assert out.total == 1
+    assert out.countries[0].items[0].visibility == "normal"
+
+
+async def test_an_unscored_row_publishes_normally(db_session):
+    """ArticleEnrichment.confidence_score is NOT NULL and defaults to 0.0 --
+    a value the formula (whose minimum is 0.4) cannot produce. It means the
+    verification pass never ran, and hiding on it would be reading a number
+    nobody wrote."""
+    source = await _source(db_session, "Unscored")
+    await _risk_article(
+        db_session, source, url="https://u.com/1", risk_type="attack",
+        severity="high", country="Egypt", confidence_score=0.0,
+    )
+    await db_session.commit()
+
+    from fastapi import Response
+
+    out = await list_risks(days=14, response=Response(), db=db_session)
+    assert out.total == 1
+    assert out.suppressed_low_confidence == 0
+    assert out.countries[0].items[0].visibility == "normal"
+
+
+async def test_low_visibility_signals_sort_last_within_their_country(db_session):
+    """Severity does not promote a weak signal past a solid one. How bad the
+    story would be if true is not evidence that it is, and the page collapses
+    this tail into its own "Düşük güvenli sinyaller" block."""
+    source = await _source(db_session, "SortVis")
+    await _risk_article(
+        db_session, source, url="https://v.com/weak-high", risk_type="war",
+        severity="high", country="Italy", city="Rome", confidence_score=0.58,
+    )
+    await _risk_article(
+        db_session, source, url="https://v.com/solid-low", risk_type="flood",
+        severity="low", country="Italy", city="Milan", confidence_score=0.67,
+    )
+    await db_session.commit()
+
+    from fastapi import Response
+
+    out = await list_risks(days=14, response=Response(), db=db_session)
+    italy = next(c for c in out.countries if c.country == "Italy")
+    assert [i.visibility for i in italy.items] == ["normal", "low"]
+    assert [i.city for i in italy.items] == ["Milan", "Rome"]
+    # Still counted in the country's own totals: it is de-emphasised, not
+    # removed, and a score the visible items do not add up to is worse than a
+    # loud one.
+    assert italy.count == 2
+    assert italy.severity_counts.high == 1
+
+
+# --------------------------------------------------------------------------
+# API: which headline, and in which language
+# --------------------------------------------------------------------------
+
+
+async def test_a_translated_headline_carries_its_original_along(db_session):
+    """The card shows Turkish and reveals the source-language wording on
+    hover, so a reader can check the translation against what was written."""
+    source = await _source(db_session, "TrYes")
+    await _risk_article(
+        db_session, source, url="https://tr.com/1", risk_type="wildfire",
+        severity="high", country="Greece",
+        headline_tr="Rodos'ta orman yangını: tahliye sürüyor",
+        translated_at=NOW,
+    )
+    await db_session.commit()
+
+    from fastapi import Response
+
+    out = await list_risks(days=14, response=Response(), db=db_session)
+    signal = out.countries[0].items[0]
+    assert signal.headline == "Rodos'ta orman yangını: tahliye sürüyor"
+    assert signal.is_translated is True
+    # _risk_article writes `headline` as "<type> in <country>".
+    assert signal.headline_original == "wildfire in Greece"
+
+
+async def test_an_untranslated_headline_says_so_rather_than_passing_as_turkish(db_session):
+    source = await _source(db_session, "TrNo")
+    await _risk_article(
+        db_session, source, url="https://tr.com/2", risk_type="flood",
+        severity="low", country="France",
+    )
+    await db_session.commit()
+
+    from fastapi import Response
+
+    out = await list_risks(days=14, response=Response(), db=db_session)
+    signal = out.countries[0].items[0]
+    assert signal.is_translated is False
+    assert signal.headline == "flood in France"
+    # Nothing to reveal on hover -- the headline shown IS the original.
+    assert signal.headline_original is None
+
+
+async def test_turkish_text_without_a_translation_timestamp_is_not_a_translation(db_session):
+    """The same test schemas/article.py's is_translated uses: `translated_at IS
+    NOT NULL`, never the mere presence of Turkish text. A row carrying
+    headline_tr with no timestamp is an inconsistency, and the app reads it the
+    conservative way everywhere else."""
+    source = await _source(db_session, "TrHalf")
+    await _risk_article(
+        db_session, source, url="https://tr.com/3", risk_type="storm",
+        severity="low", country="Spain",
+        headline_tr="Bir başlık", translated_at=None,
+    )
+    await db_session.commit()
+
+    from fastapi import Response
+
+    out = await list_risks(days=14, response=Response(), db=db_session)
+    signal = out.countries[0].items[0]
+    assert signal.is_translated is False
+    assert signal.headline == "storm in Spain"
 
 
 # --------------------------------------------------------------------------

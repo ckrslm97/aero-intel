@@ -15,7 +15,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
-import { aviationLinkLabel, confidenceBand, coverageBadge } from "@/lib/risk";
+import { aviationLinkLabel, confidenceBand, coverageBadge, staleBadge } from "@/lib/risk";
 import { RISK_TYPES, type RiskTypeSlug } from "@/lib/taxonomy.gen";
 import type { RiskItem } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -95,6 +95,45 @@ export function CoverageBadge({ item }: { item: Pick<RiskItem, "is_fresh" | "is_
       )}
     >
       {badge.label}
+    </span>
+  );
+}
+
+/** "ESKİ", or nothing.
+ *
+ * Muted by design -- `bg-muted`, no border colour, no glow: this is the one
+ * tag on the page that means "pay less attention", and it would be absurd for
+ * it to be the loudest thing on the card. Only drawn in the wide windows,
+ * where old coverage genuinely sits next to today's; see lib/risk.ts
+ * staleBadge. */
+export function StaleBadge({
+  item,
+  windowDays,
+}: {
+  item: Pick<RiskItem, "is_fresh" | "is_updated" | "last_reported_at" | "published_at">;
+  windowDays: number;
+}) {
+  const badge = staleBadge(item, windowDays);
+  if (!badge) return null;
+  return (
+    <span
+      title={badge.title}
+      className="inline-flex items-center whitespace-nowrap rounded-full border border-border bg-muted px-1.5 py-px text-[9px] font-bold uppercase leading-tight text-muted-foreground/80"
+    >
+      {badge.label}
+    </span>
+  );
+}
+
+/** "otomatik çeviri yok" -- the app's existing quiet tag, reused verbatim.
+ *
+ * Same wording and same weight as article-analysis-drawer.tsx's, on purpose:
+ * a reader who has learned what it means on one page must not have to learn a
+ * second phrase for the same fact here. */
+export function UntranslatedTag() {
+  return (
+    <span className="inline-flex items-center whitespace-nowrap rounded-full bg-secondary px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-secondary-foreground">
+      otomatik çeviri yok
     </span>
   );
 }

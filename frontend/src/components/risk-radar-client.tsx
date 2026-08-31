@@ -1,26 +1,23 @@
 "use client";
 
-import { ExternalLink, MapPin, Search, X } from "lucide-react";
+import { Search, X } from "lucide-react";
 import dynamic from "next/dynamic";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
 
 import { DataSourceError, LastUpdatedStamp, StaleDataBanner } from "@/components/data-source-error";
-import { MotionItem, MotionList, MotionRail } from "@/components/motion/motion-list";
+import { MotionList } from "@/components/motion/motion-list";
 import { RiskCategoryBreakdown } from "@/components/risk/risk-category-breakdown";
+import { CountrySection } from "@/components/risk/risk-country-section";
 import { RiskDetailDrawer } from "@/components/risk/risk-detail-drawer";
 import {
-  AirportChips,
-  AviationLinkMark,
-  ConfidencePill,
   CoverageBadge,
   FAMILY_META,
   TYPE_META,
   TYPE_ORDER,
-  TypePill,
 } from "@/components/risk/risk-meta";
 import { RiskTrendChart } from "@/components/risk/risk-trend-chart-lazy";
-import { severityMeta, SeverityPill } from "@/components/risk/severity-pill";
+import { severityMeta } from "@/components/risk/severity-pill";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDataSource } from "@/hooks/use-data-source";
@@ -72,15 +69,6 @@ const chip = (active: boolean) =>
       ? "bg-primary/12 text-primary ring-1 ring-primary/40 dark:glow-soft"
       : "border border-border text-muted-foreground hover:bg-accent",
   );
-
-const REGION_NAME: Record<string, string> = Object.fromEntries(
-  worldRegions.map((r) => [r.slug, r.name]),
-);
-
-function formatDate(iso: string | null): string | null {
-  if (!iso) return null;
-  return new Date(iso).toLocaleDateString("tr-TR", { day: "numeric", month: "short" });
-}
 
 export function RiskRadarClient() {
   const router = useRouter();
@@ -276,6 +264,17 @@ export function RiskRadarClient() {
         <p className="text-[11px] leading-relaxed text-muted-foreground">
           Operasyonel farkındalık için; resmî uyarı sistemi değildir. Zaman
           bilgileri haberlerin yayın anlarıdır, olayların gerçekleşme anı değildir.
+          {/* Said out loud rather than left as a silent gap between "kaç haber
+              sınıflandı" and "kaç sinyal görüyorum". A list that quietly drops
+              rows is a list whose counts nobody can reconcile. */}
+          {data && data.suppressed_low_confidence > 0 && (
+            <>
+              {" "}
+              Tek kaynaklı ve güven eşiğinin altında kalan{" "}
+              <span className="tabular-nums">{data.suppressed_low_confidence}</span> sinyal
+              bu listede gösterilmiyor.
+            </>
+          )}
         </p>
       </header>
 
@@ -525,6 +524,11 @@ export function RiskRadarClient() {
                         <CountrySection
                           key={group.country}
                           group={group}
+                          // The window the DATA covers, not the chip that is
+                          // lit: those differ for a moment while a new window
+                          // loads, and an age tag drawn against the wrong
+                          // window is worse than one drawn a beat late.
+                          windowDays={data.days}
                           onSelect={setSelected}
                         />
                       ))}
@@ -762,125 +766,6 @@ function LiveFeed({
         })}
       </ul>
     </section>
-  );
-}
-
-function CountrySection({
-  group,
-  onSelect,
-}: {
-  group: RiskCountry;
-  onSelect: (item: RiskItem) => void;
-}) {
-  return (
-    <MotionItem className="flex flex-col gap-3">
-      <div className="flex flex-col gap-2">
-        <div className="flex flex-wrap items-center gap-2">
-          <h3 className="text-sm font-semibold">{group.country}</h3>
-          {group.region && (
-            <span className="rounded-full bg-secondary px-2 py-0.5 text-[10px] font-medium text-secondary-foreground">
-              {REGION_NAME[group.region] ?? group.region}
-            </span>
-          )}
-          <span className="text-[11px] tabular-nums text-muted-foreground">
-            {group.count} sinyal
-          </span>
-        </div>
-        {/* Plain --border rail. No colour at country level: the page's whole
-            colour budget is spent on item severity, one level down. */}
-        <MotionRail
-          staggered
-          style={{ "--glow-color": "var(--border)" } as React.CSSProperties}
-        />
-      </div>
-
-      <div className="flex flex-col gap-2.5">
-        {group.items.map((item) => (
-          <RiskCard key={item.id} item={item} onSelect={onSelect} />
-        ))}
-      </div>
-    </MotionItem>
-  );
-}
-
-function RiskCard({
-  item,
-  onSelect,
-}: {
-  item: RiskItem;
-  onSelect: (item: RiskItem) => void;
-}) {
-  const isHigh = item.severity === "high";
-  const isMedium = item.severity === "medium";
-
-  return (
-    <article
-      style={isHigh ? ({ "--glow-color": "var(--critical)" } as React.CSSProperties) : undefined}
-      className={cn(
-        "group relative flex flex-col gap-2 rounded-xl border bg-card p-4 transition-all duration-200",
-        // The emphatic-but-sober dial. Only high severity gets a lit edge; it
-        // is a static 3px rail, not a strobe. On a bad day the page visibly
-        // carries more red -- that is the signal, and it needs no animation.
-        isHigh && "edge-lit hover:glow-edge",
-        isMedium && "border-l-2 border-l-warning",
-      )}
-    >
-      <div className="flex flex-wrap items-center gap-2">
-        <TypePill item={item} />
-        <SeverityPill severity={item.severity} />
-        <CoverageBadge item={item} />
-        <AviationLinkMark link={item.aviation_link} />
-        {formatDate(item.published_at) && (
-          <span className="ml-auto text-[10px] tabular-nums text-muted-foreground">
-            {formatDate(item.published_at)}
-          </span>
-        )}
-      </div>
-
-      {/* The whole card opens the drawer, and the heading carries the button so
-          a keyboard reader reaches it by the headline rather than by an unnamed
-          region. The stretched pseudo-element is what makes the rest of the
-          card clickable without nesting the source link inside a button. */}
-      <h4 className="text-sm font-medium leading-snug">
-        <button
-          type="button"
-          onClick={() => onSelect(item)}
-          className="text-left after:absolute after:inset-0 after:content-[''] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-        >
-          {item.headline}
-        </button>
-      </h4>
-
-      {item.summary_tr && (
-        <p className="line-clamp-2 text-[13px] leading-relaxed text-muted-foreground">
-          {item.summary_tr}
-        </p>
-      )}
-
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[11px] text-muted-foreground">
-        {(item.city || item.country) && (
-          <span className="flex items-center gap-1">
-            <MapPin className="size-3" aria-hidden />
-            {[item.city, item.country].filter(Boolean).join(" · ")}
-          </span>
-        )}
-        {item.source_name && <span className="font-medium">{item.source_name}</span>}
-        {item.source_count > 1 && <span>+{item.source_count - 1} kaynak daha</span>}
-        <ConfidencePill score={item.confidence_score} />
-        <AirportChips airports={item.airports} />
-        <a
-          href={item.url}
-          target="_blank"
-          rel="noopener noreferrer"
-          // relative + z-10 so this link stays reachable above the card-wide
-          // stretched hit area behind it.
-          className="relative z-10 ml-auto flex items-center gap-1 font-medium text-primary hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-        >
-          Kaynak
-          <ExternalLink className="size-3" aria-hidden />
-        </a>
-      </div>
-    </article>
   );
 }
 

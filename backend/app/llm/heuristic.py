@@ -6,6 +6,7 @@ every other provider falls back to if a live call fails.
 import re
 from collections import Counter
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from functools import lru_cache
 
 from app.llm.base import EntityMention
@@ -258,7 +259,7 @@ def detect_region(entities: list[EntityMention]) -> str | None:
 # overlaps with ordinary aviation and business prose more than any other in the
 # app, and a false "Savaş" row on a disaster page is far worse than a miss.
 #
-# Three mechanisms, in order:
+# Four mechanisms, in order:
 #
 #  1. MASKING. `_RISK_MASK` phrases are blanked out of the text *before* any
 #     matching. This is what makes bare tokens usable at all: "fare war" and
@@ -282,6 +283,11 @@ def detect_region(entities: list[EntityMention]) -> str | None:
 #     requires an explicit wildfire noun ("wildfire", "forest fire",
 #     "bushfire", "orman yangını"); aircraft/hangar fires are masked outright
 #     because they belong to the existing `safety` category, not here.
+#
+#  4. RETROSPECTIVE SUPPRESSION. An anniversary or "on this day" piece is
+#     about a real disaster that happened years ago, and this data has no
+#     event date to file it under -- only the publication time, which would
+#     put it on today's radar. See the RETROSPECTIVE GUARD section below.
 # ===========================================================================
 
 # Turkish letters do not survive normalize_text (its character class is
@@ -317,6 +323,13 @@ _RISK_MASK: tuple[str, ...] = (
     "tariff war", "bidding war", "talent war", "streaming war", "war of words",
     "war chest", "war room", "star wars", "world war", "cold war", "post war",
     "pre war", "warring parties over",
+    # "at war OVER something" is the commercial construction and always was:
+    # carriers are at war over slots, over a hub, over a bilateral. Real
+    # conflict coverage writes "at war since", "at war with Russia", "a country
+    # at war" -- it does not name what the war is over in the same breath. Only
+    # the "over" form is masked, so the strong "at war" keyword survives for the
+    # reporting that actually means it.
+    "at war over", "at war for", "went to war over", "go to war over",
     # "fire" in aviation prose. None of these are wildfires; the aircraft-fire
     # ones are `safety` category events and must not surface here as "Yangın".
     "fired up", "under fire", "fire drill", "firefighting demo",
@@ -371,6 +384,14 @@ _RISK_MASK: tuple[str, ...] = (
     "warbird", "warbirds", "war grave", "war veteran", "war veterans",
     # Hurricane-hunter research aircraft are met-office hardware, not weather.
     "hurricane hunter", "hurricane hunters",
+    # The Sikorsky CH-148 Cyclone is the Royal Canadian Air Force's maritime
+    # helicopter, in service and in this feed. Same trap as Typhoon and
+    # Tornado, and it was missed when those were fixed: the type designation is
+    # masked here, and the bare token is additionally discounted under military
+    # context below (see _WEATHER_NAMED_AIRCRAFT) for the headlines that write
+    # it without the number.
+    "ch 148 cyclone", "ch 148", "cyclone helicopter", "cyclone helicopters",
+    "cyclone fleet", "cyclone maritime helicopter",
     # "erupt"/"flood" as verbs applied to non-hazards.
     "erupted into", "erupted in chaos", "chaos erupted", "floods cabin",
     "floods the cabin", "flooded the cabin", "flooded the cockpit",
@@ -392,6 +413,11 @@ _RISK_MASK: tuple[str, ...] = (
 # clearly about military aviation (see detect_risk_type).
 _WEATHER_NAMED_AIRCRAFT: tuple[str, ...] = (
     "typhoon", "typhoons", "tornado", "tornadoes", "hurricane", "hurricanes",
+    # Added with the same evidence as the other three: the CH-148 Cyclone is a
+    # current RCAF type, so "Cyclone" in a paragraph that also says "air force"
+    # or "squadron" is a helicopter. A real cyclone's coverage carries no
+    # military-aviation vocabulary at all, so it keeps its full score.
+    "cyclone", "cyclones",
 )
 
 _MILITARY_AVIATION_CONTEXT: tuple[str, ...] = (
@@ -401,6 +427,10 @@ _MILITARY_AVIATION_CONTEXT: tuple[str, ...] = (
     "warplane", "warplanes", "air force", "sixth generation", "stacks up",
     "f 16", "f 35", "f 22", "su 35", "su 57", "mig", "spitfire", "messerschmitt",
     "airshow", "air show", "aerodrome", "mcas", "noaa",
+    # The acronyms. "air force" above never reaches them -- an article that
+    # says "RCAF" or "USAF" throughout says "air force" nowhere -- and the
+    # CH-148 Cyclone lives almost entirely in RCAF copy.
+    "rcaf", "usaf", "raaf", "rnlaf", "maritime helicopter",
     # Non-English military vocabulary from the German- and Spanish-language
     # feeds, which the English context words above never reach.
     "luftstreitkrafte", "kampfflugzeug", "bundeswehr", "fuerza aerea",
@@ -474,7 +504,8 @@ _RISK_RULES: tuple[_RiskRule, ...] = (
         "volcano",
         strong=(
             "volcanic eruption", "volcanic ash", "volcano erupted", "volcano erupts",
-            "ash cloud", "ash plume", "volkan patlamasi", "lava",
+            "ash cloud", "ash plume", "volkan patlamasi", "lava akintisi",
+            "lava akisi", "lav akintisi",
         ),
         # Not "ash" (a name, and Ash Wednesday) and not "erupted" ("chaos
         # erupted") -- both matched non-volcanic stories in production. Bare
@@ -485,18 +516,31 @@ _RISK_RULES: tuple[_RiskRule, ...] = (
         # "volkanik" and published as a HIGH-severity live event. A real
         # eruption still brings _RISK_CONTEXT words (evacuated, disaster,
         # destroyed) or one of the unambiguous strong compounds above.
-        weak=("eruption", "volcano", "volcanoes", "volkanik", "yanardag"),
+        #
+        # Bare "lava" moved down here with them, for the reason the Spanish
+        # "junta" bug already taught this module: "lava" is the ordinary
+        # third-person present of Spanish *lavar*, and the feed carries
+        # Spanish-language aviation press. "Así se lava un Boeing 747" is an
+        # aircraft-washing feature, and as a STRONG keyword it published as a
+        # live volcano. The compound "lava akıntısı" stays strong.
+        weak=("eruption", "volcano", "volcanoes", "volkanik", "yanardag", "lava"),
     ),
     _RiskRule(
         "storm",
         strong=(
             "hurricane", "hurricanes", "typhoon", "typhoons", "cyclone", "cyclones",
             "blizzard", "tropical storm", "winter storm", "snowstorm", "windstorm",
-            "tornado", "tornadoes", "kasirga", "tayfun", "kar firtinasi", "hortum",
+            "tornado", "tornadoes", "kasirga", "tayfun", "kar firtinasi",
         ),
+        # "hortum" is Turkish for both "tornado" and "hose", and the hose sense
+        # is ordinary maintenance vocabulary on this feed (yakıt hortumu,
+        # hidrolik hortum). Demoted from strong for exactly the reason bare
+        # "yangın" never entered the wildfire rule: a real hortum flattens
+        # greenhouses and injures people, so it arrives with _RISK_CONTEXT
+        # words, and a burst hydraulic line does not.
         weak=(
             "storm", "storms", "thunderstorm", "thunderstorms", "gale",
-            "severe weather", "firtina",
+            "severe weather", "firtina", "hortum",
         ),
     ),
     _RiskRule(
@@ -558,6 +602,104 @@ _RISK_RULES: tuple[_RiskRule, ...] = (
         weak=("protest", "protests", "protesters", "unrest", "curfew", "protesto"),
     ),
 )
+
+# ===========================================================================
+# RETROSPECTIVE GUARD -- mechanism (4)
+#
+# Publication time is the only time this pipeline has (see app/api/v1/risks.py's
+# module docstring): `published_at` is when somebody WROTE about an event, never
+# when the event happened. That is exactly right for breaking coverage and
+# exactly wrong for the anniversary piece -- "Kahramanmaraş depreminin yıl
+# dönümü", filed this morning, puts a 2023 earthquake on the radar as a signal
+# from today, and there is no field anywhere in this data that could correct it.
+#
+# Extracting an event date out of the prose is NOT the fix, and was rejected on
+# purpose: a date parsed from a sentence is a guess wearing the costume of a
+# fact, and one bad parse moves a live event into the past, which is a strictly
+# worse failure than the one being fixed.
+#
+# What IS readable off the surface is the article's VOICE. A retelling
+# announces itself, in the headline, in wire style, reliably: "yıl dönümü",
+# "on this day", "remembering", "10 years ago". Two triggers, both scoped to
+# the TITLE:
+#
+#  1. An explicit retrospective marker. Title-scoped rather than whole-text
+#     because live coverage routinely reaches one paragraph back ("a similar
+#     quake struck 20 years ago", "the deadliest season since 2018"), and
+#     vetoing on that would suppress the very event the article reports.
+#
+#  2. A year at least RETROSPECTIVE_YEAR_GAP old in the title, alongside
+#     past-tense narration in the same title ("In 2011 a tsunami STRUCK
+#     Fukushima"). Neither half carries it alone: "2026 hurricane season" is
+#     this year's, and "Earthquake strikes Izmir" names no year at all.
+#
+# Suppression, not down-ranking: an anniversary story is not a weak signal, it
+# is a signal about a different day, and the radar has no way to say so.
+# ===========================================================================
+
+#: The reason string recorded when this guard fires. Named rather than inlined
+#: because two call sites write it -- detect_risk_type() drops the
+#: classification outright, and app/agents/runner.py records it as the v2
+#: pipeline's `not_applicable["risk"]`, which is what makes the veto auditable
+#: instead of invisible.
+RETROSPECTIVE_REASON = "retrospective"
+
+#: How old a year in the title has to be before it reads as history. Two, not
+#: one: a January piece about "the 2025 wildfire season" is still writing about
+#: the season that just ended, and an article naming its own year is ordinary.
+RETROSPECTIVE_YEAR_GAP = 2
+
+#: Headline phrasings that exist to say "this is a look backwards". Written in
+#: folded form like every other pattern here (see fold_text), and the Turkish
+#: entries are repeated with their case suffixes because \b anchors both ends
+#: -- "yil donumu" does not match "yıl dönümünde", which is how a Turkish
+#: headline almost always inflects it.
+_RETROSPECTIVE_MARKERS: tuple[str, ...] = (
+    "anniversary", "anniversaries", "years ago", "year ago", "decades ago",
+    "years on", "years since", "decades since", "on this day", "looking back",
+    "a look back", "remembering", "in memory of", "in memoriam", "throwback",
+    "flashback", "retrospective", "commemorates", "commemorated",
+    "commemoration", "we remember",
+    "yil donumu", "yil donumunde", "yil donumunu", "yildonumu", "yildonumunde",
+    "yildonumunu", "yil once", "yillar once", "yil onceki", "tarihinde bugun",
+    "anma toreni", "anma toreninde", "anma gunu", "anma gununde", "anisina",
+    "geriye bakis", "unutulmadi", "aninda",
+)
+
+#: Past-tense narration. Only consulted alongside an old year in the same
+#: title, which is what keeps ordinary words like "was" usable: a terse news
+#: headline that both names a year from three years ago AND narrates in the
+#: past is telling a story, not reporting one. Deliberately excludes the
+#: breaking-news verbs ("kills", "hits", "destroys") -- those are the register
+#: this guard must never touch.
+_RETROSPECTIVE_PAST_TENSE: tuple[str, ...] = (
+    "was", "were", "had", "struck", "claimed", "sank", "became", "marked",
+    "remembered", "commemorated", "died", "ended", "began",
+    "yilinda", "olmustu", "vurmustu", "yasanmisti", "gerceklesmisti",
+    "kaybetmisti", "meydana gelmisti", "gomuldu",
+)
+
+#: 1900-2099. Narrower than \d{4} so a flight number, a fleet size or an
+#: aircraft type ("Boeing 7378", "A350 1000") cannot be read as a year.
+_YEAR_RE = re.compile(r"\b(?:19|20)\d{2}\b")
+
+
+def is_retrospective(title: str, *, year_now: int | None = None) -> bool:
+    """True when the HEADLINE says the piece is looking backwards.
+
+    `year_now` is injectable so the year arithmetic is testable without
+    freezing the clock; it defaults to the current UTC year.
+    """
+    title_text = fold_text(title)
+    if _any(_RETROSPECTIVE_MARKERS, title_text):
+        return True
+
+    current = year_now if year_now is not None else datetime.now(timezone.utc).year
+    old_year = any(
+        int(match) <= current - RETROSPECTIVE_YEAR_GAP for match in _YEAR_RE.findall(title_text)
+    )
+    return old_year and _any(_RETROSPECTIVE_PAST_TENSE, title_text)
+
 
 # Headline voice matters here: wires write "Earthquake kills hundreds", not
 # "hundreds were killed", so the present-tense forms have to be listed
@@ -625,6 +767,12 @@ def detect_risk_type(title: str, content: str) -> str | None:
     news feed, and the whole design above is biased towards returning it rather
     than guessing.
     """
+    # Before any scoring: an anniversary piece is a well-written article about
+    # a real disaster, so every rule below would match it enthusiastically and
+    # file a 2023 earthquake as a signal from this morning. See mechanism (4).
+    if is_retrospective(title):
+        return None
+
     title_text = _masked(fold_text(title))
     body_text = _masked(fold_text(content))
     has_context = _any(_RISK_CONTEXT, f"{title_text} {body_text}")
