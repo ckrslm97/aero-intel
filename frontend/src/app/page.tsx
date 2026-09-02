@@ -46,7 +46,8 @@ async function load<T>(path: string, init: RequestInit & { next?: { revalidate?:
  * The page answers one question in thirty seconds: what is the market doing,
  * how are the industry's numbers moving, which way is the lira going, what is
  * IATA expecting, and what should worry me. The section order below IS that
- * answer, and sections 1-5 are sized to fit a 1440x900 fold together.
+ * answer, and sections 1-4 are sized to clear the fold together on a 13"
+ * laptop -- see THE FOLD CONTRACT below for the measurement.
  *
  * THE TWO RULES EVERY LAYOUT DECISION HERE CAME FROM
  * --------------------------------------------------
@@ -61,51 +62,44 @@ async function load<T>(path: string, init: RequestInit & { next?: { revalidate?:
  *    say only "good or bad". A forecast is NOT amber -- amber in this house
  *    means "warning" and nothing else.
  *
- * THE FOLD CONTRACT (1440x900) -- MEASURED, not budgeted
- * ------------------------------------------------------
- * The app shell starts this page at y=96, leaving 804px of visible page.
- * These are the heights the sections ACTUALLY render at with live data, read
- * out of the browser rather than added up from the cell specs:
+ * THE FOLD CONTRACT -- MEASURED, and budgeted against 735px, not 900
+ * ------------------------------------------------------------------
+ * The earlier contract was written against a 1440x900 window. That is not the
+ * machine this page is read on: a 13" MacBook reports 1440 logical pixels wide
+ * but roughly 735 of visible page once the browser chrome and this app's own
+ * 96px shell are taken out. Budgeting against 900 meant the contract held on
+ * the measuring machine and broke on the reader's.
  *
- *   1 Header              52  (+20 gap) ->  72
- *   2 Market Pulse       211  (+20 gap) -> 303
- *   3 KPI + Denge        287  (+20 gap) -> 610
- *   4 Günün Özeti        129  (+20 gap) -> 759
- *   5 Kur / FX  (heading + rail visible)    -> 804 = fold
+ * Measured in a browser against live data, dark and light, at 1440 and 1280:
  *
- * Market Pulse costs 33px more than the previous measurement said, and the
- * reason is worth knowing before anyone tries to win it back. Its cells were
- * a hard `h-[104px]` wrapped around slots that add up to more than that, so
- * flex was quietly crushing whichever child carried an `overflow: hidden`:
- * the unit row rendered 8px tall inside its 12px box and clipped "RPK" and
- * "$/varil" from below, and the annual cells' year labels fell outside the
- * card entirely. The cells are now `min-h-[104px]` with unshrinkable slots and
- * measure 138px. Section 3 did not move at all -- the KPI cells grew from a
- * crushed 76px to 111px, but Sektör Dengesi beside them was already the taller
- * column.
+ *   1 Header               52  ->  bottom 148
+ *   2 Market Pulse        218  ->  bottom 386
+ *   3 Genel KPI (6 cells) 176  ->  bottom 582
+ *   4 Günün Özeti         113  ->  bottom 715      <-- 13" fold at 735
+ *   5 Kur / FX            373  ->  bottom 1108     <-- 1440x900 fold at 900
+ *                                                       falls inside the table
  *
- * So the fold carries: market state, the five KPIs, the sector balance, the
- * four signal tiles, and the FX section's heading. IATA's expectation is in
- * the fold too -- as the 2026T badge on the three annual pulse cells and the
- * year labels under the KPI dots.
+ * FOUR complete sections now clear the fold on the smallest machine anyone
+ * reads this on, where the previous layout got three and a half. The room came
+ * from two places and neither of them was a caveat:
  *
- * That satisfies the owner's contract ("market state + KPIs + which way the
- * lira is going + IATA's expectation + what should worry me, in thirty
- * seconds"): the lira's direction is the KUR pulse cell, at 26px, with its day
- * and week deltas. The FX TABLE is the drill-down, and it starts one short
- * scroll below.
+ *   * section 3 was a five-cell strip PLUS a four-column "Sektör Dengesi"
+ *     panel, 287px. Three of that panel's four rows were arithmetic on two
+ *     numbers already printed within two hundred pixels of it -- the
+ *     demand-capacity scissor IS the load factor's direction, the
+ *     revenue-traffic scissor IS yield's -- and the fourth was fuel's second
+ *     appearance on a page instructed to show fuel once. Only the unit margin
+ *     said something the page could not say elsewhere, so it became the sixth
+ *     cell of the strip and the panel went away: 287 -> 176.
+ *   * the section bylines were cut from 278 words to 191 (300px to 195px, 15%
+ *     of the page to 10%). What was cut was explanation; what stayed is
+ *     source, period and the caveats that make the numbers readable. The FX
+ *     chart's method note lost the paragraph explaining how "Q4 2026" becomes
+ *     an x coordinate -- that is written on each point's own tooltip, where
+ *     the reader who needs it is already looking.
  *
- * The earlier draft of this comment budgeted 120/124/88 for sections 2-4 and
- * concluded the first nine FX rows would clear the fold. They do not, and the
- * difference is almost entirely the section bylines -- the source-and-period
- * captions under each heading. Those captions are the page's honesty
- * contract and are NOT negotiable for fold space; the FX rows are. If you
- * find yourself tempted to trade one for the other, that is the trade you
- * would be making.
- *
- * THIS SUPERSEDES the 92px cell arithmetic that used to be commented in
- * market-strip.tsx. If you are about to make a cell taller, this is the
- * calculation you are spending.
+ * The bylines are still NOT negotiable for fold space. If you find yourself
+ * trading one for a row of a table, that is the trade you are making.
  *
  * WHAT THIS PAGE REFUSES TO SHOW
  * ------------------------------
@@ -115,14 +109,24 @@ async function load<T>(path: string, init: RequestInit & { next?: { revalidate?:
  * * a composite 0-100 "aviation health score" -- it would blend a 15-minute FX
  *   reading with a twice-yearly IATA series under weights nobody can cite. See
  *   cockpit_signals_service.py, and kokpit/sector-balance.tsx for what is
- *   shown instead: four DERIVED relationships, each with its own source and
- *   period printed under it;
+ *   shown instead: ONE derived relationship -- the unit margin RASK-CASK,
+ *   which is the only one of the four originally drawn here that says
+ *   something no other cell on the page already says -- with the years it was
+ *   computed from printed under it;
  * * competitor capacity / load factor / market share / price pressure -- every
  *   competitive number on this page is a count of news and campaigns, and the
  *   Rekabet caption says so rather than relying on one line a reader may skip;
  * * a REGIONAL IATA selector -- `iata_indicators.region` is NULL on all eight
  *   rows, so the selector would offer five choices that all return nothing. An
  *   empty selector reads as a broken product, not as absent data;
+ * * live pairs the owner did not ask for -- GBP/USD and EUR/GBP are still
+ *   recorded, still have their own /kpi detail pages, and are simply not on
+ *   the executive board. On the running page GBP/USD was a row of dashes end
+ *   to end under a 9px divider that measured 2,39:1 in the light theme;
+ * * a threshold band on the three ANNUAL pulse cells -- nobody publishes a
+ *   threshold for an IATA yearly series, and one invented here would be the
+ *   composite score this page refuses two bullets above. The two live cells
+ *   carry the bands `/kokpit/signals` actually computes;
  * * a "1M" column in the FX table -- the curated forecasts carry 3- and
  *   12-month horizons and nothing shorter, and filling a 1M column would mean
  *   interpolating between two institutions' horizons, which is precisely what
@@ -179,41 +183,38 @@ export default async function KokpitPage() {
           // cell badges and the chart's dashed tail together. A hard-coded
           // "Haziran 2026" here would go on claiming the old edition after
           // every one of them had moved.
-          caption={`${
+          caption={`Sol üç hücre: ${
             annual?.scope_tr ?? "IATA Küresel Görünüm · sektör geneli · yıllık"
-          } — canlı seriler Yahoo Finance, ~15 dk gecikmeli. Soldaki üç hücre yılda iki kez, sağdaki iki hücre 15 dakikada bir güncellenir. “MARKET” hücresi için rakip kapasite/pazar payı verisi bu sistemde yoktur; slot, havacılığın canlı fiyatlanan tek maliyet kalemine verilmiştir. YAKIT hücresi küresel Brent ham petrol kontratıdır — şirketin hedge edilmiş yakıt maliyeti değildir.`}
+          }. Sağ iki hücre: Yahoo, ~15 dk. Yakıt küresel Brent’tir, şirket yakıt maliyeti değildir.`}
           glowVar="var(--signal)"
         />
-        <MarketPulseRow annual={annual} board={board} energy={energy} />
+        <MarketPulseRow annual={annual} board={board} energy={energy} signals={signals} />
       </section>
 
       {/* 3 --------------------------------------------------------------- */}
       <section className="flex flex-col gap-2">
         <SectionHeader
           title="Genel KPI"
-          caption={
-            annual
-              ? `${annual.scope_tr} · TK verisi değil, aylık veri değil.`
-              : "IATA Küresel Görünüm · sektör geneli · yıllık · TK verisi değil, aylık veri değil."
-          }
+          caption={`${
+            annual?.scope_tr ?? "IATA Küresel Görünüm · sektör geneli · yıllık"
+          } · TK verisi değil. Tek bileşik sağlık skoru üretilmez.`}
           glowVar="var(--chart-2)"
           action={annual ? { href: annual.source_url, label: "IATA kaynağı" } : undefined}
         />
-        <div className="grid grid-cols-1 gap-3 xl:grid-cols-12">
-          <div className="xl:col-span-8">
-            <KpiStrip series={annualSeries} />
-          </div>
-          <div className="xl:col-span-4">
-            <SectorBalance annual={annual} energy={energy} />
-          </div>
-        </div>
+        {/* Six cells in ONE strip, where this was a five-cell strip plus a
+            four-column "Sektör Dengesi" panel. Three of that panel's four rows
+            were arithmetic on two numbers already printed within two hundred
+            pixels of it (see sector-balance.tsx); the fourth, the unit margin,
+            is the one figure the page cannot state anywhere else, so it became
+            the sixth cell. The section fell from 287px to ~130px. */}
+        <KpiStrip series={annualSeries} trailing={<SectorBalance annual={annual} />} />
       </section>
 
       {/* 4 --------------------------------------------------------------- */}
       <section className="flex flex-col gap-2">
         <SectionHeader
           title="Günün Özeti"
-          caption="Dört ayrı sürücü, dört açık eşik — tek bir bileşik skor değil. Sayı, eşik ve yöntem karonun üzerine gelince görünür. Karolarda yön oku yoktur: bant bir ölçümün yönünü değil, bir eşiğin aşıldığını söyler."
+          caption="Eşiği aşan sürücüler; bileşik skor değil. Kur ve yakıt bantları kendi Market Pulse hücrelerinde. Sayı, eşik ve yöntem karonun üzerine gelince görünür."
           glowVar="var(--chart-4)"
         />
         <DailySummary signals={signals} />
@@ -223,7 +224,7 @@ export default async function KokpitPage() {
       <section className="flex flex-col gap-2">
         <SectionHeader
           title="Kur / FX"
-          caption="Canlı spot kurlar ve kurumların kendi yayımladığı tahminler. Tahminler asla ortalanmaz: her satır bir kurumun kendi rakamıdır, kendi vadesiyle. Bir satıra tıklayınca sağdaki grafik o pariteye geçer."
+          caption="Canlı spot ve kurumların kendi tahminleri; asla ortalanmaz. Bir satır seçince sağdaki grafik o pariteye geçer."
           glowVar="var(--primary)"
         />
         <FxBoardTable board={board} forecasts={forecasts} />
@@ -246,7 +247,7 @@ export default async function KokpitPage() {
       <section className="flex flex-col gap-2">
         <SectionHeader
           title="Rekabet / Piyasa Görünümü"
-          caption="Buradaki her sayı bir haber/kampanya HACMİDİR. Rakip kapasitesi, doluluğu, pazar payı veya fiyat baskısı verisi bu sistemde yoktur."
+          caption="Her sayı bir haber/kampanya HACMİDİR — rakip kapasitesi, doluluğu, pazar payı ve fiyat baskısı verisi bu sistemde yoktur."
           glowVar="var(--chart-3)"
         />
         <CompetitivePulse />
@@ -256,7 +257,7 @@ export default async function KokpitPage() {
       <section className="flex flex-col gap-2">
         <SectionHeader
           title="Sinyal Panosu"
-          caption="Rakip olayları ve stratejik gelişmeler. Diğer beş akış bu sayfanın kendi bölümlerinde zaten görünüyor, burada tekrar edilmez."
+          caption="Rakip olayları ve stratejik gelişmeler; diğer beş akış kendi bölümlerinde."
           glowVar="var(--chart-4)"
           action={{ href: "/sinyaller", label: "Tümü (7 akış)" }}
         />
@@ -267,7 +268,7 @@ export default async function KokpitPage() {
       <section className="flex flex-col gap-2">
         <SectionHeader
           title="Alert Merkezi"
-          caption="Kampanya uyarıları ve yüksek şiddetli risk sinyalleri, öncelik sırasıyla. Sıfır sayısı da bir bilgidir: akışlar cevap verip boş döndüyse bölüm sayaçlarını yine de basar. Akış okunamadıysa sayaç yerine bunu söyler — sıfır, hiçbir zaman bir hatanın görüntüsü değildir."
+          caption="Kampanya uyarıları ve yüksek şiddetli riskler, öncelik sırasıyla. Sıfır bir ölçümdür; akış okunamazsa sayaç yerine bunu söyler."
           glowVar="var(--critical)"
         />
         <AlertCenter />

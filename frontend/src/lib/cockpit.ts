@@ -59,6 +59,25 @@ export interface Freshness {
   label: string;
   /** UTC HH:MM of the reading, or null when there is no reading at all. */
   timeLabel: string | null;
+  /** HOW FAR behind: "45 dk", "3 sa", "2 gün". Null inside the live window
+   * (there is nothing to confess) and null with no reading at all.
+   *
+   * The header used to print "Gecikmeli · son 16:50" beside "Veri: 16:50 UTC"
+   * -- one timestamp, twice, and between them not a word about the size of
+   * the gap. A reader could easily take "son 16:50" for today's 16:50 while
+   * the data was two days old. The magnitude is the part that decides whether
+   * the number below is usable, so it is the part that gets printed. */
+  delayLabel: string | null;
+}
+
+/** Coarse, honest units. Minutes below an hour, hours below two days, days
+ * after that: a stale board is measured in the unit a reader would use to
+ * describe it, not in 2 870 minutes. */
+function delayLabelOf(minutes: number): string {
+  if (minutes < 60) return `${Math.round(minutes)} dk`;
+  const hours = minutes / 60;
+  if (hours < 48) return `${Math.round(hours)} sa`;
+  return `${Math.round(hours / 24)} gün`;
 }
 
 function utcTime(date: Date): string {
@@ -76,17 +95,22 @@ function utcTime(date: Date): string {
  * the newest as_of supports, and says "Veri yok" when it supports nothing.
  */
 export function freshnessOf(asOf: string | null | undefined, now: Date = new Date()): Freshness {
-  if (!asOf) return { live: false, label: "Veri yok", timeLabel: null };
+  if (!asOf) return { live: false, label: "Veri yok", timeLabel: null, delayLabel: null };
   const then = new Date(asOf);
   if (Number.isNaN(then.getTime())) {
-    return { live: false, label: "Veri yok", timeLabel: null };
+    return { live: false, label: "Veri yok", timeLabel: null, delayLabel: null };
   }
   const time = utcTime(then);
   const minutes = (now.getTime() - then.getTime()) / 60_000;
   if (minutes <= LIVE_WINDOW_MINUTES) {
-    return { live: true, label: "Canlı", timeLabel: time };
+    return { live: true, label: "Canlı", timeLabel: time, delayLabel: null };
   }
-  return { live: false, label: `Gecikmeli · son ${time}`, timeLabel: time };
+  return {
+    live: false,
+    label: `Gecikmeli · son ${time}`,
+    timeLabel: time,
+    delayLabel: delayLabelOf(minutes),
+  };
 }
 
 /** The newest as_of across the FX board's pairs, or null for an empty board. */

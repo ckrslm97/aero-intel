@@ -107,7 +107,17 @@ function StripCell({ series }: { series: AnnualSeries }) {
  * once, above the strip, and the year labels under each cell's dots say which
  * years are measured and which are forecast.
  */
-export function KpiStrip({ series }: { series: AnnualSeries[] }) {
+export function KpiStrip({
+  series,
+  /** One extra cell, rendered last. Sektör Dengesi's unit-margin cell arrives
+   * this way rather than as a panel in its own column: it is one derived
+   * figure in the same shape as the five beside it, and giving it a whole
+   * four-column panel cost 287px of the fold to say one thing. */
+  trailing,
+}: {
+  series: AnnualSeries[];
+  trailing?: React.ReactNode;
+}) {
   const byKey = new Map(series.map((s) => [s.metric_key, s]));
   const cells = STRIP_KEYS.map((key) => byKey.get(key)).filter(
     (s): s is AnnualSeries => s !== undefined,
@@ -122,12 +132,13 @@ export function KpiStrip({ series }: { series: AnnualSeries[] }) {
   }
 
   return (
-    <MotionList className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
+    <MotionList className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
       {cells.map((cell) => (
         <MotionItem key={cell.metric_key} variant="scalePop">
           <StripCell series={cell} />
         </MotionItem>
       ))}
+      {trailing && <MotionItem variant="scalePop">{trailing}</MotionItem>}
     </MotionList>
   );
 }

@@ -22,55 +22,64 @@ function editionLabel(iso: string): string {
 }
 
 /**
- * "Ara-25 baskısı: 41,0 ▼" -- one muted line under the current figure,
- * rendered only where the previous edition's number is on record.
+ * "REVİZYON · NET KÂR  −18,0 mlr $ · aşağı revize" -- one tile per profit line
+ * whose previous edition is on record.
  *
  * IATA revises its own forecasts between editions, and the revision is very
  * often the story: the 2026 net-profit line went from $41bn to $23bn between
- * December 2025 and June 2026. A card showing only the current number prints
+ * December 2025 and June 2026. A panel showing only the current number prints
  * the conclusion and drops the news.
  *
- * Deliberately plain text rather than a delta pill: this is not a market
- * moving, it is one publisher changing its mind, and it must not read like the
- * former. (Rescued verbatim from `iata-indicator-table.tsx`, which was dead
- * code -- nothing imported it -- and which this component replaces.)
+ * Deliberately NOT a `Delta`: a Delta means a market moved, and this is one
+ * publisher changing its mind about the same year. Colouring it green or red
+ * would say something happened in the world.
+ *
+ * THREE states, not two. `previous_value` can equal `value`, and the earlier
+ * draft's `revision < 0 ? "aşağı" : "yukarı"` therefore printed "0 milyar $ ·
+ * yukarı revize" for a figure IATA had reprinted unchanged -- a direction
+ * claimed for a number that did not move.
+ *
+ * (The arithmetic and wording are rescued from `iata-indicator-table.tsx`,
+ * which was dead code -- nothing imported it -- and which this file replaces.)
  */
-function RevisionNote({ row }: { row: IataIndicatorOut }) {
+function RevisionTile({ row }: { row: IataIndicatorOut }) {
   if (row.previous_value === null || row.previous_publication_date === null) return null;
 
-  const revisedDown = row.value < row.previous_value;
-  const unchanged = row.value === row.previous_value;
-  const arrow = unchanged ? "→" : revisedDown ? "▼" : "▲";
-  const arrowLabel = unchanged
-    ? "değişmedi"
-    : revisedDown
-      ? "aşağı revize edildi"
-      : "yukarı revize edildi";
-
-  const body = (
+  const delta = row.value - row.previous_value;
+  const word = delta === 0 ? "değişmedi" : delta < 0 ? "aşağı revize" : "yukarı revize";
+  const previous = (
     <>
-      <span aria-label={arrowLabel} title={arrowLabel}>
-        {arrow}
-      </span>{" "}
       {editionLabel(row.previous_publication_date)} baskısı: {trNumber(row.previous_value)}
     </>
   );
 
   return (
-    <p className="text-[10px] leading-relaxed text-muted-foreground">
-      {row.previous_source_url ? (
-        <a
-          href={row.previous_source_url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="rounded underline-offset-2 hover:text-primary hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-        >
-          {body}
-        </a>
-      ) : (
-        body
-      )}
-    </p>
+    <div className="flex flex-col gap-0.5 rounded-lg border border-border bg-card/60 px-3 py-2">
+      <span className="truncate text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+        Revizyon · {METRIC_LABEL_TR[row.metric] ?? row.metric}
+      </span>
+      <span className="font-mono text-[13px] tabular-nums">
+        {delta > 0 ? "+" : ""}
+        {trNumber(Number(delta.toFixed(1)))}{" "}
+        <span className="font-sans text-[10px] text-muted-foreground">
+          {row.unit} · {word}
+        </span>
+      </span>
+      <p className="truncate text-[10px] text-muted-foreground">
+        {row.previous_source_url ? (
+          <a
+            href={row.previous_source_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="rounded underline-offset-2 hover:text-primary hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+          >
+            {previous}
+          </a>
+        ) : (
+          previous
+        )}
+      </p>
+    </div>
   );
 }
 
@@ -101,20 +110,35 @@ function MetricTile({ row }: { row: IataIndicatorOut }) {
         {trNumber(row.value)}{" "}
         <span className="text-[10px] font-sans text-muted-foreground">{row.unit}</span>
       </span>
-      <RevisionNote row={row} />
     </div>
   );
 }
 
 /**
- * IATA GÖRÜNÜMÜ -- one trend chart and the profit lines beside it.
+ * IATA GÖRÜNÜMÜ -- one trend chart and up to four profit figures beside it.
  *
- * There is no regional selector. `iata_indicators.region` is NULL on all eight
- * rows in the table and `curated_seed.py` never sets it, so a
- * GLOBAL/EUROPE/ASIA-PACIFIC switch would offer five choices that return
- * nothing. An empty selector does not communicate "we have no regional data";
- * it communicates "this product is broken". The section byline states the
- * limitation in words instead.
+ * WHICH FOUR, AND WHY NOT THE OTHER FOUR
+ * --------------------------------------
+ * `/kokpit/iata?kind=forecast` carries five metrics. Three of them --
+ * `load_factor`, `passenger_demand`, `rpk_growth` -- are already on this page
+ * as Market Pulse's DOLULUK cell, the KPI strip's YOLCU card and Market
+ * Pulse's TALEP delta respectively, to the decimal. Printing them again here
+ * would be four tiles saying what three surfaces above already said.
+ *
+ * What is left is the two profit lines and their revisions, which appear
+ * nowhere else: the levels say where the industry expects to land, the
+ * revision tiles say how far IATA has moved since its previous edition, and
+ * that movement is the single most decision-relevant thing in the report.
+ *
+ * A NET MARGIN TILE WAS CONSIDERED AND REJECTED. IATA quotes a 2026 net margin
+ * of ~2%, but that is over TOTAL industry revenue including cargo, and the
+ * only revenue series this system carries is passenger + ancillary. Dividing
+ * net profit by it would produce a number that looks like IATA's and is not.
+ *
+ * There is no regional selector either. `iata_indicators.region` is NULL on
+ * all rows and `curated_seed.py` never sets it, so a GLOBAL/EUROPE/ASIA switch
+ * would offer five choices that all return nothing -- which reads as a broken
+ * product, not as absent data. The section byline says it in words.
  */
 export function IataOutlook({
   series,
@@ -124,21 +148,19 @@ export function IataOutlook({
   indicators: IataIndicatorOut[];
 }) {
   const byMetric = new Map(indicators.map((row) => [row.metric, row]));
-  const tiles = METRICS.map((metric) => byMetric.get(metric)).filter(
+  const levels = METRICS.map((metric) => byMetric.get(metric)).filter(
     (row): row is IataIndicatorOut => row !== undefined,
   );
-
-  const netProfit = byMetric.get("net_profit");
-  const revision =
-    netProfit && netProfit.previous_value !== null
-      ? netProfit.value - netProfit.previous_value
-      : null;
+  const revisions = levels.filter(
+    (row) => row.previous_value !== null && row.previous_publication_date !== null,
+  );
+  const tileCount = levels.length + revisions.length;
 
   const hasChart = series.length > 0;
 
   return (
     <div className="grid grid-cols-1 gap-3 xl:grid-cols-12">
-      <div className={cn("xl:col-span-8", tiles.length === 0 && "xl:col-span-12")}>
+      <div className={cn("xl:col-span-8", tileCount === 0 && "xl:col-span-12")}>
         {hasChart ? (
           <div
             style={{ "--glow-color": "var(--chart-2)" } as React.CSSProperties}
@@ -153,41 +175,22 @@ export function IataOutlook({
         )}
       </div>
 
-      {tiles.length > 0 && (
-        <div className="flex flex-col gap-2 xl:col-span-4">
-          {tiles.map((row) => (
+      {tileCount > 0 && (
+        // Two by two rather than a single stack: four tiles stacked ran past
+        // the chart's 240px and made the section the tallest thing below the
+        // fold for no gain.
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:col-span-4">
+          {levels.map((row) => (
             <MetricTile key={row.metric} row={row} />
           ))}
-          {revision !== null && (
-            <div className="flex flex-col gap-0.5 rounded-lg border border-border bg-card/60 px-3 py-2">
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                Revizyon (net kâr)
-              </span>
-              {/* Not a `Delta`: a Delta means a metric moved, and this is the
-                  same publisher printing a different number for the same year.
-                  Colouring it green or red would say a market did something.
-
-                  THREE states, not two. `revision !== null` admits zero, and
-                  the old `revision < 0 ? "aşağı" : "yukarı"` therefore printed
-                  "0 milyar $ · yukarı revize" for a figure IATA had reprinted
-                  unchanged -- a direction claimed for a number that did not
-                  move. `RevisionNote` a few lines up already handled the same
-                  case correctly; this tile now says the same word it does. */}
-              <span className="font-mono text-[13px] tabular-nums">
-                {revision > 0 ? "+" : ""}
-                {trNumber(Number(revision.toFixed(1)))}{" "}
-                <span className="font-sans text-[10px] text-muted-foreground">
-                  {netProfit?.unit} ·{" "}
-                  {revision === 0 ? "değişmedi" : revision < 0 ? "aşağı revize" : "yukarı revize"}
-                </span>
-              </span>
-            </div>
-          )}
+          {revisions.map((row) => (
+            <RevisionTile key={`revision-${row.metric}`} row={row} />
+          ))}
         </div>
       )}
 
-      {tiles.length === 0 && (
-        <p className="rounded-lg border border-dashed border-border p-4 text-center text-xs text-muted-foreground xl:col-span-12">
+      {tileCount === 0 && (
+        <p className="rounded-lg border border-dashed border-border px-3 py-2 text-xs text-muted-foreground xl:col-span-12">
           Kâr göstergeleri henüz seed edilmedi.
         </p>
       )}

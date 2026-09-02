@@ -59,6 +59,33 @@ async def test_fx_board_computes_day_delta_against_a_reading_a_day_ago(db_sessio
     assert pair.day_delta_pct == round((48.0 - 47.0) / 47.0 * 100, 2)
 
 
+async def test_fx_board_refuses_a_delta_when_the_window_never_closed(db_session):
+    """A stale board must say "no measurement", not "no movement".
+
+    `closest_before` answers with the newest row at or before the cutoff, so
+    when the cron has been down for two days the row it returns for "one day
+    ago" IS the latest row. Dividing that value by itself published a
+    confident 0.0, and the FX table rendered "%0,0" in the 1G column of every
+    pair -- eight claims that the lira had not moved in a day, made by a board
+    that had not been read in two. Its own 1H column said "—" on the same row.
+    """
+    repo = KpiRepository(db_session)
+    two_days_ago = datetime.now(timezone.utc) - timedelta(days=2)
+    repo.record(
+        "fx_usd_try", 48.25, "TRY", "Yahoo Finance (TRY=X)", False, two_days_ago,
+        "https://finance.yahoo.com/quote/TRY=X",
+    )
+    await db_session.commit()
+
+    board = await kokpit.get_fx_board(Response(), db_session)
+
+    pair = next(p for p in board.pairs if p.currency_pair == "USD/TRY")
+    assert pair.value == 48.25  # the reading itself is real and still shown
+    assert pair.day_delta_pct is None
+    assert pair.week_delta_pct is None
+    assert pair.month_delta_pct is None
+
+
 async def test_fx_board_skips_pairs_with_no_observations_yet(db_session):
     board = await kokpit.get_fx_board(Response(), db_session)
     assert board.pairs == []

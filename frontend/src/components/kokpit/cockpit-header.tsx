@@ -55,8 +55,16 @@ export function CockpitHeader({ board }: { board: KokpitFxBoardOut | null }) {
           </p>
         </div>
 
+        {/* ONE chip, ONE timestamp.
+            It used to be two: "Gecikmeli · son 16:50" beside "Veri: 16:50
+            UTC" -- the same minute printed twice, in two formats, and neither
+            of them saying how late "late" was. A reader could read "son
+            16:50" as today's 16:50 while the board was two days old. The dot
+            carries the status, the time carries the reading, and the delay
+            carries the only part that decides whether the numbers below are
+            usable. */}
         <div
-          className="flex items-center gap-2 text-[11px] tabular-nums text-muted-foreground"
+          className="flex items-center gap-1.5 text-[11px] tabular-nums text-muted-foreground"
           title={perSource || undefined}
         >
           <span
@@ -67,14 +75,16 @@ export function CockpitHeader({ board }: { board: KokpitFxBoardOut | null }) {
               freshness.live ? "bg-good dark:glow-soft" : "bg-warning",
             )}
           />
-          <span className={cn("font-medium", freshness.live ? "text-good" : "text-warning")}>
-            {freshness.label}
-          </span>
-          {freshness.timeLabel && (
+          {freshness.timeLabel ? (
             <>
-              <span aria-hidden className="h-3 w-px bg-border" />
-              <span>Veri: {freshness.timeLabel} UTC</span>
+              {freshness.live && <span className="font-medium text-good">Canlı ·</span>}
+              <span>Veri {freshness.timeLabel} UTC</span>
+              {freshness.delayLabel && (
+                <span className="font-medium text-warning">· {freshness.delayLabel} gecikmeli</span>
+              )}
             </>
+          ) : (
+            <span className="font-medium text-warning">{freshness.label}</span>
           )}
         </div>
       </div>

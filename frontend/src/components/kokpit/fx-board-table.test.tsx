@@ -65,9 +65,9 @@ const ALL_PAIRS = [
 ];
 
 describe("buildFxRows", () => {
-  it("keeps the owner's pairs in the owner's order, the peg last in that block", () => {
+  it("keeps the owner's pairs in the owner's order, the peg last", () => {
     const rows = buildFxRows(board(ALL_PAIRS), [], NOW);
-    expect(rows.filter((row) => row.group === "primary").map((row) => row.pair)).toEqual([
+    expect(rows.map((row) => row.pair)).toEqual([
       "USD/TRY",
       "EUR/TRY",
       "EUR/USD",
@@ -77,14 +77,14 @@ describe("buildFxRows", () => {
     ]);
   });
 
-  it("puts live pairs the owner did not list below the divider rather than dropping them", () => {
-    // Retiring a live series to make a requested list fit would be destroying
-    // information to satisfy a layout.
-    const rows = buildFxRows(board(ALL_PAIRS), [], NOW);
-    expect(rows.filter((row) => row.group === "extra").map((row) => row.pair)).toEqual([
-      "GBP/USD",
-      "EUR/GBP",
-    ]);
+  it("carries no pair the owner did not ask for", () => {
+    // GBP/USD and EUR/GBP are still recorded by the cron and still have their
+    // own /kpi detail pages; they are simply not on the executive board. On
+    // the running page GBP/USD was a row of dashes end to end, under a 9px
+    // divider that measured 2,39:1 on the light surface.
+    const rows = buildFxRows(board(ALL_PAIRS), [], NOW).map((row) => row.pair);
+    expect(rows).not.toContain("GBP/USD");
+    expect(rows).not.toContain("EUR/GBP");
   });
 
   it("renders no GBP/TRY row until the backend actually records the pair", () => {

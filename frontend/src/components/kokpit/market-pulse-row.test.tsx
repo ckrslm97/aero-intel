@@ -5,6 +5,7 @@ import type {
   AnnualPoint,
   AnnualSeries,
   AnnualSeriesBoardOut,
+  CockpitSignal,
   EnergyBoardOut,
   EnergyMetricOut,
   KokpitFxBoardOut,
@@ -134,7 +135,7 @@ describe("buildPulseCells", () => {
   });
 
   it("puts the three IATA cells on the annual clock and the two market cells on the live one", () => {
-    const cells = buildPulseCells(fullAnnual, fxBoard([pair()]), energyBoard([brent()]), NOW);
+    const cells = buildPulseCells(fullAnnual, fxBoard([pair()]), energyBoard([brent()]), [], NOW);
     expect(cells.map((cell) => cell.cadence)).toEqual([
       "annual",
       "annual",
@@ -155,7 +156,7 @@ describe("buildPulseCells", () => {
     // correctly said "Gecikmeli". One screen cannot hold two answers to "is
     // this current?".
     const stale = new Date("2026-09-01T12:00:00Z");
-    const cells = buildPulseCells(fullAnnual, fxBoard([pair()]), energyBoard([brent()]), stale);
+    const cells = buildPulseCells(fullAnnual, fxBoard([pair()]), energyBoard([brent()]), [], stale);
     expect(cells[3].badge).toBe("GECİKMELİ");
     expect(cells[4].badge).toBe("GECİKMELİ");
     // The reading itself is still printed with its own time -- it is real, it
@@ -222,6 +223,63 @@ describe("buildPulseCells", () => {
   });
 });
 
+const signal = (overrides: Partial<CockpitSignal> = {}): CockpitSignal => ({
+  key: "fx",
+  label_tr: "Kur riski",
+  level: "warning",
+  level_label_tr: "Dikkat",
+  value_label: "48,2505 TRY",
+  reason_tr: "USD/TRY haftalık %1,2 yükseldi.",
+  method_tr: "Eşik: haftalık %1'i aşan hareket.",
+  source: "Yahoo Finance",
+  source_url: null,
+  href: null,
+  as_of: "2026-08-30T19:50:00Z",
+  ...overrides,
+});
+
+describe("threshold bands", () => {
+  it("bands the two live cells from /kokpit/signals and leaves the annual cells alone", () => {
+    // The owner's Market Pulse spec asked for a STATUS in every cell. The
+    // first draft did not implement it, which is exactly why the same two
+    // drivers ended up with a tile of their own in Günün Özeti just to carry
+    // one word -- and fuel ended up on the page three times.
+    //
+    // The annual cells get no band, and that is not an omission: nobody
+    // publishes a threshold for an IATA yearly series, and one invented here
+    // would be the composite score this page refuses to build.
+    const cells = buildPulseCells(fullAnnual, fxBoard([pair()]), energyBoard([brent()]), [
+      signal(),
+      signal({ key: "fuel", level: "critical", level_label_tr: "Yüksek" }),
+    ]);
+    expect(cells.slice(0, 3).every((cell) => cell.status === null)).toBe(true);
+    expect(cells[3].status?.label).toBe("Dikkat");
+    expect(cells[3].status?.tone).toBe("warning");
+    expect(cells[4].status?.label).toBe("Yüksek");
+    expect(cells[4].status?.tone).toBe("critical");
+  });
+
+  it("carries the threshold and the method behind the band, not just a colour", () => {
+    const cells = buildPulseCells(fullAnnual, fxBoard([pair()]), energyBoard([brent()]), [signal()]);
+    expect(cells[3].status?.title).toContain("Eşik: haftalık %1'i aşan hareket.");
+    expect(cells[3].status?.title).toContain("Kaynak: Yahoo Finance");
+  });
+
+  it("thins the cell to a number when the signals endpoint says nothing", () => {
+    // A signals outage must not empty the row: the reading is still real.
+    const cells = buildPulseCells(fullAnnual, fxBoard([pair()]), energyBoard([brent()]), []);
+    expect(cells[3].status).toBeNull();
+    expect(cells[3].value).toBe("48,25");
+  });
+
+  it("never renders an unreadable driver as an all-clear", () => {
+    const cells = buildPulseCells(fullAnnual, fxBoard([pair()]), energyBoard([brent()]), [
+      signal({ level: "unknown", level_label_tr: "Bilinmiyor" }),
+    ]);
+    expect(cells[3].status?.tone).toBe("neutral");
+  });
+});
+
 describe("MarketPulseRow", () => {
   it("prints the live values, both windows and the reading's own time", () => {
     render(
@@ -233,6 +291,18 @@ describe("MarketPulseRow", () => {
     // that they are comparable.
     expect(screen.getAllByText("1g")).toHaveLength(2);
     expect(screen.getAllByText("1h")).toHaveLength(2);
+  });
+
+  it("prints the band beside the deltas, on the cell that carries the number", () => {
+    render(
+      <MarketPulseRow
+        annual={fullAnnual}
+        board={fxBoard([pair()])}
+        energy={energyBoard([brent()])}
+        signals={[signal()]}
+      />,
+    );
+    expect(screen.getByText("Dikkat")).toBeInTheDocument();
   });
 
   it("never prints a fabricated 0% for a pair with no history", () => {

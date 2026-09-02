@@ -15,6 +15,7 @@ from app.ingest.historical_seed import PUBLISHED_AT as IATA_PUBLISHED_AT
 from app.ingest.historical_seed import SOURCE as IATA_SOURCE
 from app.ingest.historical_seed import SOURCE_URL as IATA_SOURCE_URL
 from app.ingest.historical_seed import YEARS as IATA_YEARS
+from app.models.kpi import KPI
 from app.repositories.curated_repository import CuratedRepository
 from app.repositories.kpi_repository import KpiRepository
 from app.repositories.market_pulse_repository import MarketPulseRepository
@@ -66,6 +67,26 @@ def _delta_pct(latest: float, prior: float | None) -> float | None:
     return round((latest - prior) / prior * 100, 2)
 
 
+def _window_delta(latest: KPI, prior: KPI | None) -> float | None:
+    """Percent change across a window, or None when the window never closed.
+
+    `KpiRepository.closest_before` answers with the newest row at or before the
+    cutoff. When the 15-minute cron has been down long enough that the NEWEST
+    reading is itself older than the cutoff, that row IS `latest`, and the old
+    code happily divided a value by itself and published "0.0". On a board two
+    days stale that printed a confident "%0,0" in the 1G column of all eight
+    pairs -- eight assertions that the lira had not moved in a day, when the
+    truth was that nobody had measured it for two. Worse, the same row's 1H
+    column correctly said "—", so one row made two contradictory claims.
+
+    A window that did not close carries no change. The UI already renders None
+    as "—" with "yeterli geçmiş yok", which is exactly the right sentence.
+    """
+    if prior is None or prior.as_of >= latest.as_of:
+        return None
+    return _delta_pct(latest.value, prior.value)
+
+
 @router.get("/fx", response_model=KokpitFxBoardOut)
 async def get_fx_board(response: Response, db: AsyncSession = Depends(get_db)) -> KokpitFxBoardOut:
     public_cache(response, FX)
@@ -87,9 +108,9 @@ async def get_fx_board(response: Response, db: AsyncSession = Depends(get_db)) -
                 currency_pair=FX_PAIR_LABELS.get(metric_key, metric_key),
                 value=latest.value,
                 unit=latest.unit,
-                day_delta_pct=_delta_pct(latest.value, day_ago.value if day_ago else None),
-                week_delta_pct=_delta_pct(latest.value, week_ago.value if week_ago else None),
-                month_delta_pct=_delta_pct(latest.value, month_ago.value if month_ago else None),
+                day_delta_pct=_window_delta(latest, day_ago),
+                week_delta_pct=_window_delta(latest, week_ago),
+                month_delta_pct=_window_delta(latest, month_ago),
                 sparkline=[row.value for row in sparkline_rows],
                 as_of=latest.as_of,
                 source=latest.source,

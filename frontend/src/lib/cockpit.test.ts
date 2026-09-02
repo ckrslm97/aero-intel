@@ -38,6 +38,18 @@ describe("freshnessOf", () => {
     expect(freshness.label).toContain("09:15");
   });
 
+  it("measures HOW LATE it is, in the unit a reader would use", () => {
+    // The header used to print "Gecikmeli · son 16:50" beside "Veri: 16:50
+    // UTC" -- one timestamp twice, and not a word about the size of the gap.
+    // "son 16:50" reads as today's 16:50; the board was two days old.
+    expect(freshnessOf(minutesAgo(45), NOW).delayLabel).toBe("45 dk");
+    expect(freshnessOf(minutesAgo(5 * 60), NOW).delayLabel).toBe("5 sa");
+    expect(freshnessOf(minutesAgo(2 * 24 * 60), NOW).delayLabel).toBe("2 gün");
+    // Nothing to confess inside the live window.
+    expect(freshnessOf(minutesAgo(5), NOW).delayLabel).toBeNull();
+    expect(freshnessOf(null, NOW).delayLabel).toBeNull();
+  });
+
   it("says 'Veri yok' rather than inventing a timestamp", () => {
     // The header must never be able to print an unearned freshness claim --
     // that is the whole reason this is computed instead of decorated.

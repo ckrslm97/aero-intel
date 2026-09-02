@@ -11,6 +11,7 @@ import { useDataSource } from "@/hooks/use-data-source";
 import { apiFetch } from "@/lib/api";
 import { worldRegions } from "@/lib/nav";
 import type { InsightsOut, NetworkSignalGroup, PromotionNewCountOut } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 const REGION_NAME = new Map<string, string>(
   worldRegions.map((region) => [region.slug, region.name]),
@@ -54,7 +55,7 @@ function Cell({
   children: React.ReactNode;
 }) {
   return (
-    <div className="flex h-[68px] flex-col gap-1 rounded-lg border border-border bg-card/60 px-3 py-2">
+    <div className="flex min-h-[56px] flex-col gap-1 rounded-lg border border-border bg-card/60 px-3 py-2">
       <div className="flex items-center gap-1.5">
         <Icon className="size-3 shrink-0 text-muted-foreground" aria-hidden />
         <h3 className="min-w-0 flex-1 truncate text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
@@ -127,9 +128,21 @@ export function CompetitivePulse() {
           <SourceDown onRetry={newCount.retry} />
         ) : (
           <div className="flex items-center gap-2">
-            <span className="text-xl font-semibold leading-none tabular-nums">
+            {/* A zero is printed ONCE, and quietly. It used to be a 20px/600
+                figure -- the same weight as the KPI strip's real numbers --
+                followed by a sentence repeating it in words: the largest type
+                in the section, spent twice on "nothing happened". */}
+            <span
+              className={cn(
+                "leading-none tabular-nums",
+                newCount.data.count === 0
+                  ? "text-sm font-medium text-muted-foreground"
+                  : "text-xl font-semibold",
+              )}
+            >
               {newCount.data.count}
             </span>
+            <span className="text-[10px] text-muted-foreground">son 48 saat</span>
             <div className="flex min-w-0 flex-wrap gap-1">
               {newCount.data.airline_codes.slice(0, 4).map((code) => (
                 <span
@@ -140,11 +153,6 @@ export function CompetitivePulse() {
                   {code}
                 </span>
               ))}
-              {newCount.data.airline_codes.length === 0 && (
-                <span className="text-[10px] text-muted-foreground">
-                  Son 48 saatte yeni kampanya yok.
-                </span>
-              )}
             </div>
           </div>
         )}

@@ -67,12 +67,18 @@ export function SignalStream() {
 
   const rows = useMemo(() => selectStreamSignals(data?.signals ?? []), [data]);
 
-  if (!loaded) return <Skeleton className="h-[180px] w-full rounded-xl" />;
+  // Sized to the EMPTY state, not to a full board. The skeleton used to be
+  // 180px against an empty section of 50, so every load on a quiet day ended
+  // with the page jumping 130px upward under the reader's eyes.
+  if (!loaded) return <Skeleton className="h-[42px] w-full rounded-xl" />;
   if (error && !data) return <DataSourceError onRetry={retry} lastUpdated={lastUpdated} />;
 
   if (rows.length === 0) {
     return (
-      <p className="rounded-lg border border-dashed border-border p-4 text-center text-xs text-muted-foreground">
+      // One line, not a padded panel. A section with nothing in it still says
+      // so -- zero is a reading -- but it does not get to spend 50px doing it
+      // while three sections below the fold are all saying the same thing.
+      <p className="rounded-lg border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
         Rakip olayı veya stratejik gelişme sinyali yok.
       </p>
     );

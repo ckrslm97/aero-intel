@@ -89,8 +89,15 @@ describe("CompetitivePulse", () => {
     routes({ count: { window_hours: 48, count: 0, airline_codes: [] } });
     render(<CompetitivePulse />);
 
-    expect(await screen.findByText("0")).toBeInTheDocument();
-    expect(screen.getByText(/Son 48 saatte yeni kampanya yok/)).toBeInTheDocument();
+    const zero = await screen.findByText("0");
+    expect(zero).toBeInTheDocument();
+    // ONCE, and quietly. It used to be a 20px/600 figure -- the same weight as
+    // the KPI strip's real numbers -- followed by a sentence saying the same
+    // thing in words: the section's largest type, spent twice on "nothing
+    // happened".
+    expect(zero.className).toContain("text-muted-foreground");
+    expect(zero.className).not.toContain("text-xl");
+    expect(screen.queryByText(/Son 48 saatte yeni kampanya yok/)).not.toBeInTheDocument();
   });
 
   it("separates 'measured, nothing moved' from 'no measurement'", async () => {

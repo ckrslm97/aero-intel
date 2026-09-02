@@ -24,14 +24,20 @@ const PRIMARY_PAIRS = [
   "USD/CNY",
 ] as const;
 
-/** Live pairs the cron records that are NOT on the owner's list.
+/* GBP/USD AND EUR/GBP ARE NOT ON THIS BOARD, and that is a layout decision,
+ * not a deletion.
  *
- * They go below a labelled divider rather than being dropped. Retiring a live
- * series to make a requested list fit would be destroying information to
- * satisfy a layout; putting them at the top would quietly rewrite the owner's
- * priority order. A divider says both things at once. */
-const EXTRA_PAIRS = ["GBP/USD", "EUR/GBP"] as const;
-
+ * They used to sit below an "— ek canlı pariteler —" divider on the argument
+ * that retiring a live series destroys information. Measured on the running
+ * page, the argument did not survive contact: neither pair is on the owner's
+ * list of seven, GBP/USD rendered as a row of dashes end to end (no day, no
+ * week, "yeterli geçmiş yok"), and the 9px divider itself measured 2,39:1 on
+ * the light surface. Two rows and a divider, for information the executive
+ * page was not asked to carry.
+ *
+ * Nothing is destroyed: the cron still records both pairs, /kpi/fx_gbp_usd and
+ * /kpi/fx_eur_gbp still draw their full history, and adding a name back to
+ * PRIMARY_PAIRS is a one-line change. */
 const PAIR_METRIC_KEYS: Record<string, string> = {
   "USD/TRY": "fx_usd_try",
   "EUR/TRY": "fx_eur_try",
@@ -57,7 +63,6 @@ export interface FxRow {
    * no deltas and no trend, and that is the correct rendering". */
   pegLabel: string | null;
   forecast: { label: string; title: string; expired: boolean } | null;
-  group: "primary" | "extra";
 }
 
 /** The institution forecast a reader should see next, for one pair.
@@ -140,7 +145,7 @@ export function buildFxRows(
 ): FxRow[] {
   const byPair = new Map((board?.pairs ?? []).map((pair) => [pair.currency_pair, pair]));
 
-  const build = (name: string, group: FxRow["group"]): FxRow | null => {
+  const build = (name: string): FxRow | null => {
     const pair = byPair.get(name);
     if (!pair) return null;
     const asOfLabel = formatUtcTime(pair.as_of);
@@ -162,11 +167,10 @@ export function buildFxRows(
       title: `${pair.source} · ${pair.frequency_label}${asOfLabel ? ` · ${asOfLabel} UTC` : ""}`,
       pegLabel: null,
       forecast: nearestForecast(forecasts, name, now),
-      group,
     };
   };
 
-  const rows = PRIMARY_PAIRS.map((name) => build(name, "primary")).filter(
+  const rows = PRIMARY_PAIRS.map((name) => build(name)).filter(
     (row): row is FxRow => row !== null,
   );
 
@@ -186,14 +190,10 @@ export function buildFxRows(
       title: board.peg.source,
       pegLabel: board.peg.label,
       forecast: null,
-      group: "primary",
     });
   }
 
-  return [
-    ...rows,
-    ...EXTRA_PAIRS.map((name) => build(name, "extra")).filter((row): row is FxRow => row !== null),
-  ];
+  return rows;
 }
 
 /** Which pairs the forecast chart can actually draw a history line for. */
@@ -244,9 +244,6 @@ export function FxBoardTable({
       </p>
     );
   }
-
-  const primary = rows.filter((row) => row.group === "primary");
-  const extra = rows.filter((row) => row.group === "extra");
 
   const renderRow = (row: FxRow) => {
     const selectable = row.metricKey !== null && CHARTABLE.has(row.metricKey);
@@ -351,26 +348,13 @@ export function FxBoardTable({
                   <DenseTh>Tahmin</DenseTh>
                 </tr>
               </thead>
-              <tbody>
-                {primary.map(renderRow)}
-                {extra.length > 0 && (
-                  <tr>
-                    <td
-                      colSpan={6}
-                      className="px-3 py-1 text-center text-[10px] uppercase tracking-wider text-muted-foreground"
-                    >
-                      — ek canlı pariteler —
-                    </td>
-                  </tr>
-                )}
-                {extra.map(renderRow)}
-              </tbody>
+              <tbody>{rows.map(renderRow)}</tbody>
             </DenseTable>
           </div>
         </Card>
         <p className="text-[10px] leading-relaxed text-muted-foreground">
-          Kur: Yahoo Finance · ~15 dk gecikmeli. Tahmin: kurumların kendi yayınları · ortalama
-          alınmaz · medyan yalnız aynı hedef tarihte 3+ kurum varsa çizilir.
+          Kur: Yahoo Finance · ~15 dk gecikmeli · trend son 48 ölçüm. Tahmin: kurumların kendi
+          yayınları, ortalama alınmaz.
         </p>
       </div>
 

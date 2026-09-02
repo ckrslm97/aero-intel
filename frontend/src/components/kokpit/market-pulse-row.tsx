@@ -1,12 +1,14 @@
 import { MicroTrend, type MicroTrendTone } from "@/components/charts/micro-trend";
 import { YearDots } from "@/components/charts/year-dots";
 import { Delta } from "@/components/ui/delta";
+import { StatusPill, statusToneOf, type StatusTone } from "@/components/ui/status-pill";
 import { ANNUAL_KIND_SUFFIX, annualScopeLabel, freshnessOf } from "@/lib/cockpit";
 import { formatCompactNumber, formatRate, formatUtcTime } from "@/lib/format";
 import type {
   AnnualPoint,
   AnnualSeries,
   AnnualSeriesBoardOut,
+  CockpitSignal,
   EnergyBoardOut,
   KokpitFxBoardOut,
 } from "@/lib/types";
@@ -55,6 +57,20 @@ export interface PulseCell {
    * depends on this cell being exactly 104px whatever the data does. */
   emptyNote: string | null;
   title: string;
+  /** The threshold band for this cell's driver, from `/kokpit/signals`.
+   *
+   * The owner's Market Pulse spec asked for "sparkline + yön + değer + değişim
+   * + STATUS" in every cell, and this is that status -- the one part of the
+   * spec the first draft did not implement, which is why the same two drivers
+   * ended up with a card of their own in Günün Özeti just to carry a word.
+   * Now the judgement sits on the surface that already carries the number, and
+   * Günün Özeti carries only the drivers that have no cell here (see
+   * daily-summary.tsx).
+   *
+   * Null on the three annual cells, and that is not an omission: nobody in
+   * this system publishes a threshold for an IATA yearly series, and a band
+   * invented for one would be the composite score sector-balance.tsx refuses. */
+  status: { tone: StatusTone; label: string; title: string } | null;
 }
 
 /** Percent and cent metrics carry meaningful decimals; compact notation would
@@ -138,6 +154,7 @@ function annualCell(
     title: scopeTr
       ? `${scopeTr} · TK verisi değil`
       : "IATA Küresel Görünüm · sektör geneli · yıllık · TK verisi değil",
+    status: null,
   };
   const latest = series?.points[series.points.length - 1];
   if (!series || !latest) {
@@ -179,12 +196,31 @@ export function buildPulseCells(
   annual: AnnualSeriesBoardOut | null,
   board: KokpitFxBoardOut | null,
   energy: EnergyBoardOut | null,
+  signals: CockpitSignal[] = [],
   now?: Date,
 ): PulseCell[] {
   const byKey = new Map((annual?.series ?? []).map((entry) => [entry.metric_key, entry]));
   const cells = ANNUAL_CELLS.map((spec) =>
     annualCell(spec, byKey.get(spec.key), annual?.scope_tr ?? null),
   );
+
+  // The band is the SERVER'S, never re-derived here: `cockpit_signals_service`
+  // owns every threshold on this page, so the pill on a pulse cell and the
+  // tile on /sinyaller cannot disagree about what "Dikkat" means.
+  const bandOf = (key: CockpitSignal["key"]): PulseCell["status"] => {
+    const signal = signals.find((entry) => entry.key === key);
+    if (!signal) return null;
+    return {
+      tone: statusToneOf(signal.level),
+      label: signal.level_label_tr,
+      // The threshold that produced the band and the method behind it. The
+      // cell prints the band; a reader who wants to know why it is amber gets
+      // the sentence, not a colour to interpret.
+      title: [signal.reason_tr, signal.method_tr, `Kaynak: ${signal.source}`]
+        .filter(Boolean)
+        .join("\n\n"),
+    };
+  };
 
   // --- cell 4: the anchor rate -------------------------------------------
   const usdTry = (board?.pairs ?? []).find((pair) => pair.currency_pair === "USD/TRY");
@@ -215,6 +251,7 @@ export function buildPulseCells(
         : "yeterli geçmiş yok"
       : "kur okunamadı",
     title: usdTry ? `${usdTry.source} · ${usdTry.frequency_label}` : "Kur verisi okunamadı",
+    status: bandOf("fx"),
   });
 
   // --- cell 5: the owner's "MARKET" slot ---------------------------------
@@ -248,6 +285,11 @@ export function buildPulseCells(
           : "yeterli geçmiş yok"
         : "yakıt okunamadı",
     title: brent ? (brent.note_tr ?? brent.source) : "Enerji verisi okunamadı",
+    // Fuel's ONE appearance on this page, and this pill is why it can be one:
+    // the number, the two windows, the trend and the threshold band now all
+    // live in this cell. The Sektör Dengesi percentile row and the Günün
+    // Özeti fuel tile were the second and third, and both are gone.
+    status: bandOf("fuel"),
   });
 
   return cells;
@@ -274,7 +316,11 @@ function Cell({ cell, seam }: { cell: PulseCell; seam: boolean }) {
           "xl:before:absolute xl:before:-left-1.5 xl:before:top-1 xl:before:bottom-1 xl:before:w-px xl:before:bg-border xl:before:content-['']",
       )}
     >
-      <div className="flex shrink-0 items-center gap-1.5">
+      {/* Wraps for the same reason the delta row does: in a 170px phone cell
+          "YAKIT · BRENT" beside a cadence badge and a timestamp truncated to
+          "YAKI…", which names nothing. The badge drops to its own line
+          instead. */}
+      <div className="flex shrink-0 flex-wrap items-center gap-x-1.5 sm:flex-nowrap">
         <span className="truncate text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
           {cell.label}
         </span>
@@ -312,7 +358,12 @@ function Cell({ cell, seam }: { cell: PulseCell; seam: boolean }) {
         {cell.unit ?? ""}
       </div>
 
-      <div className="flex shrink-0 items-center gap-2.5">
+      {/* WRAPS. At 375px the row is two cells wide, and "1g ↗ +%0,1  1h ↗
+          +%0,4  ⊙ DİKKAT" does not fit a 170px cell -- with every child
+          `shrink-0` the pill pushed 19px past the viewport and gave the whole
+          page a horizontal scrollbar. Wrapping costs one line of cell height
+          on a phone and nothing at all above `sm`. */}
+      <div className="flex shrink-0 flex-wrap items-center gap-x-2.5 gap-y-1">
         {cell.deltas.map((delta) => (
           <Delta
             key={delta.scope}
@@ -322,6 +373,14 @@ function Cell({ cell, seam }: { cell: PulseCell; seam: boolean }) {
             tone={cell.tone === "costly" ? "costly" : "neutral"}
           />
         ))}
+        {/* The band sits with the CHANGE, not with the value: it is a
+            judgement about how far something moved, and putting it beside the
+            deltas says so without a word of prose. */}
+        {cell.status && (
+          <StatusPill tone={cell.status.tone} title={cell.status.title} className="ml-auto">
+            {cell.status.label}
+          </StatusPill>
+        )}
       </div>
 
       {/* The trend slot. Tall enough for YearDots (dots plus its own year
@@ -357,12 +416,17 @@ export function MarketPulseRow({
   annual,
   board,
   energy,
+  signals = [],
 }: {
   annual: AnnualSeriesBoardOut | null;
   board: KokpitFxBoardOut | null;
   energy: EnergyBoardOut | null;
+  /** `/kokpit/signals`, for the two live cells' threshold bands. Optional so a
+   * signals outage thins the cells to a number without a band rather than
+   * emptying the row. */
+  signals?: CockpitSignal[];
 }) {
-  const cells = buildPulseCells(annual, board, energy);
+  const cells = buildPulseCells(annual, board, energy, signals);
   return (
     <div
       aria-label="Piyasa nabzı"

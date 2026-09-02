@@ -52,6 +52,7 @@ export default defineConfig({
         "src/components/kokpit/kpi-strip.tsx",
         "src/components/kokpit/market-pulse-row.tsx",
         "src/components/kokpit/fx-board-table.tsx",
+        "src/components/kokpit/iata-outlook.tsx",
         "src/components/kokpit/sector-balance.tsx",
         "src/components/kokpit/signal-stream.tsx",
         "src/components/charts/micro-trend.tsx",

@@ -73,6 +73,17 @@ describe("KpiStrip", () => {
     expect(screen.getByText("25→26T")).toBeInTheDocument();
   });
 
+  it("renders the trailing cell as a sixth member of the same strip", () => {
+    // Sektör Dengesi's unit-margin cell arrives this way rather than as a
+    // four-column panel beside the strip: it is one derived figure in the same
+    // shape as the five, and its own panel cost 287px of the fold to say it.
+    const { container } = render(
+      <KpiStrip series={[rask]} trailing={<div>Birim marj</div>} />,
+    );
+    expect(screen.getByText("Birim marj")).toBeInTheDocument();
+    expect(container.querySelector(".xl\\:grid-cols-6")).not.toBeNull();
+  });
+
   it("says the series is missing rather than rendering an empty strip", () => {
     render(<KpiStrip series={[]} />);
     expect(screen.getByText(/IATA serisi henüz yüklenmedi/)).toBeInTheDocument();

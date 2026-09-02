@@ -26,8 +26,30 @@ const SIGNAL_ICONS: Record<CockpitSignal["key"], LucideIcon> = {
  * carries the band, in words and colour, and nothing that looks like a trend.
  */
 
+/** Drivers whose band is printed on their own Market Pulse cell.
+ *
+ * THIS IS THE PAGE'S LAST DUPLICATION, CLOSED IN THE DATA.
+ *
+ * The section used to render all four drivers. Two of them -- USD/TRY and
+ * Brent -- are cells in Market Pulse two hundred pixels above, printing the
+ * reading at 26px with both of its deltas; the tile added exactly one word to
+ * that ("DİKKAT") and spent a quarter of the section's height doing it. Since
+ * the owner's own Market Pulse spec asked for a STATUS in every cell, the word
+ * now sits on the cell that already carries the number (market-pulse-row.tsx),
+ * and this section carries the drivers that have no cell of their own.
+ *
+ * Fuel in particular was appearing THREE times before this change -- the pulse
+ * cell, a Sektör Dengesi percentile row and this tile -- against an explicit
+ * instruction that fuel appear as a SINGLE signal.
+ *
+ * The section is not removed: it is item 4 of the owner's ordering, and the
+ * risk and competition drivers genuinely appear nowhere else on the page as a
+ * judgement. If the backend ever adds a fifth driver with no pulse cell, it
+ * lands here automatically. */
+export const PULSE_BANDED_KEYS = new Set<CockpitSignal["key"]>(["fx", "fuel"]);
+
 /**
- * GÜNÜN ÖZETİ -- four glyphs, and not one number.
+ * GÜNÜN ÖZETİ -- glyphs, and not one number.
  *
  * WHY NO NUMBERS
  * --------------
@@ -36,31 +58,37 @@ const SIGNAL_ICONS: Record<CockpitSignal["key"], LucideIcon> = {
  * 1. The owner asked for "icon + trend + short label", explicitly not prose
  *    and not a bulleted news list. This is that, literally.
  *
- * 2. It makes the page's worst duplication STRUCTURALLY impossible rather than
- *    merely discouraged. The four drivers behind these tiles are USD/TRY,
- *    Brent, the risk stream and rival campaign volume -- and the first two are
- *    printed, at full size, in Market Pulse about two hundred pixels above.
- *    A tile that printed "48,2505" here would be the third appearance of one
- *    reading on one screen. Choosing not to carry the number at all closes
- *    that off in the data, where a later maintainer cannot accidentally
- *    reopen it by restyling a card.
+ * 2. It makes duplication STRUCTURALLY impossible rather than merely
+ *    discouraged. A tile that printed a reading would be printing something
+ *    that already exists elsewhere on this page at full size; choosing not to
+ *    carry numbers at all closes that off in the data, where a later
+ *    maintainer cannot reopen it by restyling a card.
  *
  * The numbers, the threshold that produced the level, the method and the
- * source are all still one hover away, in the tile's `title`. A caveat a
- * reader must hover to find is not an acceptable CAVEAT -- but a DETAIL they
- * consult once is exactly what a tooltip is for.
+ * source are all still one hover away in the tile's `title`, and in the
+ * accessibility tree for readers who cannot hover. A caveat a reader must
+ * hover to find is not an acceptable CAVEAT -- but a DETAIL they consult once
+ * is exactly what a tooltip is for.
  *
- * This replaces `SignalBoard` (four tall tiles, each with a headline figure
- * and a sentence) and absorbs the signal chips from the deleted "Bugünün
- * İstihbaratı" block. The levels are still computed server-side and merely
- * rendered here, so this row and any other surface reading `/kokpit/signals`
- * cannot disagree about what "Dikkat" means.
+ * The levels are computed server-side and merely rendered here, so this row
+ * and any other surface reading `/kokpit/signals` cannot disagree about what
+ * "Dikkat" means.
  */
 export function DailySummary({ signals }: { signals: CockpitSignal[] }) {
+  const tiles = signals.filter((signal) => !PULSE_BANDED_KEYS.has(signal.key));
+
   if (signals.length === 0) {
     return (
-      <p className="rounded-lg border border-dashed border-border p-4 text-center text-xs text-muted-foreground">
+      <p className="rounded-lg border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
         Sinyal üretilemedi.
+      </p>
+    );
+  }
+
+  if (tiles.length === 0) {
+    return (
+      <p className="rounded-lg border border-dashed border-border px-3 py-2 text-xs text-muted-foreground">
+        Bugünün sürücülerinin tümü Market Pulse hücrelerinde bantlandı.
       </p>
     );
   }
@@ -71,7 +99,7 @@ export function DailySummary({ signals }: { signals: CockpitSignal[] }) {
     // "RİS…", "RA…" -- four identical tiles, and no way to see which driver
     // was the one saying DİKKAT.
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-      {signals.map((signal) => {
+      {tiles.map((signal) => {
         const Icon = SIGNAL_ICONS[signal.key] ?? Info;
         const detail = [
           signal.value_label,
@@ -102,7 +130,10 @@ export function DailySummary({ signals }: { signals: CockpitSignal[] }) {
         );
 
         const className = cn(
-          "flex min-h-[72px] w-full items-center gap-2 rounded-lg border border-border bg-card/60 px-3",
+          // 56px, down from 72. The tile carries an icon, a word and a band;
+          // the extra sixteen pixels were spent on nothing and the section
+          // below the fold paid for them.
+          "flex min-h-[56px] w-full items-center gap-2 rounded-lg border border-border bg-card/60 px-3 py-2",
           signal.href &&
             "transition-colors hover:bg-accent/40 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
         );
