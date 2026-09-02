@@ -13,7 +13,13 @@ import { useEffect, useState } from "react";
 
 import { AirlineLogo } from "@/components/airline-logo";
 import { ArticleSourcesList } from "@/components/gazete/article-sources-list";
-import { sourceTierLabelTr } from "@/lib/gazete";
+import {
+  SCORE_BAND_LABELS_TR,
+  type ScoreBand,
+  scoreBand,
+  scoreReasonTr,
+  sourceTierLabelTr,
+} from "@/lib/gazete";
 import { confidenceBand } from "@/lib/risk";
 import {
   drawerPanel,
@@ -65,6 +71,16 @@ const CONFIDENCE_LABEL: Record<string, string> = {
   high: "Yüksek",
   medium: "Orta",
   low: "Düşük",
+};
+
+/** The intelligence band's pill, on the status palette rather than on a fifth
+ * scale of its own. The word is always printed, so colour is never the only
+ * carrier -- same rule as ui/status-pill.tsx. */
+const INTELLIGENCE_BAND_STYLES: Record<ScoreBand, string> = {
+  critical: "border-critical/40 bg-critical/10 text-critical",
+  high: "border-warning/40 bg-warning/10 text-warning",
+  medium: "border-primary/40 bg-primary/10 text-primary",
+  low: "border-border bg-muted text-muted-foreground",
 };
 
 /** In-app analysis for one article.
@@ -138,6 +154,15 @@ export function ArticleAnalysisDrawer({
     (enrichment?.is_translated && enrichment.summary_tr) || enrichment?.summary || null;
 
   const band = enrichment ? confidenceBand(enrichment.confidence_score) : null;
+  const intelligenceBand = scoreBand(enrichment?.intelligence_score);
+  const selectionReason = scoreReasonTr(enrichment?.score_detail);
+  const impactChips: [string, number][] = (
+    [
+      ["Gelir etkisi", enrichment?.rm_impact],
+      ["Talep etkisi", enrichment?.demand_impact],
+      ["Kapasite etkisi", enrichment?.capacity_impact],
+    ] as [string, number | null | undefined][]
+  ).filter((entry): entry is [string, number] => typeof entry[1] === "number");
 
   return (
     <AnimatePresence>
@@ -326,10 +351,15 @@ export function ArticleAnalysisDrawer({
                       </button>
                     </div>
 
-                    <Metric
-                      label="Önem skoru"
-                      value={`${Math.round(enrichment.importance_score * 100) / 100}`}
-                    />
+                    {/* There used to be an "Önem skoru" metric here, printing
+                        `importance_score`. That column does not measure
+                        importance: at the corroboration count every production
+                        row actually has, its formula reduces to
+                        `0.34 + 0.21 * source.trust_weight` -- the same number
+                        for a fare war and for an airport cat, as long as the
+                        same outlet filed both. It was a publisher id dressed
+                        as a judgement, so it is gone; the intelligence block
+                        below is what replaces it. */}
                     <Metric
                       label="Doğrulama"
                       value={
@@ -347,6 +377,58 @@ export function ArticleAnalysisDrawer({
                   {sourcesFor === article.id && (
                     <div className="border-t border-border pt-4">
                       <ArticleSourcesList articleId={article.id} />
+                    </div>
+                  )}
+                </motion.div>
+              )}
+
+              {/* WHY THIS STORY IS IN THE PAPER AT ALL.
+                  Deliberately a band and a reason rather than a number: the
+                  score is a weighted mean of eight sub-scores where three are
+                  frequently absent, so its decimals are noise dressed as
+                  precision, and two stories cannot honestly be compared on
+                  0.61 vs 0.58. Absent entirely for a row the scoring pass
+                  never reached -- there is nothing to say about it, and a "0"
+                  would be a claim nobody made. */}
+              {intelligenceBand && (
+                <motion.div variants={item} className="flex flex-col gap-3">
+                  <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    İstihbarat değeri
+                  </h3>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span
+                      className={cn(
+                        "rounded-full border px-2.5 py-0.5 text-[11px] font-semibold",
+                        INTELLIGENCE_BAND_STYLES[intelligenceBand],
+                      )}
+                    >
+                      {SCORE_BAND_LABELS_TR[intelligenceBand]}
+                    </span>
+                    {selectionReason && (
+                      <span className="text-xs text-muted-foreground">
+                        Neden seçildi: {selectionReason}
+                      </span>
+                    )}
+                  </div>
+                  {/* The model's three axes. NULL and 0.0 are different
+                      claims: only the day's shortlist is scored by the model,
+                      so an unscored axis draws no chip at all, while a scored
+                      zero draws "%0" -- "the model read this and found no
+                      capacity angle". Conflating them would put a made-up
+                      reading on ~95% of the archive. */}
+                  {impactChips.length > 0 && (
+                    <div className="flex flex-wrap gap-2">
+                      {impactChips.map(([label, value]) => (
+                        <span
+                          key={label}
+                          className="flex items-center gap-1.5 rounded-full border border-border px-2.5 py-1 text-[11px]"
+                        >
+                          <span className="text-muted-foreground">{label}</span>
+                          <span className="font-semibold tabular-nums">
+                            %{Math.round(value * 100)}
+                          </span>
+                        </span>
+                      ))}
                     </div>
                   )}
                 </motion.div>

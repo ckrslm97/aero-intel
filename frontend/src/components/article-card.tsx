@@ -4,8 +4,8 @@ import { memo } from "react";
 
 import { useArticleDrawer } from "@/components/article-drawer-context";
 import { Badge } from "@/components/ui/badge";
-import { BADGED_TIERS, isBreaking, sourceTierLabelTr } from "@/lib/gazete";
-import { categoryVar, getCategory } from "@/lib/taxonomy";
+import { isBreaking } from "@/lib/gazete";
+import { categoryVar, getCategory, getSubcategoryLabel } from "@/lib/taxonomy";
 import { cn } from "@/lib/utils";
 import type { ArticleOut } from "@/lib/types";
 
@@ -17,9 +17,16 @@ const PUBLISHED_FORMAT = new Intl.DateTimeFormat("tr-TR", {
   timeStyle: "short",
 });
 
-// Grid tiles carry the day in their sticky date header, so the tile itself
-// only needs the clock time -- "14:32".
-const TIME_FORMAT = new Intl.DateTimeFormat("tr-TR", { hour: "2-digit", minute: "2-digit" });
+// The Gazete tile prints the whole stamp. It used to print the clock time
+// alone, because the list was grouped under sticky per-day headers that
+// carried the date; the paper is grouped by SECTION now, so a card that said
+// only "14:32" would not say which day.
+const GRID_DATE_FORMAT = new Intl.DateTimeFormat("tr-TR", {
+  day: "numeric",
+  month: "short",
+  hour: "2-digit",
+  minute: "2-digit",
+});
 
 function formatPublished(iso: string | null): string {
   if (!iso) return "Tarih bilinmiyor";
@@ -56,84 +63,85 @@ function ArticleCardComponent({
   // category hue at 30% instead of the theme's accent surface.
   const glowVar = category ? categoryVar(category.slug) : undefined;
 
-  // The Gazete grid: an apron of individually-lit tiles rather than one long
-  // taxiway. `edge-lit` paints the resting perimeter/rail; hover:glow-edge
-  // takes the box-shadow over on hover so the rail brightens, never flickers.
+  // The Gazete tile. Four things and nothing else: headline, two or three
+  // lines of summary, what beat it belongs to, when it ran.
+  //
+  // WHAT LEFT, AND WHY -- read before adding anything back.
+  //
+  //   * THE OUTLET'S NAME AND ITS TIER. The product owner's rule, and this is
+  //     the only variant that had to change for it: `grid` has exactly one
+  //     caller (the Gazete), while `top`/`compact` below are shared with the
+  //     archive, BİZ, hub, search and per-date-edition pages, which are
+  //     source-browsing surfaces and keep their badge. So the line is deleted
+  //     here rather than hidden behind a `showSource` prop -- a prop whose
+  //     false branch has one caller and whose true branch has five is a
+  //     configuration option standing in for a decision that was already made.
+  //     Provenance did not disappear from the product: the analysis drawer
+  //     names the outlet, its tier, and every outlet that corroborated it.
+  //   * "+N kaynak". Same reasoning -- corroboration is provenance, and the
+  //     drawer's "Doğrulayan N kaynak" is the copy of it that can be opened
+  //     and checked.
+  //
+  // What stays is the breaking treatment, because it costs no element: inside
+  // the six-hour window the timestamp is simply critical-coloured, which is
+  // also why there is no "Son Dakika" strip on the page any more.
   if (variant === "grid") {
-    const time = article.published_at ? TIME_FORMAT.format(new Date(article.published_at)) : null;
-    // Three quiet additions, each earned rather than shown on every tile:
-    //
-    //   * the tier badge only for official/regulator. "From the regulator
-    //     itself" is worth a badge; "from a trade outlet", which is most of
-    //     the feed, is a second row of chrome on thirty tiles.
-    //   * "+N kaynak" only when somebody else ran the story too, which is the
-    //     one number on the card the reader can act on (it opens the list).
-    //   * the time turns red inside the breaking window instead of gaining a
-    //     label, so the tile does not get taller.
-    const showTier = BADGED_TIERS.has(article.source.tier);
-    const corroborating = enrichment?.corroborating_source_count ?? 1;
+    const stamp = article.published_at
+      ? GRID_DATE_FORMAT.format(new Date(article.published_at))
+      : null;
     const breaking = isBreaking(article.published_at);
+    const subcategoryLabel = enrichment
+      ? getSubcategoryLabel(enrichment.category, enrichment.subcategory)
+      : null;
     return (
       <button
         type="button"
         onClick={() => open(article)}
         style={glowVar ? ({ "--glow-color": glowVar } as React.CSSProperties) : undefined}
         className={cn(
-          "group relative flex h-full w-full flex-col gap-2.5 overflow-hidden rounded-xl border bg-card p-5 text-left transition-all duration-200",
-          "hover:-translate-y-1 motion-reduce:transform-none motion-reduce:transition-none",
-          glowVar ? "edge-lit hover:glow-edge" : "border-border hover:bg-accent/30",
+          "group relative flex h-full w-full flex-col gap-2 overflow-hidden rounded-xl bg-card p-4 text-left transition-all duration-200",
+          "hover:-translate-y-0.5 motion-reduce:transform-none motion-reduce:transition-none",
+          // One hairline, and it is the category's own hue rather than a
+          // border token -- the beat is the only colour on the tile.
+          "ring-1 ring-foreground/10 hover:ring-(--glow-color)",
         )}
       >
-        <div className="flex items-center gap-2">
-          {category && CategoryIcon && (
-            <span
-              className={cn(
-                "flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
-                category.textClass,
-                category.bgClass,
-              )}
-            >
-              <CategoryIcon className="size-3" />
-              {category.label}
-            </span>
-          )}
-          {time && (
-            <span
-              className={cn(
-                "ml-auto flex items-center gap-1 text-[10px] tabular-nums",
-                breaking ? "font-semibold text-critical" : "text-muted-foreground",
-              )}
-              title={breaking ? "Son 6 saat içinde yayımlandı" : undefined}
-            >
-              {breaking && <span aria-hidden className="size-1.5 rounded-full bg-critical" />}
-              {time}
-            </span>
-          )}
-        </div>
-
-        <span className="line-clamp-2 text-sm font-medium leading-snug text-card-foreground group-hover:text-primary">
+        <span className="line-clamp-3 text-[15px] font-medium leading-snug tracking-tight text-card-foreground group-hover:text-primary">
           {headline}
         </span>
 
         {summary && (
-          <p className="line-clamp-2 text-xs leading-relaxed text-muted-foreground">{summary}</p>
+          <p className="line-clamp-3 text-[13px] leading-relaxed text-muted-foreground">
+            {summary}
+          </p>
         )}
 
-        {/* mt-auto pins the source to the bottom so tiles with unequal
-            content still bottom-align across a row. */}
-        <div className="mt-auto flex items-center gap-1.5 pt-1.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-          <span className="truncate">{article.source.name}</span>
-          {showTier && (
-            <span className="shrink-0 rounded-full border border-border px-1.5 py-px text-[9px] font-semibold normal-case">
-              {sourceTierLabelTr(article.source.tier)}
+        {/* mt-auto pins the footer down so tiles with unequal content still
+            bottom-align across a row. Typography, not chips: a beat name in
+            small caps beside a timestamp reads as a byline rather than as two
+            more badges. */}
+        <div className="mt-auto flex flex-wrap items-center gap-x-2 gap-y-1 pt-1 text-[10px] uppercase tracking-[0.1em] text-muted-foreground">
+          {category && CategoryIcon && (
+            <span className={cn("flex items-center gap-1 font-semibold", category.textClass)}>
+              <CategoryIcon className="size-3" aria-hidden />
+              {category.label}
             </span>
           )}
-          {corroborating > 1 && (
+          {subcategoryLabel && (
+            <>
+              <span aria-hidden>·</span>
+              <span className="normal-case tracking-normal">{subcategoryLabel}</span>
+            </>
+          )}
+          {stamp && (
             <span
-              title={`${corroborating} kaynak bu haberi işledi`}
-              className="ml-auto shrink-0 rounded-full bg-muted px-1.5 py-px text-[9px] font-semibold normal-case tabular-nums"
+              className={cn(
+                "ml-auto normal-case tracking-normal tabular-nums",
+                breaking && "font-semibold text-critical",
+              )}
+              title={breaking ? "Son 6 saat içinde yayımlandı" : undefined}
             >
-              +{corroborating - 1} kaynak
+              {stamp}
             </span>
           )}
         </div>

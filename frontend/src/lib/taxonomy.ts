@@ -234,26 +234,14 @@ export const NEWSPAPER_CATEGORIES: CategoryDef[] = NEWSPAPER_CATEGORY_SLUGS.map(
   (slug) => CATEGORY_BY_SLUG[slug],
 );
 
-/** Classified server-side but deliberately absent from the Gazete -- sent to
- * the API as `exclude_categories` so these stories never appear in the paper's
- * list or its tab badges.
- *
- * This is every slug that is not one of the three sections above, `general`
- * included: with only three tabs, anything left out would otherwise pile up
- * behind whichever tab happened to be showing rather than being honestly
- * absent. `network` joins the list for the first time here -- its stories are
- * still legitimate reading, but with no tab of their own the alternative is
- * showing them under a heading that does not describe them. */
-export const NEWSPAPER_EXCLUDED_CATEGORY_SLUGS: readonly CategorySlug[] = [
-  "fleet",
-  "network",
-  "finance",
-  "safety",
-  "regulatory",
-  "sustainability",
-  "labor",
-  "general",
-] as const;
+/* There used to be a NEWSPAPER_EXCLUDED_CATEGORY_SLUGS list here -- the eight
+ * slugs the paper sent as `exclude_categories` so their stories could not pile
+ * up behind whichever tab happened to be showing. The paper no longer has one
+ * list under a tab row: each of the three sections above issues its own query
+ * with an explicit `category=`, and a query that asks for one category cannot
+ * return another. The exclusion is now structural rather than a parameter, so
+ * the list it needed is gone. Nothing about what is INGESTED or classified
+ * changed -- the excluded beats still reach Öneriler, arama and the newsletter. */
 
 /** A taxonomy slug as a CSS custom-property reference, e.g.
  * `revenue_management` -> `var(--category-revenue-management)`.

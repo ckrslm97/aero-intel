@@ -2,6 +2,8 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { EventOut } from "@/lib/types";
+
 import { EVENT_RADAR_KEY, EventRadarStrip } from "./event-radar-strip";
 
 const apiFetch = vi.hoisted(() => vi.fn());
@@ -27,7 +29,7 @@ function memoryStorage(): Storage {
   };
 }
 
-const event = (id: string, name: string) => ({
+const event = (id: string, name: string, overrides: Partial<EventOut> = {}): EventOut => ({
   id,
   name,
   starts: "2026-09-10",
@@ -37,11 +39,18 @@ const event = (id: string, name: string) => ({
   region: "europe",
   url: "https://example.com/event",
   summary_tr: "",
-  event_type: "conference" as const,
+  event_type: "conference",
   date_range_tr: "10-12 Eylül 2026",
-  impact_level: "high" as const,
+  impact_level: "high",
   attendance: null,
   demand_effect_tr: "",
+  // The three read-time fields the events endpoint grew: airports the city's
+  // traffic actually uses, an importance score that is null whenever the
+  // organiser publishes no headcount, and the signed distance to the start.
+  relevant_airports: ["BER"],
+  importance_score: null,
+  days_until: 12,
+  ...overrides,
 });
 
 const EVENTS = [event("e1", "IFA Berlin"), event("e2", "ITB Berlin")];
@@ -64,7 +73,7 @@ describe("EventRadarStrip", () => {
 
     expect(await screen.findByText(/2 etkinlik/)).toBeInTheDocument();
     expect(screen.queryByText("IFA Berlin")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Etkinlik Radarı/ })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: /EVENT RADAR/ })).toHaveAttribute(
       "aria-expanded",
       "false",
     );
@@ -74,7 +83,7 @@ describe("EventRadarStrip", () => {
     const user = userEvent.setup();
     render(<EventRadarStrip />);
 
-    await user.click(await screen.findByRole("button", { name: /Etkinlik Radarı/ }));
+    await user.click(await screen.findByRole("button", { name: /EVENT RADAR/ }));
 
     expect(await screen.findByText("IFA Berlin")).toBeInTheDocument();
     // Same convention as the sidebar's aerointel_sidebar_collapsed.
@@ -93,18 +102,18 @@ describe("EventRadarStrip", () => {
     window.localStorage.setItem(EVENT_RADAR_KEY, "true");
     render(<EventRadarStrip />);
 
-    await user.click(await screen.findByRole("button", { name: /Etkinlik Radarı/ }));
+    await user.click(await screen.findByRole("button", { name: /EVENT RADAR/ }));
 
     expect(window.localStorage.getItem(EVENT_RADAR_KEY)).toBe("false");
   });
 
-  it("opens itself on the Etkinlik tab, where the radar is the subject", async () => {
+  it("opens itself on the Etkinlik view, where the radar is the subject", async () => {
     render(<EventRadarStrip autoExpand />);
 
     expect(await screen.findByText("IFA Berlin")).toBeInTheDocument();
   });
 
-  it("does not slam shut when the reader leaves the Etkinlik tab", async () => {
+  it("does not slam shut when the reader leaves the Etkinlik view", async () => {
     const { rerender } = render(<EventRadarStrip autoExpand />);
     expect(await screen.findByText("IFA Berlin")).toBeInTheDocument();
 
@@ -129,5 +138,42 @@ describe("EventRadarStrip", () => {
 
     await waitFor(() => expect(apiFetch).toHaveBeenCalled());
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it("shows an airport chip only when the event has curated airports", async () => {
+    // `relevant_airports` is empty for entries that are not cities ("Çin
+    // geneli", "Küresel") and for a city nobody has curated yet -- resolving
+    // those automatically produced wrong airports, so an empty list is the
+    // honest answer and it has to render as NO chip. An empty chip rail reads
+    // as a loading state that never finished.
+    apiFetch.mockResolvedValue([
+      event("e1", "IFA Berlin", { relevant_airports: ["BER", "TXL"] }),
+      event("e2", "Çin geneli tatil", { relevant_airports: [], city: "Çin geneli" }),
+    ]);
+    render(<EventRadarStrip autoExpand />);
+
+    expect(await screen.findByText("IFA Berlin")).toBeInTheDocument();
+    expect(screen.getByText("BER")).toBeInTheDocument();
+    expect(screen.getByText("TXL")).toBeInTheDocument();
+    // The second card is on screen; it simply carries no code.
+    expect(screen.getByText("Çin geneli tatil")).toBeInTheDocument();
+    expect(screen.queryAllByText(/^[A-Z]{3}$/)).toHaveLength(2);
+  });
+
+  it("omits the importance score rather than printing a zero for it", async () => {
+    // Null means the organiser publishes no headcount, which the backend
+    // refuses to score rather than scoring as zero (see
+    // backend/app/services/event_scoring.py). "Önem 0.00" would be a claim the
+    // system explicitly declined to make.
+    apiFetch.mockResolvedValue([
+      event("e1", "IFA Berlin", { importance_score: null }),
+      event("e2", "ITB Berlin", { importance_score: 0.72 }),
+    ]);
+    render(<EventRadarStrip autoExpand />);
+
+    expect(await screen.findByText("IFA Berlin")).toBeInTheDocument();
+    expect(screen.getByText("Önem 0.72")).toBeInTheDocument();
+    expect(screen.queryByText(/Önem 0\.00/)).not.toBeInTheDocument();
+    expect(screen.queryAllByText(/^Önem /)).toHaveLength(1);
   });
 });

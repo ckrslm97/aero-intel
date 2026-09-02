@@ -5,7 +5,6 @@ import {
   CATEGORIES,
   CATEGORY_BY_SLUG,
   NEWSPAPER_CATEGORY_SLUGS,
-  NEWSPAPER_EXCLUDED_CATEGORY_SLUGS,
   getSubcategoryLabel,
 } from "@/lib/taxonomy";
 
@@ -18,26 +17,27 @@ describe("Gazete category allow-list", () => {
     ]);
   });
 
-  it("accounts for every backend category exactly once", () => {
-    // The invariant that keeps the paper honest. A category the backend can
-    // emit that is in neither list is not "hidden" -- it has no tab, so it
-    // never reaches `exclude_categories` either, and its articles surface
-    // under whichever section happens to be open. Splitting the taxonomy into
-    // shown and excluded, with nothing left over, is what prevents that.
-    const shown = new Set<string>(NEWSPAPER_CATEGORY_SLUGS);
-    const excluded = new Set<string>(NEWSPAPER_EXCLUDED_CATEGORY_SLUGS);
-
-    for (const slug of shown) expect(excluded.has(slug)).toBe(false);
-    expect([...shown, ...excluded].sort()).toEqual([...CATEGORY_SLUGS].sort());
+  it("names only categories the backend can actually emit", () => {
+    // A section whose slug the backend does not classify into is a heading
+    // over a query that can only ever return nothing. There used to be a
+    // second list here (NEWSPAPER_EXCLUDED_CATEGORY_SLUGS) and an invariant
+    // that the two partitioned the taxonomy; the paper no longer sends
+    // `exclude_categories` at all -- each section queries its own category by
+    // name -- so the only thing left to check is that the allow-list is a
+    // real subset.
+    for (const slug of NEWSPAPER_CATEGORY_SLUGS) {
+      expect(CATEGORY_SLUGS).toContain(slug);
+    }
   });
 
-  it("hides fleet, finance, network and general from the paper", () => {
-    // Not a taxonomy change: they are still classified, still reach Öneriler
-    // and the newsletter. A fleet story only reaches the Gazete when the
-    // backend's shift rule files it as revenue_management -- see
-    // RM_SHIFT_KEYWORDS in backend/app/taxonomy.py.
+  it("keeps fleet, finance, network and general out of the paper", () => {
+    // Not a taxonomy change: they are still classified, still reach Öneriler,
+    // arama and the newsletter, and they still have labels and colours here.
+    // A fleet story only reaches the Gazete when the backend's shift rule
+    // files it as revenue_management -- see RM_SHIFT_KEYWORDS in
+    // backend/app/taxonomy.py.
     for (const slug of ["fleet", "finance", "network", "general"]) {
-      expect(NEWSPAPER_EXCLUDED_CATEGORY_SLUGS).toContain(slug);
+      expect(NEWSPAPER_CATEGORY_SLUGS).not.toContain(slug);
       expect(CATEGORY_BY_SLUG[slug]).toBeDefined();
     }
   });
