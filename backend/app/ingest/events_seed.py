@@ -32,10 +32,12 @@ from app.core.logging import get_logger
 # the newsletter can share the same month names.
 from app.core.tr_dates import format_date_range
 from app.models.article import Article, ArticleEnrichment
+from app.models.event import EVENT_TYPES, IMPACT_LEVELS
 from app.models.source import Source
 from app.pipeline.hashing import content_hash
 from app.pipeline.search_indexing import index_article_text
 from app.repositories.article_repository import ArticleRepository
+from app.services.event_scoring import event_importance
 
 logger = get_logger(__name__)
 
@@ -71,6 +73,22 @@ class AviationEvent:
     attendance: int | None = None
     # One line: what to expect on the routes into that city, and when.
     demand_effect: str = ""
+
+    def __post_init__(self) -> None:
+        """Fail on a typo'd vocabulary word at import, not at write.
+
+        app/models/event.py rejects the same values on the way into the
+        database, but this table is a Python literal that a human edits by hand
+        every time an edition is announced -- catching "hig" when the module is
+        imported means the test suite fails on the typo rather than the seed
+        run failing halfway through a commit.
+        """
+        if self.event_type not in EVENT_TYPES:
+            raise ValueError(f"{self.name}: event_type {self.event_type!r} not in {EVENT_TYPES}")
+        if self.impact_level not in IMPACT_LEVELS:
+            raise ValueError(
+                f"{self.name}: impact_level {self.impact_level!r} not in {IMPACT_LEVELS}"
+            )
 
 
 EVENTS: list[AviationEvent] = [
@@ -1800,6 +1818,25 @@ def _headline(event: AviationEvent) -> str:
     return f"{event.name} · {format_date_range(event.starts, event.ends)} · {event.city}"
 
 
+#: What an event-derived article scored before there was anything to score it
+#: with. Kept as the fallback rather than replaced, so an unscorable event ends
+#: up exactly where it is today.
+UNSCORED_IMPORTANCE = 0.6
+
+
+def _article_importance(event: AviationEvent, today: date) -> float:
+    """Importance for the article this event produces.
+
+    Explicitly `is None` rather than `or`: a real score of 0.0 must not be
+    silently promoted to the fallback. event_importance cannot currently return
+    0.0, but nothing in this call site should depend on that.
+    """
+    score = event_importance(
+        event.impact_level, event.attendance, event.starts, event.ends, today
+    )
+    return UNSCORED_IMPORTANCE if score is None else score
+
+
 async def _get_or_create_source(db: AsyncSession) -> Source:
     from sqlalchemy import select
 
@@ -1874,6 +1911,7 @@ async def seed_events(db: AsyncSession) -> int:
     source = await _get_or_create_source(db)
     repo = ArticleRepository(db)
     now = datetime.now(timezone.utc)
+    today = now.date()
     inserted = 0
 
     await _upsert_calendar_rows(db)
@@ -1915,7 +1953,18 @@ async def seed_events(db: AsyncSession) -> int:
                 category="events",
                 subcategory="regional" if event.region else "general",
                 region=event.region,
-                importance_score=0.6,
+                # The Top-10 selector reads this. It used to be 0.6 for all 86
+                # events, which meant "critical event" was decided by whatever
+                # order the rows came back in. The computed score uses the
+                # signal that is already in the row -- curated impact, published
+                # headcount, how concentrated the dates are, how close it is.
+                #
+                # Falls back to the old 0.6 when the event publishes no
+                # headcount, because event_importance returns None rather than
+                # guessing (see app/services/event_scoring.py): those 51 rows
+                # keep exactly the behaviour they have today, so this can only
+                # move an event the score actually knows something about.
+                importance_score=_article_importance(event, today),
                 sentiment="neutral",
                 confidence_score=0.9,
                 corroborating_source_count=1,

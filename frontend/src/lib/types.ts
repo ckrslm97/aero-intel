@@ -264,6 +264,18 @@ export interface EventOut {
   /** Organiser-published headcount, or null when there isn't one. */
   attendance: number | null;
   demand_effect_tr: string;
+  /** IATA codes the event's traffic actually uses, from the curated table in
+   * backend/app/data/event_airports.py. Empty for entries that are not cities
+   * ("Çin geneli", "Küresel") -- resolving them automatically produced wrong
+   * airports, so an empty list is the honest answer. */
+  relevant_airports: string[];
+  /** 0-1, or null when the organiser publishes no headcount. Null means "not
+   * measurable", never "small": the backend refuses to score an event with no
+   * attendance rather than treating it as zero. Render it as a dash. */
+  importance_score: number | null;
+  /** Signed days to the start -- negative for an event already under way,
+   * which the calendar keeps because it filters on the end date. */
+  days_until: number;
 }
 
 /* --- İçgörüler / new-route signals ------------------------------------- */
