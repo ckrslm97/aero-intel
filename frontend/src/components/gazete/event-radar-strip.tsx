@@ -1,11 +1,16 @@
 "use client";
 
-import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { CalendarDays, ChevronDown, MapPin } from "lucide-react";
 import { useEffect, useState } from "react";
 
+import { Collapse } from "@/components/ui/collapse";
 import { apiFetch } from "@/lib/api";
-import { collapseSection, reduceVariants, useMeasuredHeight } from "@/lib/motion";
+import { daysUntilTr } from "@/lib/event-timeline";
+import {
+  EVENT_IMPACT_META,
+  EVENT_TYPE_GLOW,
+  EVENT_TYPE_LABELS_TR,
+} from "@/lib/events";
 import type { EventOut } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -13,12 +18,6 @@ import { cn } from "@/lib/utils";
  * capacity decision can still be made, near enough that the row is not a
  * year-planner nobody scrolls. */
 const HORIZON_DAYS = 60;
-
-const IMPACT_META: Record<EventOut["impact_level"], { label: string; className: string; rank: number }> = {
-  high: { label: "Yüksek etki", className: "border-critical/40 bg-critical/10 text-critical", rank: 0 },
-  medium: { label: "Orta etki", className: "border-warning/40 bg-warning/10 text-warning", rank: 1 },
-  low: { label: "Düşük etki", className: "border-border bg-muted text-muted-foreground", rank: 2 },
-};
 
 const MAX_EVENTS = 8;
 
@@ -37,12 +36,12 @@ function isoDay(offsetDays: number): string {
   return date.toISOString().slice(0, 10);
 }
 
-/** "Etkinlik Radarı" -- the curated demand events coming up.
+/** "Event Radar" -- the curated demand events coming up.
  *
  * Reads the existing /events endpoint; nothing new server-side. Sorted by
  * impact first and date second, because the question this row answers is
  * "what is big enough to plan around", not "what is next on the calendar" --
- * the calendar itself already answers the second one and is one click away.
+ * the timeline underneath answers the second one.
  *
  * `impact_level` is hand-curated (backend/app/models/event.py), never
  * inferred, which is exactly why it is safe to sort on: it is somebody's
@@ -50,8 +49,7 @@ function isoDay(offsetDays: number): string {
  *
  * COLLAPSED BY DEFAULT
  * --------------------
- * It sits third among the strips above the article list, and a horizontal row
- * of eight cards about the next two months was pushing today's news below the
+ * A row of eight cards about the next two months pushed today's news below the
  * fold on every visit -- an "önümüzdeki 60 gün" panel is reference material,
  * not the paper's lead. So the default is a one-line header stating the count,
  * and the row itself is one click away.
@@ -59,22 +57,31 @@ function isoDay(offsetDays: number): string {
  * Two things override the default, in this order:
  *
  *   * the reader's own stored choice, which wins for good once made, and
- *   * the Etkinlik tab, where the strip IS the subject of the page the reader
- *     just opened -- it auto-expands there on the first render after the tab
- *     is selected, and a reader who then collapses it keeps it collapsed.
+ *   * the Etkinlik filter, where the radar IS the subject of the view the
+ *     reader just selected -- it auto-expands there on the first render after
+ *     the selection, and a reader who then collapses it keeps it collapsed.
+ *
+ * THE CARD is the one thing this round changed. It used to be an outbound link
+ * carrying an impact pill, a name, a date and a city. It is now a button that
+ * opens the detail panel -- an organiser's page is the LAST thing a revenue
+ * desk needs and it is still one click further in -- and it carries the two
+ * fields the taxonomy round added: `relevant_airports`, which is what turns an
+ * event into a station a desk actually sells, and `importance_score`, which is
+ * null far more often than not and therefore renders as nothing at all rather
+ * than as a zero.
  */
 export function EventRadarStrip({
-  onOpenCalendar,
+  onSelect,
   autoExpand = false,
 }: {
-  onOpenCalendar?: () => void;
-  /** True on the Etkinlik tab: the strip opens itself, once, on arrival. */
+  /** Opens the shared detail panel, which the page owns -- one drawer for the
+   * radar and the timeline, rather than two that could disagree. */
+  onSelect?: (event: EventOut) => void;
+  /** True on the Etkinlik view: the strip opens itself, once, on arrival. */
   autoExpand?: boolean;
 }) {
-  const reduceMotion = useReducedMotion();
   const [events, setEvents] = useState<EventOut[]>([]);
   const [expanded, setExpanded] = useState(false);
-  const [contentRef, contentHeight] = useMeasuredHeight<HTMLDivElement>();
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- restoring a persisted UI preference on mount, same as app-shell.tsx
@@ -82,10 +89,10 @@ export function EventRadarStrip({
   }, []);
 
   useEffect(() => {
-    // Only ever opens. `autoExpand` going false (leaving the Etkinlik tab)
+    // Only ever opens. `autoExpand` going false (leaving the Etkinlik view)
     // must not slam the strip shut on a reader who opened it deliberately.
     if (!autoExpand) return;
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- the tab selection is the trigger; there is nothing to derive it from during render
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the selection is the trigger; there is nothing to derive it from during render
     setExpanded(true);
   }, [autoExpand]);
 
@@ -104,7 +111,8 @@ export function EventRadarStrip({
           [...rows]
             .sort(
               (a, b) =>
-                IMPACT_META[a.impact_level].rank - IMPACT_META[b.impact_level].rank ||
+                EVENT_IMPACT_META[a.impact_level].rank -
+                  EVENT_IMPACT_META[b.impact_level].rank ||
                 a.starts.localeCompare(b.starts),
             )
             .slice(0, MAX_EVENTS),
@@ -126,22 +134,23 @@ export function EventRadarStrip({
     });
   }
 
-  const variants = collapseSection(contentHeight);
-
   return (
-    <section aria-label="Etkinlik radarı" className="flex flex-col gap-2">
+    <section aria-label="Event Radar" className="flex flex-col gap-3">
       <div className="flex items-center gap-2">
         <button
           type="button"
           onClick={toggle}
           aria-expanded={expanded}
-          className="flex items-center gap-2 rounded-md text-sm font-semibold uppercase tracking-wide text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+          className="flex items-center gap-2 rounded-md text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
         >
           <CalendarDays className="size-4" aria-hidden />
-          <h2 className="text-sm font-semibold uppercase tracking-wide">Etkinlik Radarı</h2>
+          {/* Pre-uppercased: lang="tr" + text-transform:uppercase maps "i" to
+              "İ", which turned this into "EVENT RADAR" only by luck and the
+              timeline's title into "EVENT TİMELİNE". */}
+          <h2 className="text-xs font-semibold uppercase tracking-[0.14em]">EVENT RADAR</h2>
           {/* The count is the whole point of a collapsed header: it says
               whether opening the row is worth it. */}
-          <span className="text-[11px] font-normal normal-case tracking-normal tabular-nums text-muted-foreground">
+          <span className="text-[11px] font-normal normal-case tracking-normal tabular-nums">
             {events.length} etkinlik · önümüzdeki {HORIZON_DAYS} gün
           </span>
           <ChevronDown
@@ -152,65 +161,107 @@ export function EventRadarStrip({
             )}
           />
         </button>
-        {onOpenCalendar && (
-          <button
-            type="button"
-            onClick={onOpenCalendar}
-            className="ml-auto rounded-md border border-border px-2 py-1 text-[11px] font-medium transition-colors hover:bg-accent"
-          >
-            Takvimi aç
-          </button>
-        )}
       </div>
 
-      <AnimatePresence initial={false}>
-        {expanded && (
-          <motion.div
-            key="events"
-            variants={reduceMotion ? reduceVariants(variants) : variants}
-            initial="hidden"
-            animate="show"
-            exit="exit"
-            className="overflow-hidden"
-          >
-            <div ref={contentRef} className="flex gap-2 overflow-x-auto pb-1">
-              {events.map((event) => (
-                <a
-                  key={event.id}
-                  href={event.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex w-56 shrink-0 flex-col gap-1.5 rounded-lg border border-border bg-card p-3 transition-colors hover:bg-accent/40"
-                >
-                  <span
-                    className={cn(
-                      "w-fit rounded-full border px-2 py-0.5 text-[10px] font-semibold",
-                      IMPACT_META[event.impact_level].className,
-                    )}
-                  >
-                    {IMPACT_META[event.impact_level].label}
-                  </span>
-                  <span className="line-clamp-2 text-xs font-medium leading-snug text-card-foreground">
-                    {event.name}
-                  </span>
-                  {/* Pre-formatted server-side so the frontend never
-                      re-implements Turkish month names. */}
-                  <span className="text-[11px] tabular-nums text-muted-foreground">
-                    {event.date_range_tr}
-                  </span>
-                  <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
-                    <MapPin className="size-3 shrink-0" aria-hidden />
-                    <span className="truncate">
-                      {event.city}
-                      {event.country ? `, ${event.country}` : ""}
-                    </span>
-                  </span>
-                </a>
-              ))}
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      <Collapse open={expanded}>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          {events.map((event) => (
+            <EventRadarCard key={event.id} event={event} onSelect={onSelect} />
+          ))}
+        </div>
+      </Collapse>
     </section>
+  );
+}
+
+/** ETKİNLİK ADI / tarih / şehir, ülke / etki seviyesi / havalimanı kodları --
+ * the owner's card, top to bottom, and geometrically unlike a news tile: the
+ * name is set in the type's own hue against a hairline of the same, and the
+ * airport codes are monospaced, because a station code is an identifier and
+ * setting one in the body face makes it read as a word. */
+function EventRadarCard({
+  event,
+  onSelect,
+}: {
+  event: EventOut;
+  onSelect?: (event: EventOut) => void;
+}) {
+  const impact = EVENT_IMPACT_META[event.impact_level];
+  const place = [event.city, event.country].filter(Boolean).join(", ");
+
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect?.(event)}
+      style={{ "--glow-color": EVENT_TYPE_GLOW[event.event_type] } as React.CSSProperties}
+      className={cn(
+        "group flex h-full flex-col gap-2 rounded-xl bg-card p-4 text-left transition-all duration-200",
+        "ring-1 ring-foreground/10 hover:-translate-y-0.5 hover:ring-(--glow-color)",
+        "motion-reduce:transform-none motion-reduce:transition-none",
+      )}
+    >
+      <div className="flex items-baseline justify-between gap-2 text-[10px] uppercase tracking-[0.1em]">
+        <span className="font-semibold text-(--glow-color)">
+          {EVENT_TYPE_LABELS_TR[event.event_type]}
+        </span>
+        <span className="normal-case tracking-normal tabular-nums text-muted-foreground">
+          {daysUntilTr(event.days_until)}
+        </span>
+      </div>
+
+      <span className="line-clamp-2 text-[15px] font-semibold leading-snug tracking-tight text-card-foreground group-hover:text-primary">
+        {event.name}
+      </span>
+
+      {/* Pre-formatted server-side so the frontend never re-implements Turkish
+          month names. */}
+      <span className="text-xs tabular-nums text-muted-foreground">{event.date_range_tr}</span>
+
+      {place && (
+        <span className="flex items-center gap-1 text-xs text-muted-foreground">
+          <MapPin className="size-3 shrink-0" aria-hidden />
+          <span className="truncate">{place}</span>
+        </span>
+      )}
+
+      <div className="mt-auto flex flex-wrap items-center gap-1.5 pt-1.5">
+        <span
+          className={cn(
+            "rounded-full border px-2 py-0.5 text-[10px] font-semibold",
+            impact.className,
+          )}
+        >
+          {impact.label}
+        </span>
+        {/* Empty for entries that are not cities ("Çin geneli", "Küresel") and
+            for a city nobody has curated yet -- so no chips at all rather than
+            an empty rail, which would read as a loading state that never
+            finished. */}
+        {event.relevant_airports.slice(0, 3).map((code) => (
+          <span
+            key={code}
+            className="rounded-full bg-muted px-1.5 py-0.5 font-mono text-[10px] font-semibold text-muted-foreground"
+          >
+            {code}
+          </span>
+        ))}
+        {event.relevant_airports.length > 3 && (
+          <span className="text-[10px] tabular-nums text-muted-foreground">
+            +{event.relevant_airports.length - 3}
+          </span>
+        )}
+        {/* Null means "the organiser publishes no headcount", which the
+            backend refuses to score rather than scoring as zero -- so the
+            chip is absent, not "0.00". */}
+        {event.importance_score !== null && (
+          <span
+            title="Etkinlik önem skoru (0-1): etki seviyesi, katılımcı sayısı ve süre"
+            className="ml-auto text-[10px] font-semibold tabular-nums text-muted-foreground"
+          >
+            Önem {event.importance_score.toFixed(2)}
+          </span>
+        )}
+      </div>
+    </button>
   );
 }

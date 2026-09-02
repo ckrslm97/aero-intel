@@ -26,6 +26,31 @@ export interface ArticleEnrichmentOut {
   subcategory: string | null;
   region: string | null;
   importance_score: number;
+  /** How much the story matters to a REVENUE-MANAGEMENT desk, 0-1 -- eight
+   * weighted sub-scores (backend/app/services/news_scoring.py). This is what
+   * `importance_score` above should have been: that column reduces, at the
+   * corroboration count every production row actually has, to
+   * `0.34 + 0.21 * source.trust_weight` -- a restatement of which outlet
+   * published the story, containing no term for the story.
+   *
+   * Null on rows the scoring pass never reached, so it must stay optional to
+   * read. Null is "not judged", never "judged unimportant". */
+  intelligence_score: number | null;
+  /** The model's three impact axes, 0-1 each.
+   *
+   * NULL AND 0.0 MEAN DIFFERENT THINGS. Only the day's shortlist is scored by
+   * the model, so null is the common case and means "nobody looked"; 0.0 means
+   * the model read the article and found no impact on that axis. The drawer
+   * renders an absence as an absence -- a "0" chip on an article nobody scored
+   * would be a claim the system never made. */
+  rm_impact: number | null;
+  demand_impact: number | null;
+  capacity_impact: number | null;
+  /** The sub-scores and the weights that combined them, as stored -- so the
+   * drawer can say WHY a story scored what it did without a second endpoint.
+   * See `ScoreDetail` in lib/gazete.ts for the shape, and read it defensively:
+   * a row scored by an older version of the scorer is still a row. */
+  score_detail: Record<string, unknown> | null;
   sentiment: string;
   confidence_score: number;
   corroborating_source_count: number;
