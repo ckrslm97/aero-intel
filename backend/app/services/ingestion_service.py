@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
-from app.ingest.base import RawArticle, SourceAdapter
+from app.ingest.base import FetchHealth, RawArticle, SourceAdapter
 from app.ingest.premium.registry import PREMIUM_ADAPTERS
 from app.models.article import Article
 from app.models.source import Source
@@ -35,15 +35,27 @@ def _adapter_for(source: Source) -> SourceAdapter | None:
     return None
 
 
-async def _fetch_source(source: Source) -> tuple[Source, list[RawArticle]]:
+async def _fetch_source(source: Source) -> tuple[Source, list[RawArticle], FetchHealth | None]:
+    """Fetch one source. Never raises -- see the module docstring.
+
+    The third element is the run's health, or None when the adapter does not
+    report any. None means "leave the health columns alone", which is the
+    honest answer for the premium stubs: they are not fetched, so calling them
+    failed would march every one of them past the consecutive-failure alarm on
+    the first run after deploy.
+    """
     adapter = _adapter_for(source)
     if adapter is None:
-        return source, []
+        return source, [], None
     try:
-        return source, await adapter.fetch()
+        articles = await adapter.fetch()
     except Exception:  # noqa: BLE001 -- a single misbehaving adapter must not abort the run
         logger.exception("adapter_fetch_crashed", source=source.name)
-        return source, []
+        # A crash is a failure even though the adapter never got far enough to
+        # say so itself; no HTTP status, because there is no telling how far it
+        # got. This is the one health record written from outside the adapter.
+        return source, [], FetchHealth(ok=False)
+    return source, articles, getattr(adapter, "last_health", None)
 
 
 async def run_ingestion(db: AsyncSession) -> int:
@@ -56,7 +68,11 @@ async def run_ingestion(db: AsyncSession) -> int:
     results = await asyncio.gather(*(_fetch_source(source) for source in sources))
 
     inserted = 0
-    for source, raw_articles in results:
+    for source, raw_articles, health in results:
+        # Recorded before the article loop, so a source's health is written
+        # even if persisting its articles is what goes wrong.
+        if health is not None:
+            source_repo.record_health(source, health)
         for raw in raw_articles:
             if await article_repo.url_exists(raw.url):
                 continue

@@ -1,10 +1,18 @@
-"""Faz 13's daily data-quality job: nine real invariants over what's actually
+"""Faz 13's daily data-quality job: eleven real invariants over what's actually
 published, checked against the live tables rather than assumed from the code
 that is supposed to enforce them upstream. Each of these was already meant to
 be impossible by construction (the language gate, the confidence bands, the
 required-field caps, PR2's business-class rulepacks) -- this is the
 defense-in-depth check that catches a regression in that guarantee rather than
 trusting it silently.
+
+The last two look at the other end of the pipe. Everything else here asks
+whether what got published is sound; `source_failure_streak` and
+`silently_dead_source` ask whether anything is arriving at all. They read the
+health columns app/services/ingestion_service.py writes each run, and they
+exist because this codebase has already lost two regulator feeds without
+noticing -- FAA and ICAO produced exactly 0 articles from the day they were
+seeded, and only a manual production review ever caught it.
 
 No custom ticketing here: `check_data_quality()` returns the violations, and
 the CLI command (`app.cli evaluate-data-quality`) exits non-zero when there
@@ -31,6 +39,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.article import Article
 from app.models.news_event import NewsEvent
 from app.models.promotion import Promotion
+from app.models.source import Source
 from app.repositories.kpi_repository import KpiRepository
 from app.services.campaign_status import campaign_status
 from app.services.kpi_service import LIVE_FX_PAIRS
@@ -91,6 +100,35 @@ STALE_EXPIRED_AFTER_DAYS = 30
 #: unreviewed rows is not a busy week, it is a queue nobody is working -- and
 #: that is a real operational defect, not a mood.
 REVIEW_QUEUE_CEILING = 100
+
+#: Consecutive failed ingestion runs before an active source is a defect
+#: rather than a bad afternoon.
+#:
+#: Ingestion runs every two hours (.github/workflows/jobs-news.yml, `0 */2 *
+#: * *`), so five consecutive failures is ten hours of a source returning
+#: nothing usable. That is comfortably past any single publisher deploy, CDN
+#: hiccup or expired certificate that fixes itself, and comfortably short of
+#: the days it currently takes anyone to notice by hand.
+SOURCE_FAILURE_STREAK_CEILING = 5
+
+#: How long an active source may go without a single successful fetch before
+#: it counts as silently dead.
+#:
+#: This is the check the codebase has already paid for: FAA and ICAO sat in
+#: the seed list producing EXACTLY 0 articles from the day they were seeded,
+#: and the only thing that ever caught it was a human reading production by
+#: hand (see the comment in app/ingest/sources_seed.py). Seven days is chosen
+#: against the SOURCES, not the schedule: the slowest feeds in the file are
+#: the regulator sections, which publish every few days, and the sparsest
+#: campaign radar still turns over inside a week. A source with nothing in
+#: seven days is not quiet, it is broken.
+#:
+#: Note this catches a strictly different failure from the streak above. A
+#: feed that alternates one success with four failures never reaches five in a
+#: row and never trips the first check; a feed that 403s on every single run
+#: trips both. The expensive case is the one only this check sees: a source
+#: that has NEVER succeeded, whose last_success_at is null.
+SOURCE_SILENCE_DAYS = 7
 
 
 @dataclass(frozen=True)
@@ -301,6 +339,88 @@ async def _check_review_queue_size(db: AsyncSession) -> list[Violation]:
     ]
 
 
+#: Health is only meaningful for sources the ingestion run actually fetches.
+#: A premium stub is seeded to be *visible* in the source list until
+#: credentials exist (see PREMIUM_SOURCE_NAMES in app/ingest/sources_seed.py);
+#: it has no adapter, is never fetched, and would otherwise fail both checks
+#: below forever for doing exactly what it was seeded to do.
+_FETCHED_SOURCE = (Source.is_active.is_(True), Source.is_premium_stub.is_(False))
+
+
+async def _check_source_failure_streaks(db: AsyncSession) -> list[Violation]:
+    """Active sources that have failed every run for the last five runs.
+
+    One violation per source, not per failed run: the streak is the finding.
+    """
+    rows = (
+        await db.execute(
+            select(
+                Source.id,
+                Source.name,
+                Source.consecutive_failures,
+                Source.last_http_status,
+            ).where(
+                *_FETCHED_SOURCE,
+                Source.consecutive_failures >= SOURCE_FAILURE_STREAK_CEILING,
+            )
+        )
+    ).all()
+    return [
+        Violation(
+            "source_failure_streak",
+            f"source {name!r} ({source_id}): {failures} consecutive failed fetches"
+            + (f", last HTTP {status}" if status is not None else ", no HTTP response"),
+        )
+        for source_id, name, failures, status in rows
+    ]
+
+
+async def _check_silently_dead_sources(db: AsyncSession, *, now: datetime) -> list[Violation]:
+    """Active sources with no successful fetch in the last SOURCE_SILENCE_DAYS.
+
+    The FAA/ICAO check. Both sat in the seed list producing exactly 0 articles
+    from the day they were seeded, every run logged it, and nothing added up
+    the logs -- so it took a manual production review to find. This is that
+    review, run daily.
+
+    Scoped to sources that have been OBSERVED at least once (a success or a
+    failure on record). A source whose health columns are entirely null has
+    not been fetched since these columns existed, which is the state every row
+    is in between this migration landing and the first ingestion run after it
+    -- roughly a two-hour window on the `0 */2 * * *` schedule. Reporting
+    ninety dead sources in that window would be reporting the deploy, not a
+    defect. Once a source has any health at all, a null `last_success_at`
+    stops being "not yet measured" and becomes "measured, never worked", which
+    is the worst case here and the one the two lost regulators were in.
+    """
+    cutoff = now - timedelta(days=SOURCE_SILENCE_DAYS)
+    rows = (
+        await db.execute(
+            select(Source.id, Source.name, Source.last_success_at).where(
+                *_FETCHED_SOURCE,
+                # "Has been observed": at least one recorded outcome.
+                (Source.last_success_at.isnot(None)) | (Source.last_failure_at.isnot(None)),
+                (Source.last_success_at.is_(None)) | (Source.last_success_at < cutoff),
+            )
+        )
+    ).all()
+    violations: list[Violation] = []
+    for source_id, name, last_success_at in rows:
+        if last_success_at is None:
+            detail = "no successful fetch on record"
+        else:
+            age_days = (now - last_success_at).total_seconds() / 86400
+            detail = f"last successful fetch {age_days:.1f} days ago"
+        violations.append(
+            Violation(
+                "silently_dead_source",
+                f"source {name!r} ({source_id}): {detail} "
+                f"(ceiling {SOURCE_SILENCE_DAYS} days)",
+            )
+        )
+    return violations
+
+
 async def _check_fx_freshness(db: AsyncSession) -> list[Violation]:
     repo = KpiRepository(db)
     cutoff = _now() - timedelta(hours=FX_FRESHNESS_HOURS)
@@ -322,6 +442,7 @@ async def check_data_quality(db: AsyncSession, *, today: date | None = None) -> 
     tested against a fixed clock; it defaults to the real one, which is what
     the scheduled job wants."""
     reference = today or _now().date()
+    now = _now()
     violations: list[Violation] = []
     violations += await _check_published_language(db)
     violations += await _check_no_below_threshold_published(db)
@@ -332,4 +453,6 @@ async def check_data_quality(db: AsyncSession, *, today: date | None = None) -> 
     violations += await _check_campaign_v2_rows_carry_a_reason(db)
     violations += await _check_review_queue_size(db)
     violations += await _check_fx_freshness(db)
+    violations += await _check_source_failure_streaks(db)
+    violations += await _check_silently_dead_sources(db, now=now)
     return violations
