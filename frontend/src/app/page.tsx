@@ -1,22 +1,21 @@
 import { AlertCenter } from "@/components/kokpit/alert-center";
-// Lazily loaded, so echarts stays out of the landing page's initial bundle --
-// see the note in that file for why the boundary is a module of its own.
-import { AnnualTrendChart } from "@/components/kokpit/annual-trend-chart-lazy";
-import { AviationFeed } from "@/components/kokpit/aviation-feed";
 import { CockpitHeader } from "@/components/kokpit/cockpit-header";
 import { CompetitivePulse } from "@/components/kokpit/competitive-pulse";
-import { FuelEnergy } from "@/components/kokpit/fuel-energy";
-import { FxForecastTable } from "@/components/kokpit/fx-forecast-table";
+import { DailySummary } from "@/components/kokpit/daily-summary";
+import { FxBoardTable } from "@/components/kokpit/fx-board-table";
+import { IataOutlook } from "@/components/kokpit/iata-outlook";
 import { KpiStrip } from "@/components/kokpit/kpi-strip";
-import { MarketStrip } from "@/components/kokpit/market-strip";
+import { MarketPulseRow } from "@/components/kokpit/market-pulse-row";
 import { SectionHeader } from "@/components/kokpit/section-header";
-import { SignalBoard } from "@/components/kokpit/signal-board";
-import { TodaysIntelligence } from "@/components/kokpit/todays-intelligence";
+import { SectorBalance } from "@/components/kokpit/sector-balance";
+import { SignalStream } from "@/components/kokpit/signal-stream";
 import { apiFetch } from "@/lib/api";
 import type {
   AnnualSeriesBoardOut,
   CockpitSignalsOut,
   EnergyBoardOut,
+  FxForecastOut,
+  IataIndicatorOut,
   KokpitFxBoardOut,
 } from "@/lib/types";
 
@@ -27,7 +26,7 @@ const LIVE = { cache: "force-cache", next: { revalidate: 60 } } as const;
  * seed file, not between requests. */
 const CURATED = { cache: "force-cache", next: { revalidate: 3600 } } as const;
 
-/** Fetch or fall back to `empty`. Kokpit is eleven sections over eight
+/** Fetch or fall back to `empty`. Kokpit is nine sections over eleven
  * endpoints, and one of them being down must thin the page, never blank it --
  * the same per-source degradation contract `useDataSource` gives the client
  * components further down, applied to the server-rendered half. */
@@ -42,159 +41,215 @@ async function load<T>(path: string, init: RequestInit & { next?: { revalidate?:
 /**
  * KOKPİT -- the executive landing page.
  *
- * The page has to answer four questions in about five seconds: durum ne, risk
- * var mı, ne değişiyor, neye dikkat. The order below is that answer, and the
- * top three sections (header, market strip, signal board + alerts) are sized
- * to sit inside a 1440x900 fold together.
+ * "LESS BUT BETTER. READING THE DASHBOARD SHOULD NOT REQUIRE READING."
+ *
+ * The page answers one question in thirty seconds: what is the market doing,
+ * how are the industry's numbers moving, which way is the lira going, what is
+ * IATA expecting, and what should worry me. The section order below IS that
+ * answer, and sections 1-5 are sized to fit a 1440x900 fold together.
+ *
+ * THE TWO RULES EVERY LAYOUT DECISION HERE CAME FROM
+ * --------------------------------------------------
+ * 1. TWO CADENCES, TWO VISUAL FORMS. A continuous line means a live
+ *    measurement (FX and energy, re-read every ~15 minutes). A discrete dot
+ *    means an annual publication (IATA's industry series, revised twice a
+ *    year, current year a forecast). No cell mixes them. See
+ *    components/charts/year-dots.tsx for the three separate untruths a
+ *    sparkline tells about an eight-point annual series.
+ * 2. FORM ENCODES EPISTEMIC STATUS, COLOUR ENCODES JUDGEMENT. Filled vs hollow
+ *    dots and solid vs dashed lines say "measured or projected". Green and red
+ *    say only "good or bad". A forecast is NOT amber -- amber in this house
+ *    means "warning" and nothing else.
+ *
+ * THE FOLD CONTRACT (1440x900) -- MEASURED, not budgeted
+ * ------------------------------------------------------
+ * The app shell starts this page at y=96, leaving 804px of visible page.
+ * These are the heights the sections ACTUALLY render at with live data, read
+ * out of the browser rather than added up from the cell specs:
+ *
+ *   1 Header              52  (+20 gap) ->  72
+ *   2 Market Pulse       178  (+20 gap) -> 270
+ *   3 KPI + Denge        287  (+20 gap) -> 577
+ *   4 Günün Özeti        129  (+20 gap) -> 726
+ *   5 Kur / FX  (heading + byline visible)  -> 804 = fold
+ *
+ * So the fold carries: market state, the five KPIs, the sector balance, the
+ * four signal tiles, and the FX section's heading. IATA's expectation is in
+ * the fold too -- as the 2026T badge on the three annual pulse cells and the
+ * year labels under the KPI dots.
+ *
+ * That satisfies the owner's contract ("market state + KPIs + which way the
+ * lira is going + IATA's expectation + what should worry me, in thirty
+ * seconds"): the lira's direction is the KUR pulse cell, at 26px, with its day
+ * and week deltas. The FX TABLE is the drill-down, and it starts one short
+ * scroll below.
+ *
+ * The earlier draft of this comment budgeted 120/124/88 for sections 2-4 and
+ * concluded the first nine FX rows would clear the fold. They do not, and the
+ * difference is almost entirely the section bylines -- the source-and-period
+ * captions under each heading. Those captions are the page's honesty
+ * contract and are NOT negotiable for fold space; the FX rows are. If you
+ * find yourself tempted to trade one for the other, that is the trade you
+ * would be making.
+ *
+ * THIS SUPERSEDES the 92px cell arithmetic that used to be commented in
+ * market-strip.tsx. If you are about to make a cell taller, this is the
+ * calculation you are spending.
  *
  * WHAT THIS PAGE REFUSES TO SHOW
  * ------------------------------
  * Several obvious executive-dashboard components are deliberately absent
  * because the data behind them does not exist here:
  *
- * * a composite 0-100 "health score" -- see cockpit_signals_service.py;
- * * a macro impact matrix, GDP/inflation/rate panels, regional IATA splits,
- *   monthly commercial data -- none of these are ingested at all;
- * * an energy "risk matrix" (Oil Supply: High, Refining: Medium, ...) -- this
- *   system ingests price series, not supply balances or a geopolitical index;
- *   the Yakıt & Enerji panel fills that space with arithmetic over real closes
- *   instead (see energy_service.py);
- * * an event-linkage graph under the aviation feed -- there is no
- *   article-to-article event relationship data here, and edges drawn from
- *   headline similarity would be invented ones;
- * * forecast confidence percentages -- the curated forecast rows carry no
- *   confidence field, and inventing one would defeat the point of curating;
- *   the forecast chart's shaded band is a MIN-MAX SPREAD, and its median line
- *   only appears where three institutions share one target date;
- * * competitor capacity / load factor / market share -- every competitive
- *   number on this page is a count of news and campaigns, and each panel says
- *   so in its own caption rather than relying on one line a reader may skip;
- * * a "data health %" figure in the header -- there is no such measurement.
+ * * a composite 0-100 "aviation health score" -- it would blend a 15-minute FX
+ *   reading with a twice-yearly IATA series under weights nobody can cite. See
+ *   cockpit_signals_service.py, and kokpit/sector-balance.tsx for what is
+ *   shown instead: four DERIVED relationships, each with its own source and
+ *   period printed under it;
+ * * competitor capacity / load factor / market share / price pressure -- every
+ *   competitive number on this page is a count of news and campaigns, and the
+ *   Rekabet caption says so rather than relying on one line a reader may skip;
+ * * a REGIONAL IATA selector -- `iata_indicators.region` is NULL on all eight
+ *   rows, so the selector would offer five choices that all return nothing. An
+ *   empty selector reads as a broken product, not as absent data;
+ * * a "1M" column in the FX table -- the curated forecasts carry 3- and
+ *   12-month horizons and nothing shorter, and filling a 1M column would mean
+ *   interpolating between two institutions' horizons, which is precisely what
+ *   curated_seed.py refuses to do. The column is TAHMİN and prints each
+ *   institution's own wording;
+ * * a YÖN (direction) column on the signal board -- a rival's route
+ *   announcement has no direction, `SignalOut` has no such field, and deriving
+ *   one from a headline would invent the row's most decision-relevant claim.
+ *   The column is TÜR;
+ * * macro panels, monthly commercial data, an energy risk matrix, forecast
+ *   confidence percentages, a header "data health %" -- none of these are
+ *   measured or ingested anywhere in this system.
  *
  * The commercial figures ARE real, but they are IATA's GLOBAL INDUSTRY annual
- * series 2019-2026, not this airline's and not monthly. That caveat is printed
- * under the section heading, next to the numbers, not tucked into a tooltip.
+ * series 2019-2026: not this airline's, not monthly, and not a budget. That
+ * caveat is printed under the section headings, next to the numbers, never
+ * tucked into a tooltip.
  */
 export default async function KokpitPage() {
   // Independent server fetches. `Promise.all` because they are independent:
   // serially, a cold render paid one round trip per section end to end.
   //
-  // `/kpis` is no longer among them. The market strip used to read Brent and
-  // jet fuel out of that list, which carries only a "vs previous measurement"
-  // delta -- so the strip could show a day delta for FX and nothing comparable
-  // for energy. `/kokpit/energy` computes both from the contracts' own daily
-  // closes, which is what lets every cell in the strip print the same two
-  // windows.
-  const [board, energy, signalsOut, annual] = await Promise.all([
+  // `/kokpit/energy` is here even though no "Yakıt & Enerji" section survives:
+  // Market Pulse's Brent cell needs the day AND week windows plus a sparkline,
+  // and `/kpis` carries only a "vs previous measurement" delta. `/kokpit/pulse`
+  // is deliberately NOT fetched -- this page prints no generated prose.
+  const [board, energy, signalsOut, annual, forecasts, indicators] = await Promise.all([
     load<KokpitFxBoardOut | null>("/kokpit/fx", LIVE, null),
     load<EnergyBoardOut | null>("/kokpit/energy", LIVE, null),
     load<CockpitSignalsOut | null>("/kokpit/signals", LIVE, null),
     load<AnnualSeriesBoardOut | null>("/kokpit/annual-series", CURATED, null),
+    load<FxForecastOut[]>("/kokpit/fx-forecasts", CURATED, []),
+    load<IataIndicatorOut[]>("/kokpit/iata?kind=forecast", CURATED, []),
   ]);
 
   const signals = signalsOut?.signals ?? [];
-  const fuelSignal = signals.find((signal) => signal.key === "fuel") ?? null;
   const annualSeries = annual?.series ?? [];
 
   return (
-    <div className="flex flex-col gap-8">
+    // 1680 rather than full width: at 2560 a twelve-column row stretches past
+    // what an eye scans in one pass. 20px between sections -- 32 spent 256px
+    // of a 900px screen on nothing, 16 erased the section boundary.
+    <div className="mx-auto flex max-w-[1680px] flex-col gap-5">
+      {/* 1 --------------------------------------------------------------- */}
       <CockpitHeader board={board} />
 
-      {/* One row, every live market number. Replaces both the old six-cell
-          strip and the full-width "Döviz Kuru Kokpiti" board that used to sit
-          three sections below it printing the same USD/TRY a second time. */}
-      <MarketStrip board={board} energy={energy} />
-
-      {/* Durum + risk, side by side: the two things a reader looks at first,
-          and the reason the old hero block had to shrink to a single band. */}
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[3fr_2fr]">
-        <section className="flex flex-col gap-3">
-          <SectionHeader
-            title="Sinyal Panosu"
-            caption="Dört ayrı sürücü, dört açık eşik — tek bir bileşik skor değil. Her karonun ⓘ notu, seviyeyi hangi kuralın verdiğini söyler."
-            glowVar="var(--signal)"
-          />
-          <SignalBoard signals={signals} />
-        </section>
-
-        <section className="flex flex-col gap-3">
-          <SectionHeader
-            title="Alert Merkezi"
-            caption="Kampanya uyarıları ve yüksek şiddetli risk sinyalleri, öncelik sırasıyla."
-            glowVar="var(--critical)"
-          />
-          <AlertCenter />
-        </section>
-      </div>
-
-      <section className="flex flex-col gap-3">
+      {/* 2 --------------------------------------------------------------- */}
+      <section className="flex flex-col gap-2">
         <SectionHeader
-          title="Bugünün İstihbaratı"
-          caption="Önce bakılan: sinyal seviyeleri, duygu dağılımı ve en önemli üç gelişme. Yapay zekâ/kural tabanlı metinler (Market Pulse ve Günün Özeti) “Detayı gör” altında, üreteni etiketli olarak duruyor."
-          glowVar="var(--chart-4)"
+          title="Market Pulse"
+          caption="IATA Küresel Görünüm (Haziran 2026) · yıllık · sektör geneli — canlı seriler Yahoo Finance, ~15 dk gecikmeli. Soldaki üç hücre yılda iki kez, sağdaki iki hücre 15 dakikada bir güncellenir. “MARKET” hücresi için rakip kapasite/pazar payı verisi bu sistemde yoktur; slot, havacılığın canlı fiyatlanan tek maliyet kalemine verilmiştir."
+          glowVar="var(--signal)"
         />
-        <TodaysIntelligence signals={signals} />
+        <MarketPulseRow annual={annual} board={board} energy={energy} />
       </section>
 
-      <section className="flex flex-col gap-4">
+      {/* 3 --------------------------------------------------------------- */}
+      <section className="flex flex-col gap-2">
         <SectionHeader
-          title="IATA Sektör Görünümü"
+          title="Genel KPI"
           caption={
             annual
-              ? `${annual.scope_tr} · şirket verisi değil, aylık veri değil`
-              : "IATA Küresel Görünüm · sektör geneli · yıllık"
+              ? `${annual.scope_tr} · TK verisi değil, aylık veri değil.`
+              : "IATA Küresel Görünüm · sektör geneli · yıllık · TK verisi değil, aylık veri değil."
           }
           glowVar="var(--chart-2)"
           action={annual ? { href: annual.source_url, label: "IATA kaynağı" } : undefined}
         />
-        <KpiStrip series={annualSeries} />
-        {annualSeries.length > 0 && (
-          <div
-            style={{ "--glow-color": "var(--chart-2)" } as React.CSSProperties}
-            className="rounded-xl border-gradient p-4 shadow-elev-1"
-          >
-            <AnnualTrendChart series={annualSeries} />
+        <div className="grid grid-cols-1 gap-3 xl:grid-cols-12">
+          <div className="xl:col-span-8">
+            <KpiStrip series={annualSeries} />
           </div>
-        )}
+          <div className="xl:col-span-4">
+            <SectorBalance annual={annual} energy={energy} />
+          </div>
+        </div>
       </section>
 
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[3fr_2fr]">
-        <section className="flex flex-col gap-3">
-          <SectionHeader
-            title="Kur Tahminleri"
-            caption="Küratörlü banka tahminleri. Tahminler asla ortalanmaz: her satır bir kurumun kendi rakamıdır. Canlı pariteler sayfanın en üstündeki piyasa şeridinde."
-            glowVar="var(--primary)"
-          />
-          <FxForecastTable />
-        </section>
-
-        <section className="flex flex-col gap-3">
-          <SectionHeader
-            title="Yakıt & Enerji"
-            caption="Brent, WTI ve doğal gazın gerçek kapanışları; jet yakıtı bunun üzerinden türetilen bir tahmindir. Yüzdeler her kontratın kendi serisinden hesaplanır."
-            glowVar="var(--chart-5)"
-          />
-          <FuelEnergy signal={fuelSignal} />
-        </section>
-      </div>
-
-      <section className="flex flex-col gap-3">
+      {/* 4 --------------------------------------------------------------- */}
+      <section className="flex flex-col gap-2">
         <SectionHeader
-          title="Rekabet Nabzı"
-          caption="Buradaki her sayı bir haber/kampanya hacmidir. Rakip kapasitesi, doluluğu veya pazar payı verisi bu sistemde yoktur."
+          title="Günün Özeti"
+          caption="Dört ayrı sürücü, dört açık eşik — tek bir bileşik skor değil. Sayı ve yöntem her karonun ⓘ notunda."
+          glowVar="var(--chart-4)"
+        />
+        <DailySummary signals={signals} />
+      </section>
+
+      {/* 5 --------------------------------------------------------------- */}
+      <section className="flex flex-col gap-2">
+        <SectionHeader
+          title="Kur / FX"
+          caption="Canlı spot kurlar ve kurumların kendi yayımladığı tahminler. Tahminler asla ortalanmaz: her satır bir kurumun kendi rakamıdır, kendi vadesiyle. Bir satıra tıklayınca sağdaki grafik o pariteye geçer."
+          glowVar="var(--primary)"
+        />
+        <FxBoardTable board={board} forecasts={forecasts} />
+      </section>
+
+      {/* 6 --------------------------------------------------------------- */}
+      <section className="flex flex-col gap-2">
+        <SectionHeader
+          title="IATA Görünümü"
+          caption="Kaynak: IATA Küresel Görünüm · Haziran 2026 · sektör geneli · yıllık · bölgesel kırılım yok."
+          glowVar="var(--chart-2)"
+          action={annual ? { href: annual.source_url, label: "IATA kaynağı" } : undefined}
+        />
+        <IataOutlook series={annualSeries} indicators={indicators} />
+      </section>
+
+      {/* 7 --------------------------------------------------------------- */}
+      <section className="flex flex-col gap-2">
+        <SectionHeader
+          title="Rekabet / Piyasa Görünümü"
+          caption="Buradaki her sayı bir haber/kampanya HACMİDİR. Rakip kapasitesi, doluluğu, pazar payı veya fiyat baskısı verisi bu sistemde yoktur."
           glowVar="var(--chart-3)"
         />
         <CompetitivePulse />
       </section>
 
-      <section className="flex flex-col gap-3">
+      {/* 8 --------------------------------------------------------------- */}
+      <section className="flex flex-col gap-2">
         <SectionHeader
-          title="Havacılık Akışı"
-          caption="Son günlerin eşiği geçen, Türkçeye çevrilmiş haberleri."
-          glowVar="var(--category-general)"
-          action={{ href: "/newspaper", label: "Gazete'ye git" }}
+          title="Sinyal Panosu"
+          caption="Rakip olayları ve stratejik gelişmeler. Diğer beş akış bu sayfanın kendi bölümlerinde zaten görünüyor, burada tekrar edilmez."
+          glowVar="var(--chart-4)"
+          action={{ href: "/sinyaller", label: "Tümü (7 akış)" }}
         />
-        <AviationFeed />
+        <SignalStream />
+      </section>
+
+      {/* 9 --------------------------------------------------------------- */}
+      <section className="flex flex-col gap-2">
+        <SectionHeader
+          title="Alert Merkezi"
+          caption="Kampanya uyarıları ve yüksek şiddetli risk sinyalleri, öncelik sırasıyla. Sıfır sayısı da bir bilgidir: bölüm boşken de sayaçlarını basar."
+          glowVar="var(--critical)"
+        />
+        <AlertCenter />
       </section>
     </div>
   );

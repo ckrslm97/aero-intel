@@ -1,6 +1,6 @@
 "use client";
 
-import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import { AnimatePresence } from "framer-motion";
 import { ChevronDown, CircleDashed, ExternalLink, Lightbulb, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
@@ -8,10 +8,10 @@ import dynamic from "next/dynamic";
 
 import { AirlineLogo } from "@/components/airline-logo";
 import { MotionItem, MotionList, MotionRail } from "@/components/motion/motion-list";
+import { Collapse } from "@/components/ui/collapse";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiFetch } from "@/lib/api";
 import { useChartTheme } from "@/lib/chart-theme";
-import { collapseSection, reduceVariants, useMeasuredHeight } from "@/lib/motion";
 import { airlineTabs, worldRegions } from "@/lib/nav";
 import type { InsightsOut, RouteSignalArticle } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -76,7 +76,6 @@ const chip = (active: boolean) =>
 
 export function InsightsClient() {
   const theme = useChartTheme();
-  const reduceMotion = useReducedMotion();
 
   const [data, setData] = useState<InsightsOut | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -473,13 +472,13 @@ export function InsightsClient() {
                   Bu haberlerde tanınan bir havalimanı geçmiyor; koordinatları olmadığı için
                   haritada yer almıyorlar. Sayı düştükçe harita doğrulaşır.
                 </p>
-                <Expandable open={residueOpen} reduceMotion={reduceMotion}>
+                <Collapse open={residueOpen}>
                   <MotionList className="grid grid-cols-1 gap-6 pt-3 md:grid-cols-2">
                     {residueSignals.map((signal) => (
                       <SignalCard key={signal.id} signal={signal} color={NO_IDENTITY} />
                     ))}
                   </MotionList>
-                </Expandable>
+                </Collapse>
               </section>
             )}
           </div>
@@ -597,38 +596,6 @@ function SignalCard({ signal, color }: { signal: FlatSignal; color: string }) {
         </a>
       </div>
     </MotionItem>
-  );
-}
-
-/** Animated-height reveal, the same one the hub panels use: the wrapper
- * animates to a measured pixel height rather than to `"auto"`, which cannot be
- * composited. */
-function Expandable({
-  open,
-  reduceMotion,
-  children,
-}: {
-  open: boolean;
-  reduceMotion: boolean | null;
-  children: React.ReactNode;
-}) {
-  const [contentRef, measuredHeight] = useMeasuredHeight<HTMLDivElement>();
-  const variants = collapseSection(measuredHeight);
-
-  return (
-    <AnimatePresence initial={false}>
-      {open && (
-        <motion.div
-          variants={reduceMotion ? reduceVariants(variants) : variants}
-          initial="hidden"
-          animate="show"
-          exit="exit"
-          className="overflow-hidden"
-        >
-          <div ref={contentRef}>{children}</div>
-        </motion.div>
-      )}
-    </AnimatePresence>
   );
 }
 

@@ -4,18 +4,13 @@ import {
   forecastBuckets,
   forecastSplitIndex,
   freshnessOf,
-  HIGH_IMPACT_IMPORTANCE,
   latestAsOf,
   LIVE_WINDOW_MINUTES,
   MEDIAN_MIN_INSTITUTIONS,
-  sentimentTotals,
   signalLevelStyle,
   splitForecast,
-  toFeedRow,
-  topByImportance,
-  type FeedRow,
 } from "./cockpit";
-import type { AnnualPoint, ArticleOut, FxForecastOut } from "./types";
+import type { AnnualPoint, FxForecastOut } from "./types";
 
 const NOW = new Date("2026-08-30T12:00:00Z");
 const minutesAgo = (minutes: number) =>
@@ -122,146 +117,6 @@ describe("splitForecast", () => {
     // split is 0, so there is no preceding real year to join to -- the guard
     // in splitForecast is what stops index -1 leaking a stray point.
     expect(projected).toEqual([null]);
-  });
-});
-
-describe("toFeedRow", () => {
-  const article = (overrides: Partial<ArticleOut["enrichment"]> = {}, rest: Partial<ArticleOut> = {}) =>
-    ({
-      id: "a1",
-      url: "https://example.test/a",
-      title: "Original English Title",
-      author: null,
-      published_at: "2026-08-30T09:00:00Z",
-      fetched_at: "2026-08-30T09:05:00Z",
-      status: "published",
-      source: { id: "s", name: "Reuters", url: "u", category: "wire", trust_weight: 1 },
-      enrichment: {
-        headline: "English headline",
-        summary: "s",
-        category: "network",
-        subcategory: null,
-        region: "europe",
-        importance_score: 0.4,
-        sentiment: "neutral",
-        confidence_score: 0.7,
-        corroborating_source_count: 1,
-        verified_at: null,
-        tags: "",
-        headline_tr: "Türkçe başlık",
-        summary_tr: null,
-        translated_at: "2026-08-30T09:06:00Z",
-        is_translated: true,
-        risk_severity: null,
-        ...overrides,
-      },
-      reading_time_minutes: 2,
-      airlines: [],
-      airports: [],
-      ...rest,
-    }) as ArticleOut;
-
-  it("prefers the Turkish headline", () => {
-    expect(toFeedRow(article()).headline).toBe("Türkçe başlık");
-  });
-
-  it("falls back through the English headline to the raw title, never inventing one", () => {
-    expect(toFeedRow(article({ headline_tr: null })).headline).toBe("English headline");
-    expect(toFeedRow(article({ headline_tr: null, headline: "" })).headline).toBe(
-      "Original English Title",
-    );
-    expect(toFeedRow(article({}, { enrichment: null })).headline).toBe("Original English Title");
-  });
-
-  it("earns the high-impact badge from a real classification, not from a guess", () => {
-    expect(toFeedRow(article()).highImpact).toBe(false);
-    expect(toFeedRow(article({ risk_severity: "high" })).highImpact).toBe(true);
-    expect(toFeedRow(article({ risk_severity: "medium" })).highImpact).toBe(false);
-    expect(
-      toFeedRow(article({ importance_score: HIGH_IMPACT_IMPORTANCE })).highImpact,
-    ).toBe(false);
-    expect(
-      toFeedRow(article({ importance_score: HIGH_IMPACT_IMPORTANCE + 0.01 })).highImpact,
-    ).toBe(true);
-  });
-
-  it("keeps an unclassified article renderable rather than dropping it", () => {
-    const row = toFeedRow(article({}, { enrichment: null }));
-    expect(row.category).toBe("general");
-    expect(row.region).toBeNull();
-    expect(row.sentiment).toBeNull();
-    expect(row.highImpact).toBe(false);
-  });
-
-  it("carries the raw importance and severity through, unenriched as null", () => {
-    // "no enrichment at all" and "scored zero" must stay distinguishable: only
-    // the first is allowed to sink a row silently in topByImportance.
-    expect(toFeedRow(article()).importance).toBe(0.4);
-    expect(toFeedRow(article({ importance_score: 0 })).importance).toBe(0);
-    expect(toFeedRow(article({}, { enrichment: null })).importance).toBeNull();
-    expect(toFeedRow(article({ risk_severity: "medium" })).riskSeverity).toBe("medium");
-    expect(toFeedRow(article({}, { enrichment: null })).riskSeverity).toBeNull();
-  });
-
-  describe("topByImportance", () => {
-    const row = (id: string, importance: number | null): FeedRow => ({
-      id,
-      headline: id,
-      url: `https://example.test/${id}`,
-      category: "general",
-      region: null,
-      publishedAt: null,
-      sourceName: "Reuters",
-      highImpact: false,
-      sentiment: null,
-      importance,
-      riskSeverity: null,
-    });
-
-    it("ranks by the enrichment's own score, most important first", () => {
-      const ranked = topByImportance([row("a", 0.3), row("b", 0.9), row("c", 0.6)]);
-      expect(ranked.map((entry) => entry.id)).toEqual(["b", "c", "a"]);
-    });
-
-    it("takes only the requested count", () => {
-      const ranked = topByImportance(
-        [row("a", 0.3), row("b", 0.9), row("c", 0.6), row("d", 0.7)],
-        3,
-      );
-      expect(ranked).toHaveLength(3);
-      expect(ranked.map((entry) => entry.id)).toEqual(["b", "d", "c"]);
-    });
-
-    it("sorts unenriched stories last but never drops them", () => {
-      const ranked = topByImportance([row("unenriched", null), row("scored", 0.1)]);
-      expect(ranked.map((entry) => entry.id)).toEqual(["scored", "unenriched"]);
-      expect(ranked).toHaveLength(2);
-    });
-
-    it("does not mutate the caller's array", () => {
-      const input = [row("a", 0.1), row("b", 0.9)];
-      topByImportance(input);
-      expect(input.map((entry) => entry.id)).toEqual(["a", "b"]);
-    });
-  });
-});
-
-describe("sentimentTotals", () => {
-  const rows = [
-    { category: "network", positive: 3, neutral: 5, negative: 1 },
-    { category: "fleet", positive: 2, neutral: 4, negative: 6 },
-  ];
-
-  it("sums the per-category counts the insights endpoint returns", () => {
-    const totals = sentimentTotals(rows);
-    expect(totals).toEqual({ positive: 5, neutral: 9, negative: 7, total: 21 });
-  });
-
-  it("returns a zero total rather than a fabricated split for no data", () => {
-    // The bar renders "henüz sınıflandırılmış haber yok" off this, never a
-    // three-way 33% split of nothing.
-    expect(sentimentTotals([]).total).toBe(0);
-    expect(sentimentTotals(undefined).total).toBe(0);
   });
 });
 

@@ -31,14 +31,27 @@ export function CockpitHeader({ board }: { board: KokpitFxBoardOut | null }) {
     .join("\n");
 
   return (
-    <header className="flex flex-col gap-3 pb-4">
+    <header className="flex flex-col gap-2 pb-2">
       <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-2">
         <div className="flex flex-col gap-0.5">
-          <h1 className="text-2xl font-semibold leading-none tracking-tight">
+          <h1 className="text-lg font-semibold leading-none tracking-tight">
             <span className="gradient-text">KOKPİT</span>
           </h1>
-          <p className="text-sm text-muted-foreground">
-            Havacılık İstihbaratı &amp; Gelir Yönetimi Kokpiti
+          {/* The subtitle drops to the page's smallest type. The header's job
+              is to be identifiable and to stamp the data's freshness; every
+              pixel it spends on describing itself is a pixel the fold does not
+              spend on the market. */}
+          {/* `lang="en"` is load-bearing, not decoration. The document is
+              lang="tr", and CSS `text-transform: uppercase` is LOCALE-SENSITIVE:
+              under Turkish casing rules a dotless "i" uppercases to "İ", so
+              this English phrase rendered as "AVİATİON INTELLİGENCE" -- which
+              reads as a typo in the product's own name. Tagging the span as
+              English restores "AVIATION INTELLIGENCE". */}
+          <p
+            lang="en"
+            className="text-[10px] uppercase tracking-[0.2em] text-muted-foreground"
+          >
+            Aviation Intelligence
           </p>
         </div>
 

@@ -19,6 +19,7 @@ const PAIR_METRIC_KEYS: Record<string, string> = {
   "USD/TRY": "fx_usd_try",
   "EUR/TRY": "fx_eur_try",
   "EUR/USD": "fx_eur_usd",
+  "GBP/TRY": "fx_gbp_try",
   "GBP/USD": "fx_gbp_usd",
   "USD/JPY": "fx_usd_jpy",
   "EUR/GBP": "fx_eur_gbp",
@@ -263,7 +264,7 @@ export function FxForecastChart({
     };
   }, [detail, buckets, theme, reduceMotion, pair]);
 
-  if (!loaded) return <Skeleton className="h-[260px] w-full rounded-xl" />;
+  if (!loaded) return <Skeleton className="h-[240px] w-full rounded-xl" />;
 
   if (!option) {
     return (
@@ -280,7 +281,7 @@ export function FxForecastChart({
     <div className="flex flex-col gap-1.5">
       <ReactECharts
         option={option}
-        style={{ height: 260, width: "100%" }}
+        style={{ height: 240, width: "100%" }}
         opts={{ renderer: "svg" }}
         notMerge
       />

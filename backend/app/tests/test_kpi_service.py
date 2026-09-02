@@ -30,7 +30,7 @@ QUOTES: dict[str, float] = {
         symbol: rate
         for (_, symbol, _, _, _), rate in zip(
             kpi_service.LIVE_FX_PAIRS,
-            (40.0, 43.0, 1.08, 1.35, 149.0, 0.84, 7.2),
+            (40.0, 43.0, 1.08, 65.0, 1.35, 149.0, 0.84, 7.2),
             strict=True,
         )
     },
@@ -156,6 +156,13 @@ async def test_refresh_records_every_live_fx_pair_including_the_new_ones(db_sess
     assert "fx_eur_try" in kpi_service.FX_PAIR_LABELS
     assert kpi_service.FX_PAIR_LABELS["fx_eur_try"] == "EUR/TRY"
     assert kpi_service.FX_PAIR_LABELS["fx_gbp_usd"] == "GBP/USD"
+    # GBP/TRY was the one pair on Kokpit's FX board with no live series, so
+    # its row could never render. It is quoted in TRY like USD/TRY, not in a
+    # foreign quote currency -- getting that wrong would put a 65 into a
+    # column of 1,08s.
+    assert kpi_service.FX_PAIR_LABELS["fx_gbp_try"] == "GBP/TRY"
+    gbp_try = next(row for row in kpi_service.LIVE_FX_PAIRS if row[0] == "fx_gbp_try")
+    assert gbp_try == ("fx_gbp_try", "GBPTRY=X", "GBP", "TRY", "TRY")
 
 
 async def test_refresh_does_not_rewrite_published_figures_that_have_not_moved(db_session, monkeypatch):

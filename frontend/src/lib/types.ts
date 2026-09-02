@@ -711,17 +711,12 @@ export interface IataIndicatorOut {
   previous_source_url: string | null;
 }
 
-export interface MarketPulseCitationOut {
-  claim: string;
-  source: string;
-  source_url: string;
-}
-
-export interface MarketPulseOut {
-  summary_tr: string;
-  citations: MarketPulseCitationOut[];
-  generated_at: string;
-}
+/* `GET /kokpit/pulse`'s response shape used to be typed here. Kokpit V2 prints
+ * no generated prose at all -- the owner asked for glyphs, not paragraphs -- so
+ * `MarketPulseCard` and with it the last consumer of that endpoint is gone. The
+ * ENDPOINT is deliberately untouched: `market_pulse_service` and its tests
+ * still live, and the types come back with the first surface that needs them.
+ */
 
 /** One "Sinyal Panosu" tile. Deliberately NOT a score -- see
  * backend/app/services/cockpit_signals_service.py for why four stated drivers

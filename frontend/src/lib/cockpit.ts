@@ -6,13 +6,7 @@
  * "canlı" is a claim about data and has to be earned by a timestamp rather
  * than printed as decoration.
  */
-import type {
-  AnnualPoint,
-  ArticleOut,
-  CockpitSignal,
-  FxForecastOut,
-  InsightsOut,
-} from "@/lib/types";
+import type { AnnualPoint, CockpitSignal, FxForecastOut } from "@/lib/types";
 
 /* --- Signal levels ------------------------------------------------------ */
 
@@ -134,124 +128,6 @@ export const ANNUAL_KIND_LABELS_TR: Record<AnnualPoint["kind"], string> = {
   estimate: "tahmini gerçekleşme",
   forecast: "tahmin",
 };
-
-/* --- Aviation feed ------------------------------------------------------ */
-
-/** One row of "Havacılık Akışı", reduced to what the row actually draws.
- *
- * Every field is either present on the article or explicitly null. Nothing is
- * defaulted: a story with no Turkish headline falls back to its original title
- * rather than to an invented translation, and `highImpact` is earned by a real
- * classification, never by "looks important".
- */
-export interface FeedRow {
-  id: string;
-  headline: string;
-  url: string;
-  category: string;
-  region: string | null;
-  publishedAt: string | null;
-  sourceName: string;
-  /** True for a high-severity risk story or a top-decile importance score --
-   * the two flags the enrichment genuinely produces. */
-  highImpact: boolean;
-  sentiment: string | null;
-  /** The enrichment's own 0-1 importance score, or null for an article with no
-   * enrichment at all. Kept nullable rather than defaulted to 0: "never
-   * classified" and "classified as unimportant" are different, and only the
-   * first should sink a row silently. */
-  importance: number | null;
-  /** The classified risk severity, where the enrichment assigned one. */
-  riskSeverity: string | null;
-}
-
-/** Above this, the enrichment's own importance score is "top of the feed". */
-export const HIGH_IMPACT_IMPORTANCE = 0.8;
-
-export function toFeedRow(article: ArticleOut): FeedRow {
-  const enrichment = article.enrichment;
-  return {
-    id: article.id,
-    headline: enrichment?.headline_tr || enrichment?.headline || article.title,
-    url: article.url,
-    category: enrichment?.category ?? "general",
-    region: enrichment?.region ?? null,
-    publishedAt: article.published_at,
-    sourceName: article.source?.name ?? "",
-    highImpact:
-      enrichment?.risk_severity === "high" ||
-      (enrichment?.importance_score ?? 0) > HIGH_IMPACT_IMPORTANCE,
-    sentiment: enrichment?.sentiment ?? null,
-    importance: enrichment?.importance_score ?? null,
-    riskSeverity: enrichment?.risk_severity ?? null,
-  };
-}
-
-/** The `count` highest-scoring rows, most important first.
- *
- * GET /articles orders by publication time, not by importance -- so "en önemli
- * 3" has to be a ranking over rows already fetched, and it is only ever the
- * top three OF THAT WINDOW (the last few days, above the same importance floor
- * the feed uses). It is not a claim about the archive, which is why the panel
- * prints its window in the caption.
- *
- * Unenriched rows sort last rather than being dropped: a story the pipeline
- * never classified is still a story, and it should only lose to one that
- * actually scored higher. Ties keep the incoming (most recent first) order.
- */
-export function topByImportance(rows: FeedRow[], count = 3): FeedRow[] {
-  return [...rows]
-    .sort((a, b) => (b.importance ?? -1) - (a.importance ?? -1))
-    .slice(0, count);
-}
-
-export const SENTIMENT_LABELS_TR: Record<string, string> = {
-  positive: "Olumlu",
-  negative: "Olumsuz",
-  neutral: "Nötr",
-};
-
-/** Only the two that carry information. A "Nötr" badge on two thirds of the
- * feed is noise, so neutral gets no badge at all. */
-export const SENTIMENT_STYLES: Record<string, string> = {
-  positive: "bg-good/10 text-good",
-  negative: "bg-critical/10 text-critical",
-};
-
-/* --- Sentiment distribution --------------------------------------------- */
-
-export interface SentimentTotals {
-  positive: number;
-  neutral: number;
-  negative: number;
-  total: number;
-}
-
-/** The whole archive's sentiment split, summed across categories.
- *
- * `/insights` returns sentiment PER CATEGORY (see
- * backend/app/services/insights_service.py); the Kokpit bar is the same counts
- * rolled up, so the bar and the per-category view on /insights can never
- * disagree about how many articles there were. Nothing is weighted or scored:
- * these are counts of classified articles, which is all the classification
- * produces.
- *
- * A zero total is returned as-is rather than as an empty object, so the caller
- * renders "henüz sınıflandırılmış haber yok" instead of a three-way 33% split
- * of nothing.
- */
-export function sentimentTotals(
-  rows: InsightsOut["sentiment_by_category"] | undefined,
-): SentimentTotals {
-  const totals = { positive: 0, neutral: 0, negative: 0, total: 0 };
-  for (const row of rows ?? []) {
-    totals.positive += row.positive;
-    totals.neutral += row.neutral;
-    totals.negative += row.negative;
-  }
-  totals.total = totals.positive + totals.neutral + totals.negative;
-  return totals;
-}
 
 /* --- FX forecast buckets ------------------------------------------------- */
 

@@ -1,4 +1,5 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AlertCenter } from "./alert-center";
@@ -82,14 +83,29 @@ describe("AlertCenter", () => {
     apiFetch.mockReset();
   });
 
-  it("merges both streams and labels which one each row came from", async () => {
+  /** The section opens CLOSED, so every row assertion has to expand it first. */
+  async function expand() {
+    await userEvent.click(await screen.findByRole("button", { name: /Genişlet/ }));
+  }
+
+  it("starts collapsed, showing counts rather than rows", async () => {
     routes({ alerts: [campaignAlert()], risks: radar([riskItem()]) });
     render(<AlertCenter />);
 
-    expect(await screen.findByText("TK Avrupa kampanyası bitiyor")).toBeInTheDocument();
+    expect(await screen.findByText(/1 ORTA/)).toBeInTheDocument();
+    expect(await screen.findByText(/1 YÜKSEK/)).toBeInTheDocument();
+    // The bottom of the page is not where a reader is scanning; the rows are
+    // one click away, the counts are not.
+    expect(screen.queryByText("TK Avrupa kampanyası bitiyor")).not.toBeInTheDocument();
+  });
+
+  it("merges both streams once expanded", async () => {
+    routes({ alerts: [campaignAlert()], risks: radar([riskItem()]) });
+    render(<AlertCenter />);
+    await expand();
+
+    expect(screen.getByText("TK Avrupa kampanyası bitiyor")).toBeInTheDocument();
     expect(screen.getByText("Etna'da kül bulutu uçuşları durdurdu")).toBeInTheDocument();
-    expect(screen.getByText("Kampanya")).toBeInTheDocument();
-    expect(screen.getByText("Risk")).toBeInTheDocument();
   });
 
   it("orders by priority before recency", async () => {
@@ -106,36 +122,59 @@ describe("AlertCenter", () => {
       risks: radar([]),
     });
     render(<AlertCenter />);
+    await expand();
 
-    await screen.findByText("Kritik");
     const titles = screen.getAllByText(/^(Kritik|Bilgi)$/).map((node) => node.textContent);
     // A CRITICAL from nine hours ago outranks an INFO from six minutes ago.
     expect(titles).toEqual(["Kritik", "Bilgi"]);
   });
 
+  it("caps the open list at three rows", async () => {
+    routes({
+      alerts: Array.from({ length: 5 }, (_, i) =>
+        campaignAlert({ id: `c${i}`, title_tr: `Uyarı ${i}` }),
+      ),
+      risks: radar([]),
+    });
+    render(<AlertCenter />);
+    await expand();
+
+    expect(screen.getByText("Uyarı 0")).toBeInTheDocument();
+    expect(screen.queryByText("Uyarı 3")).not.toBeInTheDocument();
+    // ...but the BAND still counts all five. A count computed over the three
+    // visible rows would be a number nobody could reconcile with /kampanyalar.
+    expect(screen.getByText(/5 ORTA/)).toBeInTheDocument();
+  });
+
   it("only lifts high-severity risk items in, and only as HIGH", async () => {
     routes({
       alerts: [],
-      risks: radar([riskItem(), riskItem({ id: "r2", severity: "medium", headline: "Orta" })]),
+      risks: radar([riskItem(), riskItem({ id: "r2", severity: "medium", headline: "Orta önem" })]),
     });
     render(<AlertCenter />);
+    await expand();
 
-    await screen.findByText("Etna'da kül bulutu uçuşları durdurdu");
-    expect(screen.queryByText("Orta")).not.toBeInTheDocument();
-    expect(screen.getByText(/Yüksek 1/)).toBeInTheDocument();
+    expect(screen.getByText("Etna'da kül bulutu uçuşları durdurdu")).toBeInTheDocument();
+    expect(screen.queryByText("Orta önem")).not.toBeInTheDocument();
+    expect(screen.getByText(/1 YÜKSEK/)).toBeInTheDocument();
   });
 
   it("still renders one stream when the other fails", async () => {
     routes({ alerts: [campaignAlert()], risks: new Error("API request failed: 500") });
     render(<AlertCenter />);
+    await expand();
 
-    expect(await screen.findByText("TK Avrupa kampanyası bitiyor")).toBeInTheDocument();
+    expect(screen.getByText("TK Avrupa kampanyası bitiyor")).toBeInTheDocument();
   });
 
-  it("is honestly empty rather than hopeful when both are quiet", async () => {
+  it("prints its zeroes rather than hiding the section", async () => {
+    // A silent section says nothing; "0 KRİTİK" says the streams answered and
+    // had nothing to report, which is a different and useful statement.
     routes({ alerts: [], risks: radar([]) });
     render(<AlertCenter />);
 
-    await waitFor(() => expect(screen.getByText("Aktif uyarı yok.")).toBeInTheDocument());
+    expect(await screen.findByText(/0 KRİTİK/)).toBeInTheDocument();
+    expect(screen.getByText(/0 YÜKSEK/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Genişlet/ })).toBeDisabled();
   });
 });

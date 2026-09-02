@@ -58,6 +58,12 @@ LIVE_FX_PAIRS: tuple[tuple[str, str, str, str, str], ...] = (
     ("fx_usd_try", "TRY=X", "USD", "TRY", "TRY"),
     ("fx_eur_try", "EURTRY=X", "EUR", "TRY", "TRY"),
     ("fx_eur_usd", "EURUSD=X", "EUR", "USD", "USD"),
+    # GBP/TRY completes the seven pairs Kokpit's FX board is asked to carry --
+    # it was the only one of them with no live series at all, so the board's
+    # row for it simply did not render. Yahoo serves both a spot quote and a
+    # 1-month history for GBPTRY=X, and Frankfurter can cross-check it, so it
+    # meets the same bar as the six around it.
+    ("fx_gbp_try", "GBPTRY=X", "GBP", "TRY", "TRY"),
     ("fx_gbp_usd", "GBPUSD=X", "GBP", "USD", "USD"),
     ("fx_usd_jpy", "JPY=X", "USD", "JPY", "JPY"),
     ("fx_eur_gbp", "EURGBP=X", "EUR", "GBP", "GBP"),
@@ -70,6 +76,7 @@ FX_PAIR_LABELS: dict[str, str] = {
     "fx_usd_try": "USD/TRY",
     "fx_eur_try": "EUR/TRY",
     "fx_eur_usd": "EUR/USD",
+    "fx_gbp_try": "GBP/TRY",
     "fx_gbp_usd": "GBP/USD",
     "fx_usd_jpy": "USD/JPY",
     "fx_eur_gbp": "EUR/GBP",

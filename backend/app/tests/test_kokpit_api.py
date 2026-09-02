@@ -109,6 +109,9 @@ async def test_fx_board_carries_the_pairs_the_market_strip_expects(db_session):
     names = [pair.currency_pair for pair in board.pairs]
     assert "EUR/TRY" in names
     assert "GBP/USD" in names
+    # The seventh pair Kokpit's FX board asks for. Its table row is
+    # data-driven, so before this pair existed the row simply did not appear.
+    assert "GBP/TRY" in names
     assert len(names) == len(kpi_service.LIVE_FX_PAIRS)
     # No metric_key ever leaks through as a display name.
     assert all(not name.startswith("fx_") for name in names)

@@ -40,6 +40,7 @@ KPI_DISPLAY: dict[str, tuple[str, bool]] = {
     "fx_usd_try": ("USD/TRY", False),
     "fx_eur_try": ("EUR/TRY", False),
     "fx_eur_usd": ("EUR/USD", False),
+    "fx_gbp_try": ("GBP/TRY", False),
     "fx_gbp_usd": ("GBP/USD", False),
     "fx_usd_jpy": ("USD/JPY", False),
     "fx_eur_gbp": ("EUR/GBP", False),
@@ -70,6 +71,9 @@ YAHOO_HISTORY_SYMBOLS: dict[str, str] = {
     "fx_usd_try": "TRY=X",
     "fx_eur_try": "EURTRY=X",
     "fx_eur_usd": "EURUSD=X",
+    # Without this the /kpi/fx_gbp_try detail page would draw a single point:
+    # the history fetch is keyed off this map, not off LIVE_FX_PAIRS.
+    "fx_gbp_try": "GBPTRY=X",
     "fx_gbp_usd": "GBPUSD=X",
     "fx_usd_jpy": "JPY=X",
     "fx_eur_gbp": "EURGBP=X",
