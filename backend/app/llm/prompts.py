@@ -234,3 +234,72 @@ def promotion_extraction_prompt(title: str, content: str) -> str:
         "- Never invent a market list; null when the text does not name any.\n\n"
         f"Title: {title}\nContent: {content[:2500]}\n\nJSON:"
     )
+
+
+#: How much article body the impact call sends. Deliberately smaller than the
+#: 2500 the promotion extractor uses: this call asks for a judgement about what
+#: a story means, and the lede carries that. Measured at ~1450 tokens per call
+#: including the instructions, so a 20-article shortlist costs ~29K tokens/day.
+NEWS_IMPACT_BODY_CHARS = 2000
+
+
+def news_impact_prompt(title: str, content: str, category: str) -> str:
+    """The three revenue-management impact scores, in one call.
+
+    One consolidated call rather than three, for the reason translate_pair
+    above exists: three prompts over the same 2000 characters is three times
+    the token bill for one reading of one article. The model reads the story
+    once and answers three questions about it.
+
+    The scale is stated as anchors rather than adjectives. "Rate the impact
+    from 0 to 1" invites a model to cluster everything at 0.7; naming what 0.0,
+    0.3, 0.6 and 0.9 each mean gives it a rubric to place a story against, and
+    is what makes the resulting numbers comparable BETWEEN articles -- which is
+    the only thing this score is used for.
+
+    The three axes are kept separate on purpose. app/taxonomy.py split
+    "demand_capacity" into two subcategories because an RM desk must not have
+    "what the market wants" and "what carriers supply" conflated; asking for
+    one blended "importance" here would re-merge them behind the model's back.
+
+    Grounding rules mirror why_important_prompt: read only the article, do not
+    forecast. A model that scores an article's *potential* rather than its
+    content produces a ranking nobody can audit against the text.
+    """
+    return (
+        "Sen bir havayolu gelir yönetimi (revenue management) masası için haber "
+        "önceliklendiren bir analistsin. Aşağıdaki havacılık haberini oku ve ÜÇ "
+        "ayrı etkiyi 0.0 ile 1.0 arasında puanla.\n\n"
+        "Puanlanacak eksenler:\n"
+        '- "rm_impact": Haber fiyatlama, getiri (yield), birim gelir, ücret '
+        "yapısı veya rekabetçi fiyat konumlandırması tarafında somut bir şeyi "
+        "değiştiriyor mu?\n"
+        '- "demand_impact": Haber TALEP tarafında bir şeyi değiştiriyor mu — '
+        "yolcu talebi, rezervasyon eğilimi, pazar iştahı, sezonluk hareket?\n"
+        '- "capacity_impact": Haber ARZ tarafında bir şeyi değiştiriyor mu — '
+        "koltuk kapasitesi, sefer sıklığı, yeni/kapanan hat, filo tahsisi, slot?\n\n"
+        "Ölçek (her üç eksen için de aynı):\n"
+        "- 0.0 = Bu eksende hiçbir etkisi yok.\n"
+        "- 0.3 = Dolaylı/uzak etki; masanın bilmesi iyi olur ama bir aksiyon "
+        "gerektirmez.\n"
+        "- 0.6 = Belirgin etki; bu eksende izlenmesi gereken somut bir gelişme.\n"
+        "- 0.9 = Doğrudan ve acil etki; masanın bu hafta bir şey yapmasını "
+        "gerektirebilecek bir gelişme.\n\n"
+        "Kurallar:\n"
+        "- SADECE haberde YAZANLARA dayan. Tahmin, senaryo veya çıkarım yapma.\n"
+        "- Üç eksen BAĞIMSIZDIR. Bir haber yalnızca kapasiteyi ilgilendiriyorsa "
+        "capacity_impact yüksek, diğer ikisi düşük olmalıdır. Üçünü birden "
+        "yüksek vermek yalnızca haber gerçekten üçünü de değiştiriyorsa "
+        "doğrudur.\n"
+        "- Haber bu masa için önemsizse üç puanı da düşük vermekten çekinme; "
+        "haberlerin çoğu önemsizdir ve bu doğru cevaptır.\n"
+        '- "rationale_tr": en fazla bir kısa cümle, Türkçe, neden bu puanları '
+        "verdiğini söyler. Emin değilsen null.\n\n"
+        "SADECE geçerli bir JSON nesnesi döndür; açıklama yok, markdown yok:\n"
+        '{"rm_impact": <0.0-1.0>, "demand_impact": <0.0-1.0>, '
+        '"capacity_impact": <0.0-1.0>, "rationale_tr": <string veya null>}\n\n'
+        f"Kategori: {category}\n"
+        f"Başlık: {title}\n"
+        f"Metin: {content[:NEWS_IMPACT_BODY_CHARS]}\n\n"
+        "JSON:"
+    )

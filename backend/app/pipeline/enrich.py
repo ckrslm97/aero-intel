@@ -20,6 +20,8 @@ from app.pipeline.relevance import score_article
 from app.pipeline.search_indexing import index_article_text
 from app.pipeline.verify import compute_confidence
 from app.repositories.entity_repository import EntityRepository
+from app.services.news_scoring import ArticleSignals
+from app.services.news_scoring import score as news_score
 from app.taxonomy import FOCUS_BONUS, is_valid_risk_type, risk_family_of
 
 logger = get_logger(__name__)
@@ -44,6 +46,26 @@ async def _translate_pair(engine, headline: str, summary: str) -> tuple[str | No
         await engine.translate(summary) if summary else None,
     )
 
+
+
+def _should_translate(settings, intelligence_score: float) -> bool:
+    """Whether this article earns a translation call.
+
+    Translation is the publication gate, not a nicety: the Gazete queries with
+    `translated_only=true`, so an untranslated article is an article the reader
+    never sees. That is exactly why the decision has to be made on a score that
+    measures the story rather than on `importance_score`, which measures its
+    publisher -- and exactly why it needs an escape hatch.
+
+    `translate_all_enriched` restores the previous behaviour (translate
+    everything on the LLM path) with one environment variable and no deploy.
+    It exists for the transition: if the floor turns out to be set too high for
+    the live feed's mix, the fix must not require a code change to a paper that
+    has gone quiet.
+    """
+    if settings.translate_all_enriched:
+        return True
+    return intelligence_score >= settings.translate_min_intelligence
 
 
 async def _classify_risk(engine, title: str, content: str, entities) -> dict[str, str | None]:
@@ -260,6 +282,7 @@ async def enrich_pending_articles(db: AsyncSession, limit: int | None = None) ->
     collisions = 0
     llm_used = 0
     assessments = 0
+    translations = 0
 
     for article in articles:
         # The gate. Scored locally, before a single network call: an article
@@ -314,6 +337,28 @@ async def enrich_pending_articles(db: AsyncSession, limit: int | None = None) ->
         headline = strip_publisher_suffix(
             headline, article.source.name if article.source else None
         )
+        # The intelligence score, from the five free sub-scores. Computed here,
+        # before the translation decision, because it IS the translation
+        # decision -- see below. No network and no model: the most expensive
+        # thing in it is a second pass of the keyword scorer already run at the
+        # top of this loop (score_article is microseconds, and the run already
+        # calls it once per article for the LLM gate).
+        signals = ArticleSignals(
+            title=article.title or "",
+            content=article.raw_content or "",
+            published_at=article.published_at or article.fetched_at,
+            source_tier=article.source.tier if article.source else None,
+            trust_weight=article.source.trust_weight if article.source else None,
+            region=region,
+            airline_codes=frozenset(
+                e.code.upper() for e in entities if e.entity_type == "airline" and e.code
+            ),
+            airport_codes=frozenset(
+                e.code.upper() for e in entities if e.entity_type == "airport" and e.code
+            ),
+        )
+        intelligence = news_score(signals)
+
         # Real Turkish translation only happens when a translation-capable LLM
         # is configured (see app/llm/base.py); the heuristic fallback always
         # returns None here, and both fields stay null -- surfaced honestly by
@@ -323,10 +368,26 @@ async def enrich_pending_articles(db: AsyncSession, limit: int | None = None) ->
         # doubled 70b traffic, and translation is the whole of the daily token
         # budget. translate_pair falls back to two calls on any provider that
         # doesn't implement it.
-        headline_tr, summary_tr = await _translate_pair(engine, headline, summary)
+        #
+        # FILTER FIRST, THEN TRANSLATE. This call used to run for every article
+        # on the LLM path -- 24 per run x 12 runs = 288 translation calls a day,
+        # on articles selected for having *any* commercial-aviation signal
+        # rather than for being worth printing. Gating it on the intelligence
+        # score spends the same budget on the stories the paper actually leads
+        # with; measured on the production archive, 26.8% of the LLM path
+        # clears the default floor.
+        #
+        # Same optional-gate shape as the "Neden önemli?" block below, and the
+        # same reasoning: an expensive call belongs behind a threshold that
+        # says who earns it.
+        headline_tr, summary_tr = (None, None)
+        if _should_translate(settings, intelligence.intelligence_score):
+            headline_tr, summary_tr = await _translate_pair(engine, headline, summary)
         # A successful headline translation used to be thrown away whenever the
         # summary failed. The card shows the headline, so keep what we got.
         translated = headline_tr is not None
+        if translated:
+            translations += 1
 
         corroborating_count, confidence = await compute_confidence(db, article)
         importance = _importance_score(confidence, corroborating_count)
@@ -358,6 +419,14 @@ async def enrich_pending_articles(db: AsyncSession, limit: int | None = None) ->
             subcategory=subcategory,
             region=region,
             importance_score=importance,
+            # The new score, alongside the old one rather than instead of it:
+            # importance_score is still what the frontend and edition_service
+            # read, and swapping them in one deploy would leave no way to
+            # compare the two rankings. LLM impact components stay NULL here --
+            # they are written only for the shortlist, by
+            # app/services/critical_selection.py.
+            intelligence_score=intelligence.intelligence_score,
+            score_detail=intelligence.as_detail(),
             sentiment=sentiment,
             confidence_score=confidence,
             corroborating_source_count=corroborating_count,
@@ -429,6 +498,10 @@ async def enrich_pending_articles(db: AsyncSession, limit: int | None = None) ->
         # Second model calls spent on "Neden önemli?" -- visible in the job
         # output so the extra budget is a number, not an assumption.
         why_important=assessments,
+        # How many of the LLM-path articles the intelligence floor let
+        # through to translation. The one number that says whether the
+        # gate is set sanely, in every run log rather than in a query.
+        translated=translations,
     )
     return len(articles) - collisions
 
@@ -442,12 +515,26 @@ async def translate_pending_articles(db: AsyncSession, limit: int = 12) -> int:
     which can't translate) stays English. This backfills it a batch at a time
     without ever un-publishing an article the way a full re-enrich would.
 
-    Ordered by risk classification, then importance, then recency.
+    Ordered by risk classification, then INTELLIGENCE, then recency.
     Freshest-first was fine while the backlog was small, but once the heuristic
     path started absorbing the overflow (see LOCAL_FANOUT) the queue filled
     with routine wire copy, and strict recency spent the translation budget on
     whatever happened to arrive last rather than on the stories the desk opens
     the site for.
+
+    The second key was `importance_score` and is now `intelligence_score`.
+    Ordering by importance_score was ordering by publisher: with
+    corroborating_source_count == 1 on every production row, that column
+    reduces to `0.34 + 0.21 * trust_weight`, so "translate the important ones
+    first" meant "translate AeroTime before Simple Flying" and nothing more.
+    NULLS LAST keeps rows enriched before this column existed at the back of
+    the queue instead of at the front, which is where a NULL would otherwise
+    sort under DESC.
+
+    `limit` has also changed meaning, which is why the workflow raises it: with
+    the floor below, this is no longer "drain the oldest N of an unbounded
+    backlog" but "how many of the day's critical stories may be translated per
+    run".
 
     Risk-classified rows go first because Risk Radarı is the one surface with
     no fallback for an untranslated row. Everywhere else an English headline is
@@ -466,9 +553,10 @@ async def translate_pending_articles(db: AsyncSession, limit: int = 12) -> int:
     excludes the curated events (they carry translation_provider='curated' and a
     translated_at) -- their hand-written Turkish is never overwritten.
     """
+    settings = get_settings()
     provider = get_llm_provider()
 
-    result = await db.execute(
+    query = (
         select(ArticleEnrichment)
         # The article itself comes along because a newly translated row has to
         # be re-indexed for search, and the vector is built from the article's
@@ -480,16 +568,32 @@ async def translate_pending_articles(db: AsyncSession, limit: int = 12) -> int:
             Article.status == "enriched",
             ArticleEnrichment.translated_at.is_(None),
         )
-        .order_by(
+    )
+    if not settings.translate_all_enriched:
+        # The same floor the inline path applies, so the two cannot disagree
+        # about what deserves translating. Without it this queue would simply
+        # re-translate everything the inline gate declined, a run at a time,
+        # and the gate would buy nothing but latency.
+        #
+        # Deliberately excludes NULL: a row with no intelligence_score has not
+        # been scored by this system at all, and translating the pre-migration
+        # archive from the top is not what the budget is for. Re-running enrich
+        # (or `select-critical`) is what gives an old row a score and lets it
+        # back into this queue.
+        query = query.where(
+            ArticleEnrichment.intelligence_score >= settings.translate_min_intelligence
+        )
+
+    result = await db.execute(
+        query.order_by(
             # False sorts before True in Postgres, so "risk_type IS NULL"
             # ascending puts the risk-classified rows at the front. Written as
             # the IS NULL test rather than as a CASE so the planner can use the
             # column directly.
             ArticleEnrichment.risk_type.is_(None).asc(),
-            ArticleEnrichment.importance_score.desc().nulls_last(),
+            ArticleEnrichment.intelligence_score.desc().nulls_last(),
             Article.published_at.desc().nulls_last(),
-        )
-        .limit(limit)
+        ).limit(limit)
     )
     enrichments = list(result.scalars().all())
 

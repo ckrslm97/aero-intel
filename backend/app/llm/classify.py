@@ -389,3 +389,98 @@ def _parse_campaign(payload: dict) -> Outcome[CampaignExtraction]:
         ),
         certainty=certainty,
     )
+
+
+@dataclass(frozen=True)
+class NewsImpact:
+    """The three revenue-management impact scores from one consolidated call.
+
+    Every field is required and in [0, 1]. A partial answer is not accepted:
+    `app/services/news_scoring.py` renormalises its weights over whichever
+    components are present, so a payload carrying only `rm_impact` would
+    silently produce a score weighted quite differently from its neighbours --
+    two articles ranked against each other on different rubrics. Either the
+    model answered the question it was asked, or the article keeps its
+    deterministic-only score, which is a real number and not a degraded one.
+    """
+
+    rm_impact: float
+    demand_impact: float
+    capacity_impact: float
+    #: One short Turkish sentence, or None. Colour for the audit trail; nothing
+    #: ranks on it.
+    rationale_tr: str | None = None
+
+
+#: How long a stored rationale may be. The prompt asks for one short sentence;
+#: this is the backstop for a model that writes an essay, and it truncates
+#: rather than rejecting because the three scores -- the part that matters --
+#: are already valid by the time this applies.
+MAX_RATIONALE_CHARS = 400
+
+
+def parse_news_impact(raw: str) -> Outcome[NewsImpact]:
+    """Parse one `news_impact_prompt` response.
+
+    Never raises, and never writes the model's raw text anywhere: the payload
+    is rebuilt field by field from validated values, so a response that is
+    prose, truncated JSON or a JSON array cannot reach the database in any
+    form. Same contract as `parse()` above.
+
+    Three states, and the middle one is load-bearing:
+
+      CLASSIFIED  three numbers in range -> the article gets LLM components
+      FAILED      unparseable, missing or out-of-range -> the article keeps its
+                  deterministic score and the columns stay NULL
+
+    There is deliberately no NOT_APPLICABLE. Unlike risk and campaign
+    classification, "this article has no RM impact" is not a refusal to answer
+    -- it is the answer 0.0, which is a real, orderable score and must be
+    stored as one. Collapsing it into NULL would make "the model read this and
+    found nothing" indistinguishable from "nobody looked", which is the exact
+    distinction app/services/news_scoring.py is built around.
+    """
+    payload = _extract_json(raw)
+    if payload is None:
+        logger.info("news_impact_parse_failed", sample=(raw or "")[:160])
+        return Outcome.failed("json_parse_error")
+
+    scores: dict[str, float] = {}
+    for field_name in ("rm_impact", "demand_impact", "capacity_impact"):
+        value = _clean_confidence(payload.get(field_name))
+        if value is None:
+            # _clean_confidence returns None for a missing key, a string, a
+            # bool, or anything non-numeric -- all of which mean the model did
+            # not score this axis. It CLAMPS out-of-range numbers rather than
+            # rejecting them, which is right here: a model answering 1.2 has
+            # expressed "as high as it goes", not garbage.
+            return Outcome.failed(f"news_impact_missing:{field_name}")
+        scores[field_name] = value
+
+    rationale = _clean_str(payload.get("rationale_tr"))
+    return Outcome.classified(
+        NewsImpact(**scores, rationale_tr=rationale[:MAX_RATIONALE_CHARS] if rationale else None)
+    )
+
+
+async def score_news_impact(title: str, content: str, category: str) -> Outcome[NewsImpact]:
+    """Run the impact call against the configured live model and parse it.
+
+    No live model configured is a FAILED outcome rather than an error, exactly
+    as `classify_article` treats it: the caller keeps the article's
+    deterministic score and leaves the three columns NULL.
+    """
+    from app.llm.factory import get_raw_generator
+    from app.llm.prompts import news_impact_prompt
+
+    generate = get_raw_generator()
+    if generate is None:
+        return Outcome.failed("no_llm_configured")
+
+    try:
+        raw = await generate(news_impact_prompt(title, content, category))
+    except Exception as exc:  # noqa: BLE001 -- a provider failure is FAILED, not a crash
+        logger.warning("news_impact_call_failed", error=str(exc)[:200])
+        return Outcome.failed("llm_call_error")
+
+    return parse_news_impact(raw)

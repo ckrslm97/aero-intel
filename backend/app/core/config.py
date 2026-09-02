@@ -71,6 +71,32 @@ class Settings(BaseSettings):
     # a second model call on all of them. 0 turns the feature off entirely.
     llm_why_important_per_run: int = 3
 
+    # --- Translation gating ("filter first, then translate") -----------------
+    #
+    # Minimum intelligence_score (app/services/news_scoring.py) an article must
+    # reach to earn a translation call, on BOTH the inline enrichment path and
+    # the translate-backlog queue.
+    #
+    # Translation is effectively the publication gate: the Gazete queries with
+    # translated_only=true, so an untranslated article is one the reader never
+    # sees. Until now every article on the LLM path was translated
+    # unconditionally -- 24 per run x 12 runs = 288 calls/day, plus 8 x 2 x 12 =
+    # 192 from the backlog job -- and what earned that spend was clearing a
+    # keyword relevance gate, not being worth printing.
+    #
+    # 0.55 measured against the 484-article production archive: 26.8% of the
+    # LLM path clears it, so the inline path drops from ~288 to ~102 calls/day.
+    # Deliberately conservative for a first cut -- the failure mode of setting
+    # it too high is a paper with nothing on the front page, which is worse
+    # than overspending. Raise it after watching a day of live runs.
+    translate_min_intelligence: float = 0.55
+    # The escape hatch. True restores the previous behaviour exactly -- every
+    # article on the LLM path gets translated, and the backlog queue ignores
+    # the floor -- with one environment variable and no deploy. It exists
+    # because the gate above changes what the reader sees, and a wrong
+    # threshold must be reversible in seconds rather than in a release.
+    translate_all_enriched: bool = False
+
     # --- Pipeline v2 (Phase 7 rebuild) ---
     # Off by default. When true, `python -m app.cli pipeline-v2` runs the new
     # gate -> cluster -> classify -> confidence -> news_events pipeline. It only
