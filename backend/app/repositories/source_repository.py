@@ -1,6 +1,7 @@
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ingest.base import FetchHealth
 from app.ingest.sources_seed import ALL_SOURCES, SourceSeed
 from app.models.source import Source
 
@@ -57,6 +58,36 @@ class SourceRepository:
 
         await self.db.commit()
 
+    @staticmethod
+    def record_health(source: Source, health: FetchHealth) -> None:
+        """Fold one run's outcome into a source's health columns.
+
+        Static because it touches no session state -- it mutates an ORM
+        instance the caller already holds, and the caller's unit of work is
+        what persists it.
+
+        Deliberately not a commit: `run_ingestion` already commits once at the
+        end of the pass, and health is part of that same run, not a separate
+        fact that should survive a failed article write.
+
+        The asymmetry between the branches is the point. A success clears the
+        failure counter but leaves `last_failure_at` and `last_http_status`
+        standing, because "last time this broke, it was a 403" stays true and
+        useful after a recovery -- an intermittently blocked feed is a
+        different problem from a healthy one, and zeroing the history would
+        hide the flapping. A failure leaves `last_success_at` and
+        `last_article_count` standing for the same reason: the age of the last
+        success is exactly what the silent-death check reads.
+        """
+        if health.ok:
+            source.last_success_at = health.at
+            source.consecutive_failures = 0
+            source.last_article_count = health.article_count
+            return
+        source.last_failure_at = health.at
+        source.last_http_status = health.http_status
+        source.consecutive_failures = (source.consecutive_failures or 0) + 1
+
 
 def _apply_seed(source: Source, seed: SourceSeed) -> None:
     source.url = seed.url
@@ -67,6 +98,13 @@ def _apply_seed(source: Source, seed: SourceSeed) -> None:
     source.language = seed.language
     source.is_premium_stub = seed.is_premium_stub
     source.is_active = True
+    # Editorial config is seed-owned exactly like the fields above -- edit
+    # sources_seed.py and the next reconcile carries it. Deliberately NOT
+    # applied to the health columns below, which are run-owned: a reconcile
+    # must never reset a failure counter.
+    source.priority = seed.priority
+    source.news_categories = seed.news_categories
+    source.crawl_frequency_minutes = seed.crawl_frequency_minutes
 
 
 def _source_from_seed(seed: SourceSeed) -> Source:
@@ -79,4 +117,8 @@ def _source_from_seed(seed: SourceSeed) -> Source:
         tier=seed.tier,
         language=seed.language,
         is_premium_stub=seed.is_premium_stub,
+        priority=seed.priority,
+        news_categories=seed.news_categories,
+        crawl_frequency_minutes=seed.crawl_frequency_minutes,
+        consecutive_failures=0,
     )

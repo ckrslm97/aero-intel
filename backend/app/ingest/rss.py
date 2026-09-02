@@ -10,7 +10,7 @@ import httpx
 from bs4 import BeautifulSoup
 
 from app.core.logging import get_logger
-from app.ingest.base import RawArticle
+from app.ingest.base import FetchHealth, RawArticle
 from app.ingest.blacklist import blacklisted_domain
 
 logger = get_logger(__name__)
@@ -93,6 +93,9 @@ class RssSourceAdapter:
         if item_cap is None and "news.google.com" in feed_url:
             item_cap = AGGREGATOR_ITEM_CAP
         self.item_cap = item_cap
+        #: Outcome of the most recent fetch(), read by the ingestion service to
+        #: update the source's health columns. None until the first fetch.
+        self.last_health: FetchHealth | None = None
 
     async def fetch(self) -> list[RawArticle]:
         try:
@@ -103,6 +106,13 @@ class RssSourceAdapter:
                 response.raise_for_status()
         except httpx.HTTPError as exc:
             logger.warning("rss_fetch_failed", source=self.source_name, error=str(exc))
+            # A status is only available when the server actually answered.
+            # httpx.HTTPStatusError carries a response; ConnectError,
+            # ReadTimeout and the TLS failures do not, and recording None for
+            # those keeps "answered 403" distinguishable from "never answered"
+            # -- which is the difference between a bot wall and a dead host.
+            status = exc.response.status_code if isinstance(exc, httpx.HTTPStatusError) else None
+            self.last_health = FetchHealth(ok=False, http_status=status)
             return []
 
         # response.content (bytes), never response.text -- load-bearing, do not
@@ -117,6 +127,7 @@ class RssSourceAdapter:
             logger.warning(
                 "rss_parse_failed", source=self.source_name, error=str(parsed.get("bozo_exception"))
             )
+            self.last_health = FetchHealth(ok=False, http_status=response.status_code)
             return []
 
         articles: list[RawArticle] = []
@@ -172,8 +183,15 @@ class RssSourceAdapter:
 
         if not articles:
             # A feed emptied *by the blacklist* is working as designed, not
-            # rotted, so it must not raise the dead-source alarm below.
+            # rotted, so it must not raise the dead-source alarm below -- and
+            # for the same reason it is recorded as a SUCCESS with a count of
+            # zero, not a failure. Marking it failed would march a perfectly
+            # healthy feed toward the consecutive-failure alarm for doing
+            # exactly what the blacklist asked of it.
             if blocked:
+                self.last_health = FetchHealth(
+                    ok=True, http_status=response.status_code, article_count=0
+                )
                 return []
             logger.warning(
                 "rss_no_usable_entries",
@@ -182,6 +200,11 @@ class RssSourceAdapter:
                 parsed_entries=len(parsed.entries),
                 content_type=response.headers.get("content-type"),
             )
+            # The FAA/ICAO failure mode, and the reason the health columns
+            # exist: HTTP 200, nothing usable, logged every run and noticed by
+            # nobody. Recorded as a failure so it accumulates into
+            # consecutive_failures instead of scrolling past.
+            self.last_health = FetchHealth(ok=False, http_status=response.status_code)
             return []
 
         if self.item_cap is not None and len(articles) > self.item_cap:
@@ -195,4 +218,9 @@ class RssSourceAdapter:
             articles = articles[: self.item_cap]
 
         logger.info("rss_fetch_ok", source=self.source_name, count=len(articles))
+        # Counted AFTER the cap, so last_article_count matches what the run
+        # actually offered the pipeline rather than what the feed shipped.
+        self.last_health = FetchHealth(
+            ok=True, http_status=response.status_code, article_count=len(articles)
+        )
         return articles

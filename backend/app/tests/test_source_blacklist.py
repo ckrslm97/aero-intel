@@ -110,6 +110,9 @@ class _FakeResponse:
     def __init__(self, content: bytes):
         self.content = content
         self.headers = {"content-type": "application/xml"}
+        # RssSourceAdapter records this on the source's health columns, so a
+        # fake without one is an incomplete fake.
+        self.status_code = 200
 
     def raise_for_status(self) -> None:
         return None

@@ -5,6 +5,33 @@ sources without any manual setup.
 """
 from dataclasses import dataclass
 
+#: Default `priority` per tier, so the 82 sources that predate the column get a
+#: sensible value without anyone hand-typing 82 of them.
+#:
+#: A DEFAULT, not a definition. `tier` is the authority ladder (what kind of
+#: publisher this is); `priority` is how much this desk wants the output. They
+#: correlate, which is why deriving one from the other is a reasonable starting
+#: point -- and they come apart at both ends, which is why a source may
+#: override it. The two ends that matter here: an aggregator radar sampled at
+#: ~100% fare-campaign content is worth more to the newspaper than its
+#: "aggregator" tier suggests, and a national wire's general economy feed is
+#: worth less than its "agency" tier suggests.
+#:
+#: "very_high" is deliberately absent from this table: it is reserved for
+#: explicit editorial elevation, so it never arrives by derivation.
+TIER_DEFAULT_PRIORITY: dict[str, str] = {
+    "official": "high",
+    "regulator": "high",
+    "agency": "high",
+    "trade": "normal",
+    "aggregator": "low",
+}
+
+#: What every source is polled at today -- .github/workflows/jobs-news.yml runs
+#: `0 */2 * * *`. Seeded as each source's declared cadence so the column starts
+#: out telling the truth rather than describing a scheduler that doesn't exist.
+DEFAULT_CRAWL_FREQUENCY_MINUTES = 120
+
 
 @dataclass
 class SourceSeed:
@@ -28,6 +55,22 @@ class SourceSeed:
     #: hundred characters. Defaults to English, since that is what most of
     #: this list is.
     language: str = "en"
+    #: very_high | high | normal | low. Left None here and filled from
+    #: TIER_DEFAULT_PRIORITY in __post_init__, so a source only spells it out
+    #: when the desk's judgement differs from the ladder. See the column
+    #: docstring in app/models/source.py for why this is not just `tier`.
+    priority: str | None = None
+    #: Comma-separated app.taxonomy category slugs this source actually feeds,
+    #: as measured at build time -- NOT the institution type, which is the
+    #: `category` field above. None where nobody has sampled the feed for it;
+    #: an empty guess would be worse than an admitted gap.
+    news_categories: str | None = None
+    #: Intended polling cadence. Informational -- see the column docstring.
+    crawl_frequency_minutes: int = DEFAULT_CRAWL_FREQUENCY_MINUTES
+
+    def __post_init__(self) -> None:
+        if self.priority is None:
+            self.priority = TIER_DEFAULT_PRIORITY.get(self.tier, "normal")
 
 
 FREE_RSS_SOURCES: list[SourceSeed] = [
@@ -500,6 +543,127 @@ FREE_RSS_SOURCES: list[SourceSeed] = [
         "https://news.google.com/rss/search?q=Airline%20Rabattaktion%20OR%20Sonderangebot%20Flugtickets%20g%C3%BCnstig&hl=de&gl=DE&ceid=DE:de",
         "rss", "airline", 0.4, tier="aggregator", language="de",
     ),
+    # ---------------------------------------------------------------------
+    # Round-11: the two tiers this file was thinnest in. Before this round the
+    # `official` tier held exactly ONE source (Delta News Hub) and the only
+    # Turkish institution of any kind was Anadolu Ajansı's general economy
+    # feed -- so a national regulator changing what carriers may legally do
+    # reached this newspaper, if at all, as a trade-press rewrite days later.
+    #
+    # Same bar as rounds 7-10, re-applied on 2026-09-02 with the application's
+    # own User-Agent and feedparser.parse(response.content) -- i.e. the exact
+    # path RssSourceAdapter takes, not curl -- and the measurement recorded per
+    # source below.
+    # ---------------------------------------------------------------------
+    # SHGM (Turkish DGCA). Not findable by convention: every guessable path
+    # (/tr/rss, /rss) soft-404s -- HTTP 200 with a "404 Page Not Found" HTML
+    # body, which is exactly the trap the round-8 note about SHGM in
+    # DROPPED_CANDIDATES describes. The working endpoint is rss.php with the
+    # section as a bare query string, linked only from /tr/kurumsal/4000-rss.
+    #
+    # Three section feeds, NOT the four that exist: the site also serves
+    # `rss.php?tr` ("Tümü"), and it was measured to be the exact union of these
+    # three -- 45 items, 45 unique links, every one of them present in a
+    # section feed and no section item missing from it. Seeding it alongside
+    # would double every SHGM fetch for zero new items, and worse, would
+    # destroy the per-section attribution this split exists for: ingestion
+    # dedupes on URL first-writer-wins, so a Mevzuat item that arrived through
+    # "Tümü" first would be filed under the generic source and lose the
+    # regulator weighting below. See DROPPED_CANDIDATES.
+    #
+    # Turkish only -- the ?en variants 404.
+    #
+    # The highest-value feed of the three, and the reason this block exists:
+    # SHT/SHY instruction revisions are the primary legal text, not a report
+    # about one. Sampled 2026-09-02, 15 items: "Onaylı Tedarikçi Kuruluşları
+    # Talimatı Rev.01", "Hava Aracı Bakım Lisansı Talimatı (SHT-66) ... 01
+    # numaralı revizyonu", "Küresel Raporlama Formatı (GRF) Talimatı".
+    # priority is elevated by hand rather than derived: a regulator feed whose
+    # items change what carriers may legally do outranks the rest of its tier.
+    SourceSeed(
+        "SHGM · Mevzuat", "https://web.shgm.gov.tr/rss.php?tr/mevzuat",
+        "rss", "org", 0.92, tier="regulator", language="tr",
+        priority="very_high", news_categories="regulatory,safety",
+        crawl_frequency_minutes=720,
+    ),
+    # 15 items. Official announcements rather than legal instruments -- fee
+    # tariff updates, medical-certificate rules, licensing notices. Sampled:
+    # "SHGM 2026 Yılı Hizmet Tarifesi'nde güncelleme", "2026-YKS Havacılık
+    # Programlarına Yerleşen Adayların Sağlık Belgeleri". Overlaps Mevzuat by
+    # design at SHGM's end: an instruction is published under both sections
+    # with two different URLs, so URL dedupe does NOT collapse it. That is the
+    # publisher's doing, not this seeding's, and it costs one duplicate row per
+    # cross-posted instruction.
+    SourceSeed(
+        "SHGM · Duyurular", "https://web.shgm.gov.tr/rss.php?tr/duyurular",
+        "rss", "org", 0.90, tier="regulator", language="tr",
+        priority="high", news_categories="regulatory,labor,finance",
+        crawl_frequency_minutes=720,
+    ),
+    # 15 items, and the softest of the three -- the authority's own news desk,
+    # so bilateral-agreement signings and conference readouts sit next to real
+    # policy. Sampled: "Pilot Uçuş Kayıt Defterinde Dijital Dönem", "Türkiye
+    # ile Kazakistan Arasında Havacılık Alanında Yeni Mutabakat Zaptı".
+    # Trust and priority both step down accordingly: institutional PR is not
+    # the same claim as an instruction revision, and the tier alone would have
+    # said it was.
+    SourceSeed(
+        "SHGM · Haberler", "https://web.shgm.gov.tr/rss.php?tr/haberler",
+        "rss", "org", 0.85, tier="regulator", language="tr",
+        priority="normal", news_categories="regulatory,network,general",
+        crawl_frequency_minutes=720,
+    ),
+    # Only the SECOND source in the `official` tier, after Delta News Hub, and
+    # the first European one. Note the URL: the round-7 attempt at Lufthansa
+    # (newsroom.lufthansagroup.com/en/rss/all.xml, 404 -- still listed in
+    # DROPPED_CANDIDATES) failed on the path, not on the publisher. /feed/en
+    # answers 200 application/xml, RSS 2.0, 25 items.
+    #
+    # Density measured by reading all 25 headlines on 2026-09-02: 9 are
+    # commercially relevant to an RM desk (36%) -- the H1 result with demand
+    # and fuel cost, the TAP Air Portugal minority-stake bid, the ANA/ITA
+    # Europe-Japan joint venture, Asiana leaving Star Alliance, the Miles &
+    # More consolidation, the Allegris route launches, the summer fare push,
+    # the APAC stopover product and the Indian transit-visa change.
+    #
+    # The other 64% is worth naming because it is PREDICTABLE, which is what
+    # makes it cheap for the relevance gate rather than a reason to reject the
+    # feed: Lufthansa Technik MRO facility announcements, Starlink
+    # connectivity, SAF/AeroSHARK sustainability, executive appointments, and
+    # ceremonial PR (anniversaries, liveries, sponsored flights). A carrier
+    # newsroom mixing its own hard commercial news with its own PR is the
+    # normal shape of an official feed; the alternative was continuing to read
+    # LH secondhand.
+    SourceSeed(
+        "Lufthansa Group Newsroom", "https://newsroom.lufthansagroup.com/feed/en",
+        "rss", "airline", 0.9, tier="official",
+        priority="high", news_categories="network,revenue_management,finance,fleet",
+        crawl_frequency_minutes=360,
+    ),
+    # PROS was a premium stub until this round -- listed as an unreachable
+    # commercial RM platform. It publishes a real, open RSS feed, so the stub
+    # has been removed from PREMIUM_SOURCE_NAMES below and replaced by this.
+    # Removing the old "PROS" name from the seed list deactivates that row on
+    # the next ensure_seeded() reconcile, which is the intended retirement
+    # path (see app/repositories/source_repository.py).
+    #
+    # 10 items, HTTP 200, RSS 2.0. The densest RM-vocabulary feed in this file:
+    # 7 of 10 headlines are offer-and-order / continuous-pricing / airline
+    # retail material -- "From PSS to Offer & Order", "Modern Airline Retail: A
+    # Practical Roadmap to Offer Management", "Commercial Agility Starts with
+    # the Offer". The other 3 are SEO/GEO content-marketing pieces.
+    #
+    # It is a vendor blog and is weighted as one: 0.75 and tier="trade", not
+    # "official", because PROS is not the actor in the stories it tells. What
+    # it is good for is vocabulary and direction of travel in the exact
+    # discipline this newspaper covers -- and, in passing, which carriers are
+    # deploying what.
+    SourceSeed(
+        "PROS Blog", "https://pros.com/learn/blog/feed/",
+        "rss", "financial", 0.75, tier="trade",
+        priority="high", news_categories="revenue_management",
+        crawl_frequency_minutes=720,
+    ),
 ]
 
 # Documented drops -- candidates fetched at round-7 build time that failed the
@@ -623,6 +787,67 @@ FREE_RSS_SOURCES: list[SourceSeed] = [
 #                                   them loyalty. Superseded by the Rabattaktion query.
 #   Fluggesellschaft Sparpreise OR Ticketaktion (de) 10 items, all ten Corendon press
 #                                   releases from one publisher. Not a radar, a newsroom.
+# Round-11 candidates, all probed on 2026-09-02 with the application's own
+# User-Agent through httpx + feedparser (the RssSourceAdapter path). Five are
+# unreachable and two were rejected on measurement despite working:
+#   Business Travel News  /rss and even /robots.txt        403 on BOTH, with a Cloudflare
+#                                                          "Just a moment..." managed-challenge
+#                                                          body (~5.6 KB). robots.txt being
+#                                                          behind the challenge too is the tell:
+#                                                          there is no polite path in, so this
+#                                                          is not a User-Agent problem to solve.
+#   Amadeus blog          https://amadeus.com/en/blog/feed 200 + text/html, ~1 KB every time --
+#                                                          an Imperva "Pardon Our Interruption"
+#                                                          shell. Status code lies; see the stub
+#                                                          comment in PREMIUM_SOURCE_NAMES.
+#   Travolution           /rss/, /rss, /feed/              404 on all three (~21 KB branded
+#                                                          "Not Found" page). The site is
+#                                                          server-rendered and could be scraped
+#                                                          one day; there is no feed to poll.
+#   Turkish Airlines      press.turkishairlines.com        NXDOMAIN -- the press subdomain does
+#                                                          not resolve at all. www does resolve
+#                                                          (195.175.177.26) but hangs to a
+#                                                          timeout on every path, which is the
+#                                                          same TLS-fingerprint block AJet gives.
+#   AJet                  https://www.ajet.com/rss         resolves (195.175.177.10), then
+#                                                          ReadTimeout. Same block as THY.
+#                                                          (Both remain covered by the Google
+#                                                          News radars and app/ingest/carriers.py.)
+#   SHGM "Tümü"           https://web.shgm.gov.tr/rss.php?tr  WORKS -- 200, RSS 2.0, 45 items.
+#                                                          Rejected as pure redundancy: measured
+#                                                          45 unique links, of which 45 also
+#                                                          appear in the three section feeds, and
+#                                                          0 section items are missing from it.
+#                                                          Exactly Duyurular + Haberler + Mevzuat.
+#                                                          Seeding it would double every SHGM
+#                                                          fetch and, because ingest dedupes on
+#                                                          URL first-writer-wins, would file
+#                                                          Mevzuat items under a generic source
+#                                                          and lose the regulator weighting the
+#                                                          per-section split exists to give them.
+#   PROS news (WP-JSON)   /wp-json/wp/v2/news?per_page=20  WORKS -- 200 application/json, 20
+#                                                          items. Rejected on three counts, any
+#                                                          one of which would do. (1) It is not
+#                                                          RSS: _adapter_for() in
+#                                                          services/ingestion_service.py knows
+#                                                          "rss" and "premium", so this needs a
+#                                                          whole JSON adapter. (2) Cadence: those
+#                                                          20 items span 2025-07-10 to 2026-08-05
+#                                                          -- thirteen months, ~1.5 items/month,
+#                                                          newest already a month old at probe
+#                                                          time. (3) Content: 4 of 20 are airline
+#                                                          deployments (TAP continuous pricing,
+#                                                          Cyprus Airways airTRFX, SriLankan,
+#                                                          the LH Group renewal) = 20%. The rest
+#                                                          is issuer PR -- the Thoma Bravo
+#                                                          acquisition in three parts, quarterly
+#                                                          results, a Stevie award, an SVP hire
+#                                                          -- plus the SAME conference recap
+#                                                          ("World Aviation Festival 2025 - Day 2
+#                                                          Highlights") published three times.
+#                                                          The blog covers the same beat at 70%
+#                                                          through the existing adapter, so the
+#                                                          new code would buy negative value.
 # Off-topic / too broad to be worth the ingest budget: Economist Business,
 # BBC Business, MercoPress, Flying Magazine, Rotor & Wing, Aerospace Testing
 # International, Aerospace Manufacturing & Design -- all returned valid feeds
@@ -650,8 +875,15 @@ PREMIUM_SOURCE_NAMES: list[SourceSeed] = [
     SourceSeed("ICAO Data+", "https://www.icao.int/data", "premium", "org", 0.9, is_premium_stub=True),
     SourceSeed("ATPCO", "https://www.atpco.net", "premium", "financial", 0.8, is_premium_stub=True),
     SourceSeed("Sabre", "https://www.sabre.com", "premium", "financial", 0.8, is_premium_stub=True),
+    # Stays a stub, but for a sharper reason than "no public API": Amadeus
+    # *does* run a blog, and it is unreadable. https://amadeus.com/en/blog/feed
+    # answers HTTP 200 with `text/html` and ~1 KB of Imperva interstitial
+    # ("Pardon Our Interruption", NOINDEX/NOFOLLOW) on every attempt -- a body
+    # that can never parse as a feed however many times it is retried. Verified
+    # 2026-09-02; do not re-add it as an RSS source on the strength of the 200.
     SourceSeed("Amadeus", "https://amadeus.com", "premium", "financial", 0.8, is_premium_stub=True),
-    SourceSeed("PROS", "https://pros.com", "premium", "financial", 0.8, is_premium_stub=True),
+    # PROS was here. It is now a real RSS source ("PROS Blog", round 11 above)
+    # -- the stub was wrong about it, not merely incomplete.
     SourceSeed("Accelya", "https://www.accelya.com", "premium", "financial", 0.8, is_premium_stub=True),
     SourceSeed(
         "Lufthansa Systems", "https://www.lufthansa-systems.com", "premium", "financial", 0.8,
