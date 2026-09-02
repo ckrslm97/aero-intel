@@ -40,22 +40,33 @@ export const CATEGORY_LABELS_TR: Record<CategorySlug, string> = {
 };
 
 export type SubcategorySlug =
+  | "airport_capacity"
   | "ancillary"
   | "cancellation"
+  | "capacity"
   | "competitor"
-  | "demand_capacity"
+  | "demand"
+  | "disruption"
   | "distribution"
   | "equity"
+  | "forecasting"
   | "general"
+  | "ground_handling"
+  | "infrastructure"
   | "load_factor"
   | "maintenance"
   | "new_route"
+  | "new_service"
   | "order_delivery"
+  | "passenger_experience"
   | "pricing"
   | "promotion"
   | "regional"
   | "results"
-  | "seasonal";
+  | "seasonal"
+  | "slot"
+  | "terminal"
+  | "traffic";
 
 
 /** Which subcategory slugs are legal under each category. */
@@ -63,14 +74,14 @@ export const SUBCATEGORIES_BY_CATEGORY: Record<
   CategorySlug,
   readonly SubcategorySlug[]
 > = {
-  "revenue_management": ["competitor", "pricing", "promotion", "demand_capacity", "load_factor", "ancillary", "distribution"],
+  "revenue_management": ["competitor", "pricing", "promotion", "demand", "capacity", "load_factor", "ancillary", "distribution", "forecasting"],
   "fleet": ["order_delivery", "maintenance"],
   "network": ["new_route", "cancellation", "seasonal"],
   "finance": ["results", "equity"],
   "safety": [],
   "regulatory": [],
   "sustainability": [],
-  "airport": [],
+  "airport": ["slot", "airport_capacity", "terminal", "infrastructure", "disruption", "traffic", "new_service", "ground_handling", "passenger_experience"],
   "labor": [],
   "events": ["general", "regional"],
   "general": [],

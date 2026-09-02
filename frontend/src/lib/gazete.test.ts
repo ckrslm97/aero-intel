@@ -79,8 +79,11 @@ describe("window chips", () => {
 describe("URL filter state", () => {
   it("round-trips every filter", () => {
     const filters = {
-      category: "fleet",
-      subcategory: "maintenance",
+      // A category the paper shows, with one of the Havalimanı subcategories
+      // this taxonomy round added -- a round-trip through a category the
+      // allow-list rejects would be testing the fallback, not the round-trip.
+      category: "airport",
+      subcategory: "slot",
       region: "europe",
       country: "Germany",
       airline: "RIVALS",
@@ -98,14 +101,15 @@ describe("URL filter state", () => {
 
   it("falls back for a category the Gazete does not show", () => {
     // ?category=safety (excluded) and Know How's ?category=network have no tab
-    // to select and would sit on an empty list nothing could fix.
-    expect(parseFilters(new URLSearchParams("category=safety")).category).toBe(
-      DEFAULT_FILTERS.category,
-    );
-    expect(parseFilters(new URLSearchParams("category=network")).category).toBe(
-      DEFAULT_FILTERS.category,
-    );
-    expect(parseFilters(new URLSearchParams("category=fleet")).category).toBe("fleet");
+    // to select and would sit on an empty list nothing could fix. Since the
+    // paper was cut to three sections, ?category=fleet is in the same position
+    // -- including for links bookmarked while Filo still had a tab.
+    for (const slug of ["safety", "network", "fleet", "finance", "general"]) {
+      expect(parseFilters(new URLSearchParams(`category=${slug}`)).category).toBe(
+        DEFAULT_FILTERS.category,
+      );
+    }
+    expect(parseFilters(new URLSearchParams("category=airport")).category).toBe("airport");
   });
 
   it("drops an unknown tier rather than passing it to the API", () => {

@@ -24,10 +24,35 @@ def summary_prompt(title: str, content: str) -> str:
     )
 
 
+# The owner's fleet/finance -> revenue_management rule, stated for the model in
+# the same words the desk uses. The keyword half of the same rule lives in
+# app/taxonomy.py (RM_SHIFT_KEYWORDS) and runs in app/llm/heuristic.py, so a
+# live model and the keyless fallback file the same story the same way.
+#
+# Written in Turkish on purpose: it is the product owner's editorial rule, and
+# the examples are the boundary, not decoration. Two positives and two negatives
+# because the failure mode is a model that reads "50 uçak" as "kapasite" and
+# quietly empties the Filo section into Gelir Yönetimi -- the negatives are what
+# stops it.
+_RM_SHIFT_RULE_TR = (
+    "ÖZEL KURAL (filo/finans -> revenue_management): Bir filo ya da finans "
+    "haberi, AÇIK BİÇİMDE belirli bir pazarda kapasite artışı/azalışı, yeni hat "
+    "açılışı, sefer sıklığı değişimi, pazar payı hamlesi veya fiyat etkisi "
+    "taşıyorsa 'revenue_management' olarak sınıfla. Somut pazar/kapasite/rota/"
+    "fiyat sinyali yoksa haber kendi kategorisinde kalır.\n"
+    "EVET: 'Wizz Air 20 yeni uçakla İtalya'da kapasitesini %30 artırıyor' -> "
+    "revenue_management. 'Emirates filo yatırımıyla Hindistan hatlarına günlük "
+    "ek sefer koyuyor' -> revenue_management.\n"
+    "HAYIR: 'Havayolu 50 adet Boeing 737 MAX siparişi verdi' -> fleet. "
+    "'Havayolu üçüncü çeyrekte 1,2 milyar dolar net kâr açıkladı' -> finance."
+)
+
+
 def categorize_prompt(title: str, content: str) -> str:
     options = ", ".join(VALID_CATEGORIES)
     return (
-        f"Classify this aviation article into exactly one category: {options}. "
+        f"Classify this aviation article into exactly one category: {options}.\n"
+        f"{_RM_SHIFT_RULE_TR}\n"
         f"Respond with only the category word.\n\nTitle: {title}\nContent: {content[:1000]}\n\nCategory:"
     )
 

@@ -22,7 +22,16 @@ from app.llm.gazetteer import (
     fold_tokens,
 )
 from app.pipeline.hashing import normalize_text
-from app.taxonomy import CATEGORY_KEYWORDS, COUNTRY_TO_REGION, GENERAL_CATEGORY, SUBCATEGORY_KEYWORDS
+from app.taxonomy import (
+    CATEGORY_KEYWORDS,
+    COUNTRY_TO_REGION,
+    GENERAL_CATEGORY,
+    RM_SHIFT_FROM_CATEGORIES,
+    RM_SHIFT_KEYWORDS,
+    RM_SHIFT_MIN_SCORE,
+    RM_SHIFT_TARGET,
+    SUBCATEGORY_KEYWORDS,
+)
 
 _STOPWORDS = {
     "the", "a", "an", "and", "or", "but", "in", "on", "at", "to", "for", "of",
@@ -74,6 +83,21 @@ def _sentences(text: str) -> list[str]:
     return [s.strip() for s in _SENTENCE_SPLIT_RE.split(text) if s.strip()]
 
 
+def _apply_rm_shift(category: str, title_text: str, body_text: str) -> str:
+    """Move a fleet/finance story to revenue_management when it carries an
+    explicit market effect -- see RM_SHIFT_KEYWORDS in app/taxonomy.py for the
+    rule and for why it is drawn this tightly.
+
+    Both arguments are already normalize_text'd; this runs on the same two
+    strings categorize() just scored, so the rule costs one extra pattern match
+    and never re-reads the article.
+    """
+    if category not in RM_SHIFT_FROM_CATEGORIES:
+        return category
+    evidence = _score(_keyword_pattern(tuple(RM_SHIFT_KEYWORDS)), title_text, body_text)
+    return RM_SHIFT_TARGET if evidence >= RM_SHIFT_MIN_SCORE else category
+
+
 class HeuristicProvider:
     name = "heuristic"
 
@@ -112,7 +136,7 @@ class HeuristicProvider:
             if score > best_score:
                 best_score = score
                 best_category = category
-        return best_category
+        return _apply_rm_shift(best_category, title_text, body_text)
 
     async def subcategorize(self, title: str, content: str, category: str) -> str | None:
         """Second keyword pass within the chosen category. Returns None for
