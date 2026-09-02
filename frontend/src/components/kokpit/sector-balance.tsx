@@ -7,6 +7,9 @@ export interface BalanceRow {
   /** The number, already formatted with its own unit. "—" when the inputs are
    * not there. */
   value: string;
+  /** The unit, printed next to `value` in the page's small sans face. Null for
+   * rows whose `value` already carries it ("+0,6pp", "%78 dilim"). */
+  unit: string | null;
   /** Sign of the move, for the arrow. null leaves the arrow off entirely. */
   pct: number | null;
   /** Which source and which period this row was computed from. Printed under
@@ -17,31 +20,51 @@ export interface BalanceRow {
   title?: string;
 }
 
-function lastTwo(series: AnnualSeries | undefined): [{ year: number; value: number }, { year: number; value: number }] | null {
-  const points = series?.points ?? [];
-  if (points.length < 2) return null;
-  return [points[points.length - 2], points[points.length - 1]];
-}
-
-/** Year-on-year growth in percent, or null when the pair is not there. */
-function yoy(series: AnnualSeries | undefined): { pct: number; from: number; to: number } | null {
-  const pair = lastTwo(series);
-  if (!pair) return null;
-  const [previous, latest] = pair;
-  if (!previous.value) return null;
-  return {
-    pct: ((latest.value - previous.value) / previous.value) * 100,
-    from: previous.year,
-    to: latest.year,
-  };
-}
-
 function signedPoints(diff: number, digits = 1): string {
   const sign = diff > 0 ? "+" : diff < 0 ? "-" : "";
   return `${sign}${Math.abs(diff).toFixed(digits).replace(".", ",")}pp`;
 }
 
 const EMPTY = "yeterli yıllık nokta yok";
+const NO_SHARED_YEARS = "İki serinin ortak iki yılı yok";
+
+/** The last two years BOTH series carry a point for.
+ *
+ * A scissor subtracts one growth rate from another, which is only a scissor if
+ * the two rates cover the same window. Taking each series' own "last two
+ * points" independently does not guarantee that: `cask` is already missing its
+ * 2025 row in this database (D3 in the design spec), and any series that
+ * plateaus can lose one the same way. The old code would then have subtracted
+ * a two-year growth rate from a one-year one and labelled the result "25→26"
+ * off the LEFT series alone -- a number that belongs to no window, wearing a
+ * window's name. Sharing the years is the only way the subtraction means
+ * anything, and the chip is built from the years actually used.
+ */
+function sharedYearPair(
+  a: AnnualSeries | undefined,
+  b: AnnualSeries | undefined,
+): { previous: number; latest: number } | null {
+  const bYears = new Set((b?.points ?? []).map((point) => point.year));
+  const shared = (a?.points ?? [])
+    .map((point) => point.year)
+    .filter((year) => bYears.has(year))
+    .sort((x, y) => x - y);
+  if (shared.length < 2) return null;
+  return { previous: shared[shared.length - 2], latest: shared[shared.length - 1] };
+}
+
+/** Growth in percent between two NAMED years of one series. */
+function yoyBetween(
+  series: AnnualSeries | undefined,
+  previousYear: number,
+  latestYear: number,
+): number | null {
+  const byYear = new Map((series?.points ?? []).map((point) => [point.year, point]));
+  const previous = byYear.get(previousYear);
+  const latest = byYear.get(latestYear);
+  if (!previous || !latest || !previous.value) return null;
+  return ((latest.value - previous.value) / previous.value) * 100;
+}
 
 /** A scissor: the difference between two growth rates, in percentage POINTS.
  * Demand growing 2,1% while capacity grows 1,5% is a +0,6 POINT gap; calling
@@ -52,18 +75,32 @@ function gapRow(
   a: AnnualSeries | undefined,
   b: AnnualSeries | undefined,
 ): BalanceRow {
-  const left = yoy(a);
-  const right = yoy(b);
-  if (!left || !right) {
-    return { key, label, value: "—", pct: null, chip: "IATA · yıllık", title: EMPTY };
+  const years = sharedYearPair(a, b);
+  if (!years) {
+    return {
+      key,
+      label,
+      value: "—",
+      unit: null,
+      pct: null,
+      chip: "IATA · yıllık",
+      title: (a?.points.length ?? 0) < 2 || (b?.points.length ?? 0) < 2 ? EMPTY : NO_SHARED_YEARS,
+    };
   }
-  const diff = left.pct - right.pct;
+  const left = yoyBetween(a, years.previous, years.latest);
+  const right = yoyBetween(b, years.previous, years.latest);
+  if (left === null || right === null) {
+    return { key, label, value: "—", unit: null, pct: null, chip: "IATA · yıllık", title: EMPTY };
+  }
+  const diff = left - right;
   return {
     key,
     label,
     value: signedPoints(diff),
+    unit: null,
     pct: diff,
-    chip: `IATA · yıllık · ${String(left.from).slice(2)}→${String(left.to).slice(2)}`,
+    // The years the arithmetic ACTUALLY used, not the left series' own.
+    chip: `IATA · yıllık · ${String(years.previous).slice(2)}→${String(years.latest).slice(2)}`,
   };
 }
 
@@ -114,6 +151,10 @@ export function buildBalanceRows(
   // assume consecutive ones.
   const rask = byKey.get("rask");
   const cask = byKey.get("cask");
+  // "0,42" alone is unreadable next to "+0,6pp" and "%78 dilim": a reader
+  // cannot tell whether it is a percentage, a ratio or a price. It is cents
+  // per ASK, which is what both inputs are measured in.
+  const marginUnit = rask?.unit ?? cask?.unit ?? null;
   const caskByYear = new Map((cask?.points ?? []).map((point) => [point.year, point.value]));
   const shared = (rask?.points ?? [])
     .filter((point) => caskByYear.has(point.year))
@@ -129,6 +170,7 @@ export function buildBalanceRows(
       key: "unit_margin",
       label: "Birim marj (RASK−CASK)",
       value: latest.margin.toFixed(2).replace(".", ","),
+      unit: marginUnit,
       pct: latest.margin - previous.margin,
       chip: `IATA · yıllık · ${previous.year}: ${previous.margin.toFixed(2).replace(".", ",")}`,
     });
@@ -137,6 +179,7 @@ export function buildBalanceRows(
       key: "unit_margin",
       label: "Birim marj (RASK−CASK)",
       value: shared[0].margin.toFixed(2).replace(".", ","),
+      unit: marginUnit,
       pct: null,
       chip: `IATA · yıllık · ${shared[0].year}`,
       title: "Karşılaştırılacak ikinci ortak yıl yok",
@@ -146,6 +189,7 @@ export function buildBalanceRows(
       key: "unit_margin",
       label: "Birim marj (RASK−CASK)",
       value: "—",
+      unit: null,
       pct: null,
       chip: "IATA · yıllık",
       title: "RASK ve CASK'ın ortak bir yılı yok",
@@ -162,6 +206,7 @@ export function buildBalanceRows(
     key: "fuel_position",
     label: "Yakıt maliyet konumu",
     value: percentile === null ? "—" : `%${Math.round(percentile)} dilim`,
+    unit: null,
     pct: null,
     chip: "Yahoo · canlı · 1 yıl",
     title: percentile === null ? "1 yıllık yakıt serisi yeterli değil" : undefined,
@@ -193,9 +238,14 @@ export function SectorBalance({
                   prints the number in that unit; a second, percent-formatted
                   copy would be a different and untrue quantity. */}
               {row.pct !== null && <Delta pct={row.pct} tone="signed" form="arrow" />}
-              <span className="shrink-0 font-mono text-[13px] tabular-nums">{row.value}</span>
+              <span className="flex shrink-0 items-baseline gap-1">
+                <span className="font-mono text-[13px] tabular-nums">{row.value}</span>
+                {row.unit && (
+                  <span className="text-[10px] text-muted-foreground">{row.unit}</span>
+                )}
+              </span>
             </div>
-            <span className="text-[10px] uppercase tracking-wider text-muted-foreground/70">
+            <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
               {row.chip}
             </span>
           </li>

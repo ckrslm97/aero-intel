@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  adjacentYearPair,
+  annualScopeLabel,
   forecastBuckets,
   forecastSplitIndex,
   freshnessOf,
@@ -9,6 +11,7 @@ import {
   MEDIAN_MIN_INSTITUTIONS,
   signalLevelStyle,
   splitForecast,
+  unionYears,
 } from "./cockpit";
 import type { AnnualPoint, FxForecastOut } from "./types";
 
@@ -218,3 +221,59 @@ describe("forecastBuckets", () => {
     ]);
   });
 });
+
+describe("unionYears + splitForecast on a shared axis", () => {
+  const point = (year: number, value: number, kind: AnnualPoint["kind"] = "actual"): AnnualPoint => ({
+    year,
+    value,
+    kind,
+  });
+
+  it("builds the axis from every series, not from the first one", () => {
+    const a = { points: [point(2023, 1), point(2024, 2), point(2025, 3)] };
+    const b = { points: [point(2024, 9), point(2026, 11)] };
+    expect(unionYears([a, b])).toEqual([2023, 2024, 2025, 2026]);
+  });
+
+  it("aligns a gapped series to the axis BY YEAR instead of by position", () => {
+    // The bug this closes: a chart that took `chosen[0]`'s years and then fed
+    // every series a positional array plotted a gapped second series one slot
+    // left -- 2024's figure printed under the 2023 label, with no symptom.
+    const years = [2023, 2024, 2025, 2026];
+    const gapped = [point(2023, 10), point(2024, 12), point(2026, 15, "forecast")];
+    const { actual, projected } = splitForecast(gapped, years);
+    expect(actual).toEqual([10, 12, null, null]);
+    // Nothing is invented for the missing 2025; `connectNulls: false` then
+    // breaks the line there rather than drawing an IATA figure nobody
+    // published.
+    expect(projected[2]).toBeNull();
+    expect(projected[3]).toBe(15);
+  });
+});
+
+describe("adjacentYearPair", () => {
+  const point = (year: number, value: number, kind: AnnualPoint["kind"] = "actual"): AnnualPoint => ({
+    year,
+    value,
+    kind,
+  });
+
+  it("returns the pair when the previous year is really there", () => {
+    const pair = adjacentYearPair([point(2024, 8.4), point(2025, 8.67), point(2026, 9.66, "forecast")]);
+    expect(pair?.previous.year).toBe(2025);
+    expect(pair?.latest.year).toBe(2026);
+    expect(annualScopeLabel(pair!.previous, pair!.latest)).toBe("25→26T");
+  });
+
+  it("refuses to pair across a missing year", () => {
+    // `cask`'s real shape in this database: no 2025 row at all. "Last two
+    // POINTS" would hand back 2024 and 2026T -- a two-year change printed in
+    // the same pill its neighbours fill with a one-year one.
+    expect(adjacentYearPair([point(2024, 8.67), point(2026, 9.66, "forecast")])).toBeNull();
+  });
+
+  it("has nothing to pair in an empty series", () => {
+    expect(adjacentYearPair([])).toBeNull();
+  });
+});
+

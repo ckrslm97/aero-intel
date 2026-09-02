@@ -8,8 +8,10 @@ import { useCallback, useRef, useState } from "react";
  * These are the values that were already hand-written across
  * `newspaper-browser.tsx` and `sidebar.tsx`; they live here now so every
  * surface animates on the same clock instead of each page inventing its own
- * timing. Every consumer must gate them behind `useReducedMotion()` -- the
- * helpers below (`reduceVariants`, `hoverLift`) do that for you.
+ * timing. The reduced-motion preference is applied ONCE, app-wide, by
+ * `<MotionConfig reducedMotion="user">` (components/motion/motion-preferences.tsx);
+ * never branch on `useReducedMotion()` to choose a VARIANT SET, because that
+ * hook disagrees with itself across the server/client boundary.
  */
 
 /** Stagger parent. Children play ~50ms apart, capped by the child's own delay. */
@@ -211,9 +213,13 @@ export function reduceVariants(variants: Variants): Variants {
   return flattened;
 }
 
-/** Hover/tap props for a card, or nothing at all under reduced motion. */
-export function hoverLift(reduceMotion: boolean | null) {
-  if (reduceMotion) return {};
+/** Hover/tap props for a card.
+ *
+ * No reduced-motion argument any more: `<MotionConfig reducedMotion="user">`
+ * at the app root reduces these transforms for a reader who asked for it,
+ * and doing it there rather than here keeps the decision out of render (which
+ * is what made it a hydration mismatch). */
+export function hoverLift() {
   return {
     whileHover: cardHover.whileHover,
     whileTap: cardHover.whileTap,

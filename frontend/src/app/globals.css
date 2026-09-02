@@ -77,8 +77,27 @@
 /*
  * AeroIntel palette -- Bloomberg-terminal-grade aviation intelligence portal.
  * Categorical/sequential/status hues validated via the dataviz skill's
- * validate_palette.js against these exact surfaces (see plan notes); do not
- * hand-edit hex values without re-running the validator.
+ * validate_palette.js; do not hand-edit hex values without re-running the
+ * validator.
+ *
+ * THE STATUS HUES ARE NO LONGER SHARED BETWEEN MODES, and that is the whole
+ * point of this note. They used to be byte-identical in `:root` and `.dark`
+ * under the heading "fixed across modes", which sounds like a discipline and
+ * was in fact an unmeasured assumption: the hexes had only ever been checked
+ * against the DARK surfaces. Measured against the light ones (#f9f9f7 page,
+ * #fcfcfb card) the same values collapse --
+ *
+ *   --warning #fab219 -> 1,74:1   (the header's own freshness chip)
+ *   --serious #ec835a -> 2,50:1
+ *   --signal  #c98500 -> 2,91:1
+ *   --good    #0ca30c -> 3,18:1
+ *   --chart-3 #eda100 -> 2,05:1   (below even the 3:1 graphical floor)
+ *
+ * -- so the light theme shipped 53 text nodes under WCAG AA while the dark
+ * theme shipped none. A colour that cannot be read is not a status. The
+ * `.dark` block keeps the bright values (all >= 5:1 there); `:root` now
+ * carries darkened counterparts of the SAME hues, every one measured >= 4,5:1
+ * against #f9f9f7 and #fcfcfb. Same meaning, same family, different surface.
  */
 :root {
   --background: #f9f9f7;
@@ -87,7 +106,7 @@
   --card-foreground: #0b0b0b;
   --popover: #fcfcfb;
   --popover-foreground: #0b0b0b;
-  --primary: #2a78d6;
+  --primary: #1f6fd0;
   --primary-foreground: #fcfcfb;
   --secondary: #f0efec;
   --secondary-foreground: #0b0b0b;
@@ -98,17 +117,21 @@
   --destructive: #d03b3b;
   --border: rgba(11, 11, 11, 0.1);
   --input: rgba(11, 11, 11, 0.14);
-  --ring: #2a78d6;
-  --chart-1: #2a78d6;
-  --chart-2: #1baf7a;
-  --chart-3: #eda100;
+  --ring: #1f6fd0;
+  --chart-1: #1f6fd0;
+  --chart-2: #14855c;
+  --chart-3: #a06b00;
   --chart-4: #4a3aa7;
   --chart-5: #eb6834;
-  --good: #0ca30c;
-  --warning: #fab219;
-  --serious: #ec835a;
+  /* Status hues, LIGHT surface. Darkened counterparts of the .dark values --
+     measured against #f9f9f7 / #fcfcfb: good 5,11 · warning 5,62 ·
+     serious 6,03 · critical 4,56 · signal 5,02. Amber still means warning and
+     green still means good; only the luminance moved. */
+  --good: #0a7c0a;
+  --warning: #8a5a00;
+  --serious: #a63d18;
   --critical: #d03b3b;
-  --signal: #c98500;
+  --signal: #946100;
   --gridline: #e1e0d9;
   /* Newspaper category palette (light) -- 11 distinct hues, one per taxonomy slug */
   --category-revenue-management: #c98500;
@@ -125,12 +148,12 @@
   --radius: 0.5rem;
   --sidebar: #fcfcfb;
   --sidebar-foreground: #0b0b0b;
-  --sidebar-primary: #2a78d6;
+  --sidebar-primary: #1f6fd0;
   --sidebar-primary-foreground: #fcfcfb;
   --sidebar-accent: #eaf1fc;
   --sidebar-accent-foreground: #0b0b0b;
   --sidebar-border: rgba(11, 11, 11, 0.1);
-  --sidebar-ring: #2a78d6;
+  --sidebar-ring: #1f6fd0;
 }
 
 .dark {
@@ -454,6 +477,23 @@
   100% {
     opacity: 1;
     filter: none;
+  }
+}
+
+/* Reduced motion is a request, not a preference for SOME animations.
+ *
+ * `animate-pulse-once` below carries its own reduce block, but Tailwind's
+ * stock `animate-pulse` (every Skeleton) and `animate-spin` (the search
+ * loader) are INFINITE and ship no such guard -- so a reader who has asked
+ * the OS to stop motion still got a loop on every loading surface. This is
+ * the net under all of them. It is a media query rather than a per-component
+ * fix because the rule is "nothing in this product loops for a user who asked
+ * it not to", and that rule has to survive the next `animate-*` someone adds.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .animate-pulse,
+  .animate-spin {
+    animation: none;
   }
 }
 

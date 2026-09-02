@@ -81,7 +81,7 @@ function MetricTile({ row }: { row: IataIndicatorOut }) {
         <span className="min-w-0 flex-1 truncate text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
           {METRIC_LABEL_TR[row.metric] ?? row.metric}
         </span>
-        <span className="shrink-0 rounded-full bg-muted px-1.5 py-px text-[9px] text-muted-foreground">
+        <span className="shrink-0 rounded-full bg-muted px-1.5 py-px text-[10px] text-muted-foreground">
           {row.period_label_tr}
         </span>
         <a
@@ -165,12 +165,20 @@ export function IataOutlook({
               </span>
               {/* Not a `Delta`: a Delta means a metric moved, and this is the
                   same publisher printing a different number for the same year.
-                  Colouring it green or red would say a market did something. */}
+                  Colouring it green or red would say a market did something.
+
+                  THREE states, not two. `revision !== null` admits zero, and
+                  the old `revision < 0 ? "aşağı" : "yukarı"` therefore printed
+                  "0 milyar $ · yukarı revize" for a figure IATA had reprinted
+                  unchanged -- a direction claimed for a number that did not
+                  move. `RevisionNote` a few lines up already handled the same
+                  case correctly; this tile now says the same word it does. */}
               <span className="font-mono text-[13px] tabular-nums">
                 {revision > 0 ? "+" : ""}
                 {trNumber(Number(revision.toFixed(1)))}{" "}
                 <span className="font-sans text-[10px] text-muted-foreground">
-                  {netProfit?.unit} · {revision < 0 ? "aşağı" : "yukarı"} revize
+                  {netProfit?.unit} ·{" "}
+                  {revision === 0 ? "değişmedi" : revision < 0 ? "aşağı revize" : "yukarı revize"}
                 </span>
               </span>
             </div>

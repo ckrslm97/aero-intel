@@ -158,4 +158,50 @@ describe("buildBalanceRows", () => {
     expect(percents).toHaveLength(1);
     expect(container.textContent).toContain("%79 dilim");
   });
+
+  it("computes a scissor over the years BOTH series carry, and says which", () => {
+    // The trap: each side used to take its OWN last two points. With `ask`
+    // missing 2025 that subtracts a two-year growth rate from a one-year one
+    // and labels the result "25→26" off the left series alone -- a number
+    // belonging to no window, wearing a window's name.
+    const rows = rowsOf(
+      board([
+        series("rpk", [point(2024, 100), point(2025, 110), point(2026, 121)]),
+        series("ask", [point(2024, 100), point(2026, 121)]),
+      ]),
+      null,
+    );
+    const gap = rows.get("demand_capacity")!;
+    // Shared years are 2024 and 2026: rpk +21%, ask +21% -> no gap at all.
+    expect(gap.value).toBe("0,0pp");
+    expect(gap.chip).toBe("IATA · yıllık · 24→26");
+  });
+
+  it("refuses the scissor outright when the two series share no two years", () => {
+    const rows = rowsOf(
+      board([
+        series("rpk", [point(2025, 100), point(2026, 110)]),
+        series("ask", [point(2019, 90), point(2020, 95)]),
+      ]),
+      null,
+    );
+    const gap = rows.get("demand_capacity")!;
+    expect(gap.value).toBe("—");
+    expect(gap.title).toBe("İki serinin ortak iki yılı yok");
+  });
+
+  it("gives the unit margin its unit", () => {
+    // "0,42" next to "+0,6pp" and "%78 dilim" is unreadable: percent, ratio or
+    // price? It is cents per ASK, which is what both inputs are measured in.
+    const rows = rowsOf(
+      board([
+        series("rask", [point(2024, 9.3), point(2026, 10.08)], "¢/ASK"),
+        series("cask", [point(2024, 8.67), point(2026, 9.66)], "¢/ASK"),
+      ]),
+      null,
+    );
+    const margin = rows.get("unit_margin")!;
+    expect(margin.value).toBe("0,42");
+    expect(margin.unit).toBe("¢/ASK");
+  });
 });

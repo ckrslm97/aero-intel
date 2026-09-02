@@ -5,7 +5,7 @@ import { useReducedMotion } from "framer-motion";
 import { useMemo } from "react";
 
 import { areaGlow, baseOption, categoryAxis, useChartTheme, valueAxis } from "@/lib/chart-theme";
-import { splitForecast } from "@/lib/cockpit";
+import { splitForecast, unionYears } from "@/lib/cockpit";
 import { formatCompactNumber } from "@/lib/format";
 import type { AnnualSeries } from "@/lib/types";
 
@@ -45,12 +45,17 @@ export function AnnualTrendChart({ series }: { series: AnnualSeries[] }) {
     );
     if (chosen.length === 0) return null;
 
-    const years = chosen[0].points.map((point) => point.year);
+    // The UNION of both series' years, never the first series' own. The two
+    // revenue series happen to be complete today; `cask` in the same table is
+    // not, and a positional axis would have plotted the second series one slot
+    // left with no visible symptom. `splitForecast` aligns each series to this
+    // axis by YEAR and leaves a null where a year is missing.
+    const years = unionYears(chosen);
     const base = baseOption(theme, reduceMotion);
 
     const echartsSeries = chosen.flatMap((entry, index) => {
       const color = theme.series[index % theme.series.length];
-      const { actual, projected } = splitForecast(entry.points);
+      const { actual, projected } = splitForecast(entry.points, years);
       const shared = {
         type: "line" as const,
         smooth: true,

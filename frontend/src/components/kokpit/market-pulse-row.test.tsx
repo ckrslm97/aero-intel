@@ -28,6 +28,12 @@ const series = (overrides: Partial<AnnualSeries> = {}): AnnualSeries => ({
   ...overrides,
 });
 
+/** Five minutes after the newest fixture reading, so "CANLI" is earned rather
+ * than assumed. Passed explicitly everywhere the badge is asserted: with the
+ * real clock these fixtures are days old and the badge is -- correctly --
+ * "GECİKMELİ". */
+const NOW = new Date("2026-08-30T20:05:00Z");
+
 const annualBoard = (rows: AnnualSeries[]): AnnualSeriesBoardOut => ({
   series: rows,
   source: "IATA",
@@ -128,7 +134,7 @@ describe("buildPulseCells", () => {
   });
 
   it("puts the three IATA cells on the annual clock and the two market cells on the live one", () => {
-    const cells = buildPulseCells(fullAnnual, fxBoard([pair()]), energyBoard([brent()]));
+    const cells = buildPulseCells(fullAnnual, fxBoard([pair()]), energyBoard([brent()]), NOW);
     expect(cells.map((cell) => cell.cadence)).toEqual([
       "annual",
       "annual",
@@ -141,6 +147,39 @@ describe("buildPulseCells", () => {
     expect(cells[0].asOfLabel).toBeNull();
     expect(cells[3].badge).toBe("CANLI · 15dk");
     expect(cells[3].asOfLabel).toBe("19:50");
+  });
+
+  it("stops saying CANLI once the reading falls outside the live window", () => {
+    // The badge used to be a constant, so a cell said "CANLI · 15dk" over a
+    // two-day-old reading while the page header, off the SAME timestamps,
+    // correctly said "Gecikmeli". One screen cannot hold two answers to "is
+    // this current?".
+    const stale = new Date("2026-09-01T12:00:00Z");
+    const cells = buildPulseCells(fullAnnual, fxBoard([pair()]), energyBoard([brent()]), stale);
+    expect(cells[3].badge).toBe("GECİKMELİ");
+    expect(cells[4].badge).toBe("GECİKMELİ");
+    // The reading itself is still printed with its own time -- it is real, it
+    // is merely old.
+    expect(cells[3].value).toBe("48,25");
+    expect(cells[3].asOfLabel).toBe("19:50");
+  });
+
+  it("claims no IATA edition year when the annual board did not load", () => {
+    // "IATA 2026T" beside an em dash asserted which edition the missing number
+    // came from.
+    const cells = buildPulseCells(null, null, null);
+    expect(cells[0].badge).toBe("IATA");
+    expect(cells[0].value).toBeNull();
+  });
+
+  it("takes its scope sentence from the payload rather than a hard-coded date", () => {
+    const cells = buildPulseCells(
+      annualBoard([series()]),
+      null,
+      null,
+    );
+    expect(cells[0].title).toContain("sektör geneli · yıllık");
+    expect(cells[0].title).not.toContain("Haziran 2026");
   });
 
   it("gives an annual cell one year-on-year delta, never a 1g/1h pair", () => {

@@ -1,13 +1,12 @@
 "use client";
 
-import { motion, useReducedMotion } from "framer-motion";
+import { motion } from "framer-motion";
 import type { ComponentPropsWithoutRef } from "react";
 
 import {
   fadeUpItem,
   hoverLift,
   railGrow,
-  reduceVariants,
   scalePopItem,
   staggerContainer,
 } from "@/lib/motion";
@@ -24,6 +23,22 @@ type DivProps = Omit<
  * components can opt in without crossing the client boundary themselves. */
 export type MotionItemVariant = "fadeUp" | "scalePop";
 
+/* NOTE ON REDUCED MOTION -- read before adding a `useReducedMotion()` here.
+ *
+ * These components used to pick between `variants` and `reduceVariants(...)`
+ * with `useReducedMotion()`. That hook answers false on the server and true on
+ * a client that asked for stillness, so the server serialised
+ * `opacity: 0; transform: scaleX(0)` while the client rendered
+ * `opacity: 1; transform: none` -- a hydration mismatch React declines to
+ * patch up, leaving the SERVER's invisible styles in the DOM. On Kokpit that
+ * meant every section rail and every KPI cell could stay at opacity 0 for
+ * exactly the readers who had asked for less motion.
+ *
+ * The preference is now honoured once, at animation time, by
+ * `<MotionConfig reducedMotion="user">` in components/motion/motion-preferences.tsx.
+ * Everything here renders identical markup on both sides of the boundary.
+ */
+
 const ITEM_VARIANTS = {
   fadeUp: fadeUpItem,
   scalePop: scalePopItem,
@@ -37,10 +52,9 @@ const ITEM_VARIANTS = {
  * boundary, the children stay server-rendered.
  */
 export function MotionList({ children, ...props }: DivProps) {
-  const reduceMotion = useReducedMotion();
   return (
     <motion.div
-      variants={reduceMotion ? reduceVariants(staggerContainer) : staggerContainer}
+      variants={staggerContainer}
       initial="hidden"
       animate="show"
       {...props}
@@ -57,12 +71,10 @@ export function MotionItem({
   variant = "fadeUp",
   ...props
 }: DivProps & { lift?: boolean; variant?: MotionItemVariant }) {
-  const reduceMotion = useReducedMotion();
-  const itemVariants = ITEM_VARIANTS[variant];
   return (
     <motion.div
-      variants={reduceMotion ? reduceVariants(itemVariants) : itemVariants}
-      {...(lift ? hoverLift(reduceMotion) : {})}
+      variants={ITEM_VARIANTS[variant]}
+      {...(lift ? hoverLift() : {})}
       {...props}
     >
       {children}
@@ -84,11 +96,10 @@ export function MotionRail({
   ComponentPropsWithoutRef<typeof motion.span>,
   "variants" | "initial" | "animate"
 > & { staggered?: boolean }) {
-  const reduceMotion = useReducedMotion();
   return (
     <motion.span
       aria-hidden
-      variants={reduceMotion ? reduceVariants(railGrow) : railGrow}
+      variants={railGrow}
       {...(staggered ? {} : { initial: "hidden", animate: "show" })}
       className={cn("hairline-glow block w-full origin-left", className)}
       style={style}
@@ -109,12 +120,10 @@ export function MotionListItem({
   variant = "fadeUp",
   ...props
 }: LiProps & { lift?: boolean; variant?: MotionItemVariant }) {
-  const reduceMotion = useReducedMotion();
-  const itemVariants = ITEM_VARIANTS[variant];
   return (
     <motion.li
-      variants={reduceMotion ? reduceVariants(itemVariants) : itemVariants}
-      {...(lift ? hoverLift(reduceMotion) : {})}
+      variants={ITEM_VARIANTS[variant]}
+      {...(lift ? hoverLift() : {})}
       {...props}
     >
       {children}

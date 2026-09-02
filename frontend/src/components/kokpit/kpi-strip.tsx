@@ -4,6 +4,7 @@ import { YearDots } from "@/components/charts/year-dots";
 import { CountUp } from "@/components/motion/count-up";
 import { MotionItem, MotionList } from "@/components/motion/motion-list";
 import { Delta } from "@/components/ui/delta";
+import { adjacentYearPair, annualScopeLabel } from "@/lib/cockpit";
 import { formatCompactNumber } from "@/lib/format";
 import type { AnnualSeries } from "@/lib/types";
 
@@ -35,44 +36,64 @@ function formatValue(value: number, unit: string): string {
 /** The empty-comparison note. CASK is the live case: its 2025 point is missing
  * upstream, so there is no year-on-year to print and saying so is the only
  * honest option -- the Sektör Dengesi block one column over does carry a
- * comparison, across the years that do exist, and says which they are. */
+ * comparison, across the years that do exist, and says which they are.
+ *
+ * This note used never to fire. The cell took the last two POINTS rather than
+ * two adjacent YEARS, so CASK quietly printed 2024 -> 2026T (+%11,4) in the
+ * same red pill shape its four neighbours were filling with a single year's
+ * move, with nothing on screen to say the windows differed. `adjacentYearPair`
+ * now refuses that comparison, and the pill carries its window either way. */
 const NO_YOY_TITLE =
   "Önceki yılın noktası veritabanında yok; mevcut yıllar arası karşılaştırma Sektör Dengesi'nde";
 
 function StripCell({ series }: { series: AnnualSeries }) {
   const points = series.points;
   const latest = points[points.length - 1];
-  const previous = points[points.length - 2];
   if (!latest) return null;
 
   // Year-on-year off the series itself rather than a second backend field: the
   // two numbers the pill compares are both in the dots underneath it, so a
-  // reader can check the arithmetic without leaving the cell.
+  // reader can check the arithmetic without leaving the cell. And only ever
+  // across CONSECUTIVE years -- see NO_YOY_TITLE.
+  const pair = adjacentYearPair(points);
   const deltaPct =
-    previous && previous.value ? ((latest.value - previous.value) / previous.value) * 100 : null;
+    pair && pair.previous.value
+      ? ((pair.latest.value - pair.previous.value) / pair.previous.value) * 100
+      : null;
 
   return (
-    <div className="flex h-[76px] flex-col justify-between rounded-lg border border-border bg-card/60 px-3 py-2">
-      <span className="truncate text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+    // min-h rather than a fixed height, and every child `shrink-0`. The cell
+    // was h-[76px] holding 104px of children, and because the label carries
+    // `truncate` (overflow: hidden) its automatic minimum size resolved to
+    // ZERO -- so flex loaded the entire 28px overflow onto it and the metric
+    // name rendered at 0px high at every breakpoint. RASK and CASK, which
+    // share the unit ¢/ASK, were literally indistinguishable on screen.
+    <div className="flex h-full min-h-[104px] flex-col justify-between gap-1 rounded-lg border border-border bg-card/60 px-3 py-2">
+      <span className="shrink-0 truncate text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
         {series.label_tr}
       </span>
-      <span className="flex items-baseline gap-1">
+      <span className="flex shrink-0 items-baseline gap-1">
         <CountUp
           value={latest.value}
           format={(v) => formatValue(v, series.unit)}
           className="text-xl font-semibold leading-none tabular-nums"
         />
-        <span className="truncate text-[9px] text-muted-foreground">{series.unit}</span>
+        <span className="truncate text-[10px] text-muted-foreground">{series.unit}</span>
       </span>
       <Delta
         pct={deltaPct}
+        // The window, printed on the pill. Without it a yearly move wears the
+        // same badge shape as the "1g" / "1h" pills two sections above, and
+        // the only clue to the difference is the dot labels underneath.
+        scope={pair ? annualScopeLabel(pair.previous, pair.latest) : undefined}
         // The only place `up_is_good` is consulted on this page. CASK is the
         // one metric it flips: unit cost coming DOWN is good news.
         tone={series.up_is_good ? "signed" : "costly"}
         form="pill"
         emptyTitle={NO_YOY_TITLE}
+        className="shrink-0"
       />
-      <YearDots points={points} unitLabel={series.unit} />
+      <YearDots points={points} unitLabel={series.unit} className="shrink-0" />
     </div>
   );
 }

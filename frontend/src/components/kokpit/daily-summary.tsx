@@ -1,14 +1,4 @@
-import {
-  ArrowDownRight,
-  ArrowUpRight,
-  Flame,
-  Info,
-  Megaphone,
-  Minus,
-  Radar,
-  TrendingUp,
-  type LucideIcon,
-} from "lucide-react";
+import { Flame, Info, Megaphone, Radar, TrendingUp, type LucideIcon } from "lucide-react";
 import Link from "next/link";
 
 import { StatusPill, statusToneOf } from "@/components/ui/status-pill";
@@ -22,16 +12,19 @@ const SIGNAL_ICONS: Record<CockpitSignal["key"], LucideIcon> = {
   competitor: Megaphone,
 };
 
-/** Which way the tile points. Derived from the LEVEL, not from a number:
- * `CockpitSignal` carries no direction field, and `unknown` deliberately
- * points nowhere rather than resolving to "steady". */
-function ArrowFor({ level }: { level: CockpitSignal["level"] }) {
-  if (level === "critical" || level === "warning") {
-    return <ArrowUpRight className="size-3.5 shrink-0" aria-hidden />;
-  }
-  if (level === "good") return <ArrowDownRight className="size-3.5 shrink-0" aria-hidden />;
-  return <Minus className="size-3.5 shrink-0" aria-hidden />;
-}
+/* THERE IS NO DIRECTION ARROW ON THESE TILES, and there cannot be one.
+ *
+ * The tiles used to print one, derived like this: critical or warning pointed
+ * UP, good pointed DOWN, unknown pointed nowhere. That is not a direction, it
+ * is the severity band drawn twice -- and drawn as the one thing on the tile a
+ * reader would take for a measurement. "Yakıt riski · DİKKAT ▲" reads as
+ * "fuel went up"; the level says only that Brent's percentile crossed a
+ * threshold, which it can do while the price is falling.
+ *
+ * `CockpitSignal` carries no direction field, and the backend refuses to
+ * invent one for the same reason (see cockpit_signals_service.py). So the tile
+ * carries the band, in words and colour, and nothing that looks like a trend.
+ */
 
 /**
  * GÜNÜN ÖZETİ -- four glyphs, and not one number.
@@ -73,10 +66,14 @@ export function DailySummary({ signals }: { signals: CockpitSignal[] }) {
   }
 
   return (
-    <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+    // One column below `sm`. At 375px the four-across grid left each label a
+    // 23px box against a 53px word, so all four tiles read "KU…", "YA…",
+    // "RİS…", "RA…" -- four identical tiles, and no way to see which driver
+    // was the one saying DİKKAT.
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
       {signals.map((signal) => {
         const Icon = SIGNAL_ICONS[signal.key] ?? Info;
-        const title = [
+        const detail = [
           signal.value_label,
           signal.reason_tr,
           signal.method_tr,
@@ -91,23 +88,31 @@ export function DailySummary({ signals }: { signals: CockpitSignal[] }) {
             <span className="min-w-0 flex-1 truncate text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
               {signal.label_tr}
             </span>
-            <ArrowFor level={signal.level} />
             <StatusPill tone={statusToneOf(signal.level)}>{signal.level_label_tr}</StatusPill>
+            {/* The number, the threshold, the method and the source, in the
+                accessibility tree rather than only in a `title`.
+
+                `title` is a mouse affordance: it never opens on touch and
+                browsers do not surface it on keyboard focus. A tile with no
+                `href` is not focusable at all, so for those readers the
+                caveat did not exist. Screen readers DO read this span as part
+                of the tile, and the `title` stays for pointer users. */}
+            <span className="sr-only">{detail}</span>
           </>
         );
 
         const className = cn(
-          "flex h-[72px] w-full items-center gap-2 rounded-lg border border-border bg-card/60 px-3",
+          "flex min-h-[72px] w-full items-center gap-2 rounded-lg border border-border bg-card/60 px-3",
           signal.href &&
             "transition-colors hover:bg-accent/40 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
         );
 
         return signal.href ? (
-          <Link key={signal.key} href={signal.href} title={title} className={className}>
+          <Link key={signal.key} href={signal.href} title={detail} className={className}>
             {inner}
           </Link>
         ) : (
-          <div key={signal.key} title={title} className={className}>
+          <div key={signal.key} title={detail} className={className}>
             {inner}
           </div>
         );

@@ -108,19 +108,91 @@ export function forecastSplitIndex(points: AnnualPoint[]): number {
   return index === -1 ? points.length : index;
 }
 
-/** [solid, dashed] halves of one series, overlapping by a point so the two
- * lines meet. Nulls keep both arrays the length of the x axis. */
-export function splitForecast(points: AnnualPoint[]): {
+/** Every year any of the given series carries, ascending and de-duplicated.
+ *
+ * The x axis of a multi-series annual chart has to be built from the UNION,
+ * not from whichever series happens to be first. A chart that takes
+ * `chosen[0].points.map(p => p.year)` and then feeds every series a
+ * POSITIONAL array is only correct while all of them carry exactly the same
+ * years -- and this database already contains a series that does not (`cask`
+ * lost its 2025 row upstream). One missing year would slide a whole series one
+ * slot left and plot 2024's revenue under the 2023 label, silently.
+ */
+export function unionYears(seriesList: { points: AnnualPoint[] }[]): number[] {
+  const years = new Set<number>();
+  for (const entry of seriesList) for (const point of entry.points) years.add(point.year);
+  return [...years].sort((a, b) => a - b);
+}
+
+/** [solid, dashed] halves of one series, aligned to an x axis.
+ *
+ * `years` names the axis: each output slot is that year's value, or null where
+ * this series has no point for it (`connectNulls: false` then breaks the line
+ * rather than interpolating a figure IATA never published). Omit `years` and
+ * the series' own years are the axis, which is the single-series case.
+ *
+ * Nulls keep both arrays the length of the axis, and the last real year
+ * appears in BOTH so the dashed tail starts on the solid line rather than
+ * floating.
+ */
+export function splitForecast(
+  points: AnnualPoint[],
+  years?: number[],
+): {
   actual: (number | null)[];
   projected: (number | null)[];
 } {
-  const split = forecastSplitIndex(points);
+  const byYear = new Map(points.map((point) => [point.year, point]));
+  const axis = years ?? points.map((point) => point.year);
+  const aligned = axis.map((year) => byYear.get(year) ?? null);
+  const found = aligned.findIndex((point) => point !== null && point.kind !== "actual");
+  const split = found === -1 ? aligned.length : found;
   return {
-    actual: points.map((point, i) => (i < split ? point.value : null)),
-    // `split - 1` is the join: the last real year appears in both series so
-    // the dashed tail starts on the solid line rather than floating.
-    projected: points.map((point, i) => (i >= split - 1 && split > 0 ? point.value : null)),
+    actual: aligned.map((point, i) => (point && i < split ? point.value : null)),
+    // `split - 1` is the join.
+    projected: aligned.map((point, i) =>
+      point && split > 0 && i >= split - 1 ? point.value : null,
+    ),
   };
+}
+
+/** The one-letter suffix a year label carries when the year is not a
+ * measurement: "25G" for IATA's own estimate, "26T" for its forecast.
+ *
+ * Lives here rather than in a component because four surfaces print it
+ * (YearDots' labels, the Market Pulse badge, both delta scopes) and three
+ * private copies of it had already appeared. A reader who learns "T = tahmin"
+ * in one cell must not meet a different letter in the next.
+ */
+export const ANNUAL_KIND_SUFFIX: Record<AnnualPoint["kind"], string> = {
+  actual: "",
+  estimate: "G",
+  forecast: "T",
+};
+
+/** "25→26T" -- the window a year-on-year figure was computed over, in the
+ * page's own two-digit year vocabulary. */
+export function annualScopeLabel(from: AnnualPoint, to: AnnualPoint): string {
+  return `${String(from.year).slice(2)}→${String(to.year).slice(2)}${ANNUAL_KIND_SUFFIX[to.kind]}`;
+}
+
+/** The last point and the point for the year IMMEDIATELY before it, or null.
+ *
+ * "Last two POINTS" is the trap this exists to close. `cask` has no 2025 row
+ * (an upstream de-duplication bug, D3 in the design spec), so taking the last
+ * two points there hands back 2024 and 2026T -- a TWO-year change, which the
+ * surfaces above then print in a pill that every neighbouring cell fills with
+ * a ONE-year change. Nothing on screen distinguishes them. Refusing the
+ * comparison, and saying why, is the only honest option; interpolating a 2025
+ * would be inventing an IATA figure.
+ */
+export function adjacentYearPair(
+  points: AnnualPoint[],
+): { previous: AnnualPoint; latest: AnnualPoint } | null {
+  const latest = points[points.length - 1];
+  if (!latest) return null;
+  const previous = points.find((point) => point.year === latest.year - 1);
+  return previous ? { previous, latest } : null;
 }
 
 export const ANNUAL_KIND_LABELS_TR: Record<AnnualPoint["kind"], string> = {

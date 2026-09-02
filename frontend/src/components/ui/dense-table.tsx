@@ -9,10 +9,17 @@ import { cn } from "@/lib/utils";
  * This is that same table at the density the fold contract (see app/page.tsx)
  * is arithmetically built on.
  *
- * The header sticks, so a reader who scrolls the page still knows which column
- * they are reading. `bg-card/95 backdrop-blur` rather than an opaque fill
- * because the card underneath carries `bg-card-sheen`, and a flat header band
- * would cut a visible seam across it.
+ * The header is `sticky top-0`, WHICH DOES NOTHING ON A PAGE SCROLL and is not
+ * meant to. Sticky positions against the nearest scrolling ancestor, and both
+ * current callers wrap this in `<Card className="p-0">` (overflow-hidden) with
+ * an `overflow-x-auto` div inside -- a box whose height is its content's, so
+ * it never scrolls vertically and the header never lifts. It is kept for the
+ * caller that gives its scroll box a `max-height`: at that point the header
+ * does stick, and `bg-card/95 backdrop-blur` (rather than an opaque fill, which
+ * would cut a seam across the card's `bg-card-sheen`) is what makes it legible
+ * over the rows sliding under it. If you are reading this because you expected
+ * a page-scroll sticky header, the fix is a `max-h-… overflow-auto` on the
+ * wrapper, not a change here.
  *
  * NOTE FOR THE CALLER: `Card` carries `overflow-hidden`, so a table that needs
  * to scroll must be wrapped in `<Card className="p-0">` with its own

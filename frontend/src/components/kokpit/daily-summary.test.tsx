@@ -30,8 +30,15 @@ describe("DailySummary", () => {
 
     expect(screen.getByText("Kur")).toBeInTheDocument();
     expect(screen.getByText("Dikkat")).toBeInTheDocument();
-    expect(screen.queryByText(/48,2505/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/%1,2/)).not.toBeInTheDocument();
+    // The number exists in the tile, but only for assistive technology: the
+    // reading, its threshold, its method and its source are what a sighted
+    // reader gets from the tooltip, and a tile with no `href` is not focusable
+    // for anyone else to reach it. Nothing of it is in the visual field, which
+    // is the duplication this component exists to prevent -- USD/TRY and Brent
+    // are already printed at 26px two sections above.
+    const detail = screen.getByText(/48,2505/);
+    expect(detail).toHaveClass("sr-only");
+    expect(screen.getByText(/%1,2/)).toHaveClass("sr-only");
   });
 
   it("keeps the number, the reason, the method and the source one hover away", () => {
@@ -68,5 +75,28 @@ describe("DailySummary", () => {
     for (const label of ["Kur", "Yakıt", "Risk", "Rekabet"]) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }
+  });
+
+  it("draws no direction glyph, because the level is not a direction", () => {
+    // The tiles used to derive an arrow from the SEVERITY BAND: critical and
+    // warning pointed up, good pointed down. That is the band drawn twice, and
+    // drawn as the one thing on the tile a reader would take for a
+    // measurement -- "Yakıt riski · DİKKAT ▲" reads as "fuel went up", which
+    // the level does not say and `CockpitSignal` carries no field to support.
+    const { container } = render(
+      <DailySummary signals={[signal({ level: "good", level_label_tr: "Sakin" })]} />,
+    );
+    expect(container.querySelectorAll("svg.lucide-arrow-up-right")).toHaveLength(0);
+    expect(container.querySelectorAll("svg.lucide-arrow-down-right")).toHaveLength(0);
+    // Exactly two glyphs remain: the driver's own icon and the pill's.
+    expect(container.querySelectorAll("svg")).toHaveLength(2);
+  });
+
+  it("puts the detail where a screen reader can reach it on an unlinked tile", () => {
+    // A tile with no `href` is not focusable, and `title` is a pointer
+    // affordance: it never opens on touch and browsers do not surface it on
+    // keyboard focus. For those readers the caveat simply did not exist.
+    render(<DailySummary signals={[signal({ href: null })]} />);
+    expect(screen.getByText(/Kaynak: Yahoo Finance/)).toHaveClass("sr-only");
   });
 });

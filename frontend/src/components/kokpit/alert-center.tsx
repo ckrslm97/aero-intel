@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown, Clock, TriangleAlert, type LucideIcon } from "lucide-react";
+import { ChevronDown, Clock, RotateCw, TriangleAlert, type LucideIcon } from "lucide-react";
 import { CircleAlert, Info } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useMemo, useState } from "react";
@@ -67,7 +67,17 @@ interface AlertRow {
  * nothing -- and it is a different statement from the section being absent,
  * which would say nothing at all. So the section never hides itself.
  *
- * Both streams still degrade independently: whichever one answers is rendered.
+ * THAT SENTENCE IS ONLY TRUE IF THE STREAMS ANSWERED, which is why this
+ * component now reads `error` as well as `data`. It used to build its counts
+ * out of `alerts.data ?? []` and `risks.data?.countries ?? []` and branch on
+ * `loaded` alone -- and `useDataSource` sets `loaded` on a FAILED request too.
+ * So a 500 from /campaign-alerts printed "0 KRİTİK · 0 YÜKSEK · 0 ORTA" under
+ * a byline promising the reader that a zero here is a measurement. Three
+ * zeroes is the most reassuring thing this page can say; it must never be what
+ * a dead endpoint looks like.
+ *
+ * Both streams still degrade independently: whichever one answers is rendered,
+ * and the band names the one that did not.
  */
 export function AlertCenter() {
   const [open, setOpen] = useState(false);
@@ -146,6 +156,17 @@ export function AlertCenter() {
 
   const rows = merged.slice(0, ROW_LIMIT);
   const loading = !alerts.loaded || !risks.loaded;
+  // "Down" is error AND no data: a failed refresh that still has an earlier
+  // result keeps showing it (that is `stale`), and those counts are real.
+  const alertsDown = alerts.error !== null && alerts.data === null;
+  const risksDown = risks.error !== null && risks.data === null;
+  const allDown = alertsDown && risksDown;
+  const downLabel = alertsDown ? "kampanya uyarıları" : "risk sinyalleri";
+
+  const retryDown = () => {
+    if (alertsDown) alerts.retry();
+    if (risksDown) risks.retry();
+  };
 
   return (
     <div className="flex flex-col gap-1.5 rounded-lg border border-border bg-card/60 px-3 py-2">
@@ -156,6 +177,18 @@ export function AlertCenter() {
         />
         {loading ? (
           <Skeleton className="h-3 w-40 rounded" />
+        ) : allDown ? (
+          <span className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+            Uyarı kaynakları okunamadı — sayaç üretilemiyor.
+            <button
+              type="button"
+              onClick={retryDown}
+              className="flex items-center gap-1 rounded border border-border px-1.5 py-px text-[10px] font-medium transition-colors hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            >
+              <RotateCw className="size-2.5" aria-hidden />
+              Yeniden dene
+            </button>
+          </span>
         ) : (
           <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
             {(["CRITICAL", "HIGH", "MEDIUM"] as const).map((priority) => (
@@ -163,13 +196,29 @@ export function AlertCenter() {
                 key={priority}
                 className={cn(
                   "flex items-center gap-1 text-[11px] tabular-nums",
-                  counts[priority] > 0 ? PRIORITY_META[priority].text : "text-muted-foreground/60",
+                  counts[priority] > 0 ? PRIORITY_META[priority].text : "text-muted-foreground",
                 )}
               >
                 <span aria-hidden className={cn("size-1.5 rounded-full", PRIORITY_META[priority].dot)} />
                 {counts[priority]} {PRIORITY_META[priority].label.toLocaleUpperCase("tr-TR")}
               </span>
             ))}
+            {/* One stream answered and one did not. The counts below are real
+                but PARTIAL, and a reader who is not told that will read them
+                as the whole picture. */}
+            {(alertsDown || risksDown) && (
+              <span className="flex items-center gap-1.5 text-[10px] text-warning">
+                Eksik: {downLabel}
+                <button
+                  type="button"
+                  onClick={retryDown}
+                  className="flex items-center gap-1 rounded border border-border px-1.5 py-px font-medium text-muted-foreground transition-colors hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                >
+                  <RotateCw className="size-2.5" aria-hidden />
+                  Yeniden dene
+                </button>
+              </span>
+            )}
           </span>
         )}
 

@@ -56,18 +56,31 @@ export interface FxRow {
   /** The peg's badge, verbatim from the backend. Non-null means "this row has
    * no deltas and no trend, and that is the correct rendering". */
   pegLabel: string | null;
-  forecast: { label: string; title: string } | null;
+  forecast: { label: string; title: string; expired: boolean } | null;
   group: "primary" | "extra";
 }
 
-/** The institution forecast closest in time to now, for one pair.
+/** The institution forecast a reader should see next, for one pair.
  *
- * "Closest", not "soonest": with the currently curated rows the nearest target
- * dates are a few months out, and a reader glancing at the column wants the
- * next published waypoint. Rows with no `target_date` are excluded -- the
- * mapping that derives those dates (see kokpit.py) declines to invent one
- * where the institution's wording does not support it, and this column must
- * not undo that.
+ * FUTURE FIRST, then closest. The old rule was "closest in absolute time",
+ * which quietly admits the past: the seeded Danske USD/TRY row targets
+ * 2026-11-21, and from 2026-11-22 onward it sits ten days from now while
+ * JPMorgan's live 2026-12-31 target sits thirty -- so the column would have
+ * printed a SPENT forecast, under the heading "Tahmin", with no way for a
+ * reader to tell. `/kokpit/fx-forecasts` applies no date filter of its own, so
+ * this is the only place the distinction can be made.
+ *
+ * When every published target for a pair is already past, the row still shows
+ * the most recent one rather than going blank -- "the last thing anyone
+ * published" is information -- but it is labelled `vadesi geçti` and drawn
+ * muted. That label is a statement about OUR derived `target_date`, not about
+ * the institution's wording, which is why it is allowed to appear next to the
+ * institution's own `horizon_label`. The derived date itself is still never
+ * printed (see `FxForecastOut.target_date` in lib/types.ts).
+ *
+ * Rows with no `target_date` are excluded -- the mapping that derives those
+ * dates (see kokpit.py) declines to invent one where the institution's wording
+ * does not support it, and this column must not undo that.
  */
 export function nearestForecast(
   rows: FxForecastOut[],
@@ -77,22 +90,26 @@ export function nearestForecast(
   const dated = rows.filter((row) => row.currency_pair === pair && row.target_date);
   if (dated.length === 0) return null;
 
-  const nearest = dated.reduce((best, row) =>
-    Math.abs(new Date(row.target_date as string).getTime() - now) <
-    Math.abs(new Date(best.target_date as string).getTime() - now)
-      ? row
-      : best,
+  const time = (row: FxForecastOut) => new Date(row.target_date as string).getTime();
+  const upcoming = dated.filter((row) => time(row) >= now);
+  const expired = upcoming.length === 0;
+  const pool = expired ? dated : upcoming;
+
+  const nearest = pool.reduce((best, row) =>
+    Math.abs(time(row) - now) < Math.abs(time(best) - now) ? row : best,
   );
   // Others sharing that exact target date. Counted as INSTITUTIONS, not rows:
   // one bank publishing two horizons that land on one date is one opinion.
-  const sameDate = dated.filter((row) => row.target_date === nearest.target_date);
+  const sameDate = pool.filter((row) => row.target_date === nearest.target_date);
   const others = new Set(sameDate.map((row) => row.institution));
   others.delete(nearest.institution);
 
   const digits = nearest.value < 10 ? 4 : 2;
   const extra = others.size > 0 ? ` +${others.size} kurum` : "";
+  const stale = expired ? " · vadesi geçti" : "";
   return {
-    label: `${formatRate(nearest.value, digits)} · ${nearest.institution} ${nearest.horizon_label}${extra}`,
+    label: `${formatRate(nearest.value, digits)} · ${nearest.institution} ${nearest.horizon_label}${extra}${stale}`,
+    expired,
     // Every institution on that date, each with its own wording and its own
     // number. Never averaged -- see MEDIAN_MIN_INSTITUTIONS in lib/cockpit.ts.
     title: sameDate
@@ -100,6 +117,7 @@ export function nearestForecast(
         (row) =>
           `${row.institution} · ${row.horizon_label}: ${formatRate(row.value, digits)} (yayın ${row.publication_date})`,
       )
+      .concat(expired ? ["Bu paritede ileri tarihli yayımlanmış tahmin kalmadı."] : [])
       .join("\n"),
   };
 }
@@ -125,6 +143,7 @@ export function buildFxRows(
   const build = (name: string, group: FxRow["group"]): FxRow | null => {
     const pair = byPair.get(name);
     if (!pair) return null;
+    const asOfLabel = formatUtcTime(pair.as_of);
     return {
       pair: name,
       metricKey: PAIR_METRIC_KEYS[name] ?? null,
@@ -134,8 +153,13 @@ export function buildFxRows(
       dayPct: pair.day_delta_pct,
       weekPct: pair.week_delta_pct,
       series: pair.sparkline ?? [],
-      asOfLabel: formatUtcTime(pair.as_of),
-      title: `${pair.source} · ${pair.frequency_label}`,
+      asOfLabel,
+      // The reading's OWN time, in the row's own tooltip. `asOfLabel` was
+      // computed here and then never rendered anywhere -- so the table's nine
+      // rows shared one collective freshness stamp in the page header, and a
+      // pair whose cron run had failed looked exactly as current as one whose
+      // had not.
+      title: `${pair.source} · ${pair.frequency_label}${asOfLabel ? ` · ${asOfLabel} UTC` : ""}`,
       pegLabel: null,
       forecast: nearestForecast(forecasts, name, now),
       group,
@@ -228,14 +252,38 @@ export function FxBoardTable({
     const selectable = row.metricKey !== null && CHARTABLE.has(row.metricKey);
     const isSelected = selectable && row.pair === chartPair;
     return (
+      // A selectable row is a real control, reachable from the keyboard.
+      //
+      // It used to be a bare `<tr onClick>` with `aria-selected`, which failed
+      // twice over: `<tr>` is not focusable, so the ONLY way to move the chart
+      // was a mouse -- while the section caption promised every reader that
+      // "clicking a row switches the chart" -- and `aria-selected` is not
+      // valid on a row outside a grid/treegrid, so assistive technology was
+      // told nothing either. `role="button"` + `aria-pressed` describes what
+      // this actually is: a toggle that changes the panel beside it. The
+      // alternative, `role="grid"`, would borrow the whole arrow-key contract
+      // of a grid widget that this table does not implement.
       <tr
         key={row.pair}
         title={row.title}
-        aria-selected={selectable ? isSelected : undefined}
+        role={selectable ? "button" : undefined}
+        tabIndex={selectable ? 0 : undefined}
+        aria-pressed={selectable ? isSelected : undefined}
         onClick={selectable ? () => setSelected(row.pair) : undefined}
+        onKeyDown={
+          selectable
+            ? (event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  setSelected(row.pair);
+                }
+              }
+            : undefined
+        }
         className={cn(
           "border-b border-border/60 last:border-0",
-          selectable && "cursor-pointer hover:bg-accent/40",
+          selectable &&
+            "cursor-pointer hover:bg-accent/40 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring",
           isSelected && "border-l-2 border-l-primary bg-primary/5",
         )}
       >
@@ -263,14 +311,17 @@ export function FxBoardTable({
               {row.series.length > 1 ? (
                 <MicroTrend data={row.series} tone="neutral" title={`${row.pair} trendi`} />
               ) : (
-                <span className="text-[10px] text-muted-foreground/70">yeterli geçmiş yok</span>
+                <span className="text-[10px] text-muted-foreground">yeterli geçmiş yok</span>
               )}
             </DenseTd>
           </>
         )}
         <DenseTd
           title={row.forecast?.title}
-          className={cn("truncate", row.forecast ? "text-foreground" : "text-muted-foreground/70")}
+          className={cn(
+            "truncate",
+            !row.forecast || row.forecast.expired ? "text-muted-foreground" : "text-foreground",
+          )}
         >
           {/* A row with no forecast keeps its dash rather than leaving the
               table. The row's presence says "we watch this pair"; the dash
@@ -306,7 +357,7 @@ export function FxBoardTable({
                   <tr>
                     <td
                       colSpan={6}
-                      className="px-3 py-1 text-center text-[9px] uppercase tracking-wider text-muted-foreground/60"
+                      className="px-3 py-1 text-center text-[10px] uppercase tracking-wider text-muted-foreground"
                     >
                       — ek canlı pariteler —
                     </td>

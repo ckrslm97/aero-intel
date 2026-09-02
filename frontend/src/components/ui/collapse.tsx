@@ -1,8 +1,8 @@
 "use client";
 
-import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import { AnimatePresence, motion } from "framer-motion";
 
-import { collapseSection, reduceVariants, useMeasuredHeight } from "@/lib/motion";
+import { collapseSection, useMeasuredHeight } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 
 /** Animated-height reveal for a capped list or a collapsed panel.
@@ -27,15 +27,18 @@ export function Collapse({
   children: React.ReactNode;
   className?: string;
 }) {
-  const reduceMotion = useReducedMotion();
   const [contentRef, measuredHeight] = useMeasuredHeight<HTMLDivElement>();
+  // No `useReducedMotion()` branch: the preference is applied once, at
+  // animation time, by <MotionConfig reducedMotion="user"> at the app root.
+  // Branching on it here produced different markup on the server and the
+  // client -- see components/motion/motion-preferences.tsx.
   const variants = collapseSection(measuredHeight);
 
   return (
     <AnimatePresence initial={false}>
       {open && (
         <motion.div
-          variants={reduceMotion ? reduceVariants(variants) : variants}
+          variants={variants}
           initial="hidden"
           animate="show"
           exit="exit"

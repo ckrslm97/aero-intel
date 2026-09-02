@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -83,9 +83,19 @@ describe("AlertCenter", () => {
     apiFetch.mockReset();
   });
 
-  /** The section opens CLOSED, so every row assertion has to expand it first. */
+  /** The section opens CLOSED, so every row assertion has to expand it first.
+   *
+   * The wait for `toBeEnabled()` is what makes this deterministic. The button
+   * is `disabled` until rows arrive, `findByRole` matches disabled buttons
+   * too, and `userEvent.click` on a disabled button is silently swallowed --
+   * so whenever the mocked promise had not yet flushed, the panel simply never
+   * opened and the row assertion failed with "Unable to find an element". Six
+   * of the seven tests here go through this helper, so all six were racing;
+   * over fifteen full runs it lost twice. */
   async function expand() {
-    await userEvent.click(await screen.findByRole("button", { name: /Genişlet/ }));
+    const button = await screen.findByRole("button", { name: /Genişlet/ });
+    await waitFor(() => expect(button).toBeEnabled());
+    await userEvent.click(button);
   }
 
   it("starts collapsed, showing counts rather than rows", async () => {
@@ -165,6 +175,33 @@ describe("AlertCenter", () => {
     await expand();
 
     expect(screen.getByText("TK Avrupa kampanyası bitiyor")).toBeInTheDocument();
+  });
+
+  it("refuses to print zeroes when BOTH streams failed", async () => {
+    // The regression this locks: `useDataSource` sets `loaded` on a failed
+    // request too, so a component branching on `loaded` alone rendered a dead
+    // endpoint as "0 KRİTİK · 0 YÜKSEK · 0 ORTA" -- the most reassuring
+    // sentence on the page, produced by knowing nothing.
+    routes({
+      alerts: new Error("API request failed: 500"),
+      risks: new Error("API request failed: 500"),
+    });
+    render(<AlertCenter />);
+
+    expect(await screen.findByText(/okunamadı/)).toBeInTheDocument();
+    expect(screen.queryByText(/0 KRİTİK/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/0 YÜKSEK/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Yeniden dene/ })).toBeInTheDocument();
+  });
+
+  it("marks the counts as partial when only one stream failed", async () => {
+    routes({ alerts: [campaignAlert()], risks: new Error("API request failed: 500") });
+    render(<AlertCenter />);
+
+    // The campaign count is real and printed; the band says what is missing
+    // from it, so "1 ORTA" is not read as the whole picture.
+    expect(await screen.findByText(/1 ORTA/)).toBeInTheDocument();
+    expect(screen.getByText(/Eksik: risk sinyalleri/)).toBeInTheDocument();
   });
 
   it("prints its zeroes rather than hiding the section", async () => {

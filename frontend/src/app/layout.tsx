@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 
 import { AppShell } from "@/components/layout/app-shell";
+import { MotionPreferences } from "@/components/motion/motion-preferences";
 import { QueryProvider } from "@/components/query-provider";
 import { ThemeProvider } from "@/components/theme-provider";
 import "./globals.css";
@@ -48,9 +49,9 @@ export default function RootLayout({
           disableTransitionOnChange
         >
           <QueryProvider>
-            
+            <MotionPreferences>
               <AppShell>{children}</AppShell>
-            
+            </MotionPreferences>
           </QueryProvider>
         </ThemeProvider>
       </body>

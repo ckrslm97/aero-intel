@@ -68,10 +68,21 @@ async function load<T>(path: string, init: RequestInit & { next?: { revalidate?:
  * out of the browser rather than added up from the cell specs:
  *
  *   1 Header              52  (+20 gap) ->  72
- *   2 Market Pulse       178  (+20 gap) -> 270
- *   3 KPI + Denge        287  (+20 gap) -> 577
- *   4 Günün Özeti        129  (+20 gap) -> 726
- *   5 Kur / FX  (heading + byline visible)  -> 804 = fold
+ *   2 Market Pulse       211  (+20 gap) -> 303
+ *   3 KPI + Denge        287  (+20 gap) -> 610
+ *   4 Günün Özeti        129  (+20 gap) -> 759
+ *   5 Kur / FX  (heading + rail visible)    -> 804 = fold
+ *
+ * Market Pulse costs 33px more than the previous measurement said, and the
+ * reason is worth knowing before anyone tries to win it back. Its cells were
+ * a hard `h-[104px]` wrapped around slots that add up to more than that, so
+ * flex was quietly crushing whichever child carried an `overflow: hidden`:
+ * the unit row rendered 8px tall inside its 12px box and clipped "RPK" and
+ * "$/varil" from below, and the annual cells' year labels fell outside the
+ * card entirely. The cells are now `min-h-[104px]` with unshrinkable slots and
+ * measure 138px. Section 3 did not move at all -- the KPI cells grew from a
+ * crushed 76px to 111px, but Sektör Dengesi beside them was already the taller
+ * column.
  *
  * So the fold carries: market state, the five KPIs, the sector balance, the
  * four signal tiles, and the FX section's heading. IATA's expectation is in
@@ -162,7 +173,15 @@ export default async function KokpitPage() {
       <section className="flex flex-col gap-2">
         <SectionHeader
           title="Market Pulse"
-          caption="IATA Küresel Görünüm (Haziran 2026) · yıllık · sektör geneli — canlı seriler Yahoo Finance, ~15 dk gecikmeli. Soldaki üç hücre yılda iki kez, sağdaki iki hücre 15 dakikada bir güncellenir. “MARKET” hücresi için rakip kapasite/pazar payı verisi bu sistemde yoktur; slot, havacılığın canlı fiyatlanan tek maliyet kalemine verilmiştir."
+          // The IATA edition comes from the payload, never from a literal in
+          // this file: `scope_tr` is built server-side off the seed's own
+          // publication date, so seeding a newer report moves this line, the
+          // cell badges and the chart's dashed tail together. A hard-coded
+          // "Haziran 2026" here would go on claiming the old edition after
+          // every one of them had moved.
+          caption={`${
+            annual?.scope_tr ?? "IATA Küresel Görünüm · sektör geneli · yıllık"
+          } — canlı seriler Yahoo Finance, ~15 dk gecikmeli. Soldaki üç hücre yılda iki kez, sağdaki iki hücre 15 dakikada bir güncellenir. “MARKET” hücresi için rakip kapasite/pazar payı verisi bu sistemde yoktur; slot, havacılığın canlı fiyatlanan tek maliyet kalemine verilmiştir. YAKIT hücresi küresel Brent ham petrol kontratıdır — şirketin hedge edilmiş yakıt maliyeti değildir.`}
           glowVar="var(--signal)"
         />
         <MarketPulseRow annual={annual} board={board} energy={energy} />
@@ -194,7 +213,7 @@ export default async function KokpitPage() {
       <section className="flex flex-col gap-2">
         <SectionHeader
           title="Günün Özeti"
-          caption="Dört ayrı sürücü, dört açık eşik — tek bir bileşik skor değil. Sayı ve yöntem her karonun ⓘ notunda."
+          caption="Dört ayrı sürücü, dört açık eşik — tek bir bileşik skor değil. Sayı, eşik ve yöntem karonun üzerine gelince görünür. Karolarda yön oku yoktur: bant bir ölçümün yönünü değil, bir eşiğin aşıldığını söyler."
           glowVar="var(--chart-4)"
         />
         <DailySummary signals={signals} />
@@ -214,7 +233,9 @@ export default async function KokpitPage() {
       <section className="flex flex-col gap-2">
         <SectionHeader
           title="IATA Görünümü"
-          caption="Kaynak: IATA Küresel Görünüm · Haziran 2026 · sektör geneli · yıllık · bölgesel kırılım yok."
+          caption={`Kaynak: ${
+            annual?.scope_tr ?? "IATA Küresel Görünüm · sektör geneli · yıllık"
+          } · bölgesel kırılım yok.`}
           glowVar="var(--chart-2)"
           action={annual ? { href: annual.source_url, label: "IATA kaynağı" } : undefined}
         />
@@ -246,7 +267,7 @@ export default async function KokpitPage() {
       <section className="flex flex-col gap-2">
         <SectionHeader
           title="Alert Merkezi"
-          caption="Kampanya uyarıları ve yüksek şiddetli risk sinyalleri, öncelik sırasıyla. Sıfır sayısı da bir bilgidir: bölüm boşken de sayaçlarını basar."
+          caption="Kampanya uyarıları ve yüksek şiddetli risk sinyalleri, öncelik sırasıyla. Sıfır sayısı da bir bilgidir: akışlar cevap verip boş döndüyse bölüm sayaçlarını yine de basar. Akış okunamadıysa sayaç yerine bunu söyler — sıfır, hiçbir zaman bir hatanın görüntüsü değildir."
           glowVar="var(--critical)"
         />
         <AlertCenter />

@@ -47,7 +47,9 @@ export default defineConfig({
         // error on an `include` entry that no longer exists -- it silently
         // stops counting it, and coverage drops with no failure anywhere.
         "src/components/kokpit/alert-center.tsx",
+        "src/components/kokpit/competitive-pulse.tsx",
         "src/components/kokpit/daily-summary.tsx",
+        "src/components/kokpit/kpi-strip.tsx",
         "src/components/kokpit/market-pulse-row.tsx",
         "src/components/kokpit/fx-board-table.tsx",
         "src/components/kokpit/sector-balance.tsx",

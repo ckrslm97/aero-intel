@@ -1,4 +1,4 @@
-import { ANNUAL_KIND_LABELS_TR } from "@/lib/cockpit";
+import { ANNUAL_KIND_LABELS_TR, ANNUAL_KIND_SUFFIX } from "@/lib/cockpit";
 import type { AnnualPoint } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -32,12 +32,6 @@ export function buildSlots(points: AnnualPoint[], count = SLOT_COUNT): Slot[] {
     return { year, point: byYear.get(year) ?? null };
   });
 }
-
-const KIND_SUFFIX: Record<AnnualPoint["kind"], string> = {
-  actual: "",
-  estimate: "G",
-  forecast: "T",
-};
 
 /**
  * An ANNUAL series drawn as discrete points -- because it is discrete.
@@ -134,7 +128,7 @@ export function YearDots({
           <div key={slot.year} className="absolute inset-y-0" style={{ left: `${slotCentreX(index)}%` }}>
             {slot.point ? (
               <span
-                title={`${slot.year}${KIND_SUFFIX[slot.point.kind]} · ${slot.point.value.toLocaleString(
+                title={`${slot.year}${ANNUAL_KIND_SUFFIX[slot.point.kind]} · ${slot.point.value.toLocaleString(
                   "tr-TR",
                 )}${unitLabel ? ` ${unitLabel}` : ""} · ${ANNUAL_KIND_LABELS_TR[slot.point.kind]}`}
                 style={{ top: `${yPct(slot.point.value)}%` }}
@@ -161,10 +155,14 @@ export function YearDots({
         {slots.map((slot) => (
           <span
             key={slot.year}
-            className="flex-1 text-center text-[9px] leading-none tabular-nums text-muted-foreground/70"
+            // 10px at full opacity, not 9px at 70%. The year is the label
+            // that tells a reader an IATA forecast from a measured year, and
+            // `text-muted-foreground/70` measured 2,84:1 on the light theme --
+            // under AA, for the one caption the dots cannot do without.
+            className="flex-1 text-center text-[10px] leading-none tabular-nums text-muted-foreground"
           >
             {String(slot.year).slice(2)}
-            {slot.point ? KIND_SUFFIX[slot.point.kind] : ""}
+            {slot.point ? ANNUAL_KIND_SUFFIX[slot.point.kind] : ""}
           </span>
         ))}
       </div>

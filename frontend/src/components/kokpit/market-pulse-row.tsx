@@ -1,6 +1,7 @@
 import { MicroTrend, type MicroTrendTone } from "@/components/charts/micro-trend";
 import { YearDots } from "@/components/charts/year-dots";
 import { Delta } from "@/components/ui/delta";
+import { ANNUAL_KIND_SUFFIX, annualScopeLabel, freshnessOf } from "@/lib/cockpit";
 import { formatCompactNumber, formatRate, formatUtcTime } from "@/lib/format";
 import type {
   AnnualPoint,
@@ -66,12 +67,6 @@ function annualValue(value: number, unit: string): string {
   return formatCompactNumber(value);
 }
 
-const KIND_SUFFIX: Record<AnnualPoint["kind"], string> = {
-  actual: "",
-  estimate: "G",
-  forecast: "T",
-};
-
 function signedPoints(diff: number): string {
   const sign = diff > 0 ? "+" : diff < 0 ? "-" : "";
   return `${sign}${Math.abs(diff).toFixed(1).replace(".", ",")}pp`;
@@ -89,9 +84,7 @@ function annualDelta(series: AnnualSeries): PulseDelta {
   if (!latest || !previous) {
     return { scope: "yıllık", pct: null };
   }
-  const scope = `${String(previous.year).slice(2)}→${String(latest.year).slice(2)}${
-    KIND_SUFFIX[latest.kind]
-  }`;
+  const scope = annualScopeLabel(previous, latest);
   if (series.unit === "%") {
     const diff = latest.value - previous.value;
     return { scope, pct: diff, valueLabel: signedPoints(diff) };
@@ -109,22 +102,42 @@ const ANNUAL_CELLS: { key: string; label: string }[] = [
   { key: "load_factor", label: "DOLULUK" },
 ];
 
-const LIVE_BADGE = "CANLI · 15dk";
+/** A live cell's badge is EARNED, not printed.
+ *
+ * "CANLI" used to be a constant: the cell said it whether the reading was
+ * fifteen minutes or two days old, while the page header three centimetres
+ * above correctly said "Gecikmeli · son 16:50" off the same timestamps. One
+ * screen, two answers to "is this current?". `freshnessOf` is the header's own
+ * rule (30 minutes, i.e. one missed cron run) and now decides both. */
+function liveBadge(asOf: string | null | undefined, suffix: string, now?: Date): string {
+  if (!asOf) return "VERİ YOK";
+  const fresh = freshnessOf(asOf, now ?? new Date());
+  return fresh.live ? `CANLI${suffix}` : "GECİKMELİ";
+}
 
 function annualCell(
   { key, label }: { key: string; label: string },
   series: AnnualSeries | undefined,
+  scopeTr: string | null,
 ): PulseCell {
   const base = {
     key,
     label,
     cadence: "annual" as const,
-    badge: "IATA 2026T",
+    // No YEAR in the fallback badge. It used to read "IATA 2026T" even when
+    // the series had not loaded at all -- a cell printing "—" for its value
+    // while asserting which edition the missing number came from.
+    badge: "IATA",
     asOfLabel: null,
     tone: "neutral" as const,
     series: [],
-    title:
-      "IATA Küresel Görünüm (Haziran 2026) · yıllık · sektör geneli · TK verisi değil",
+    // The scope sentence comes from the payload (`AnnualSeriesBoardOut.scope_tr`,
+    // itself derived from the seed's publication date) rather than from a
+    // hard-coded "Haziran 2026" here. Seed a newer IATA edition and the badge
+    // year moves with the data; a literal in this file would not.
+    title: scopeTr
+      ? `${scopeTr} · TK verisi değil`
+      : "IATA Küresel Görünüm · sektör geneli · yıllık · TK verisi değil",
   };
   const latest = series?.points[series.points.length - 1];
   if (!series || !latest) {
@@ -137,10 +150,9 @@ function annualCell(
       emptyNote: "IATA serisi yüklenmedi",
     };
   }
-  const badgeYear = `IATA ${latest.year}${KIND_SUFFIX[latest.kind]}`;
   return {
     ...base,
-    badge: badgeYear || base.badge,
+    badge: `IATA ${latest.year}${ANNUAL_KIND_SUFFIX[latest.kind]}`,
     value: annualValue(latest.value, series.unit),
     // A percentage is printed as "%84,0" with nothing after it; the unit row
     // still occupies its 12px so the five cells stay the same height.
@@ -167,9 +179,12 @@ export function buildPulseCells(
   annual: AnnualSeriesBoardOut | null,
   board: KokpitFxBoardOut | null,
   energy: EnergyBoardOut | null,
+  now?: Date,
 ): PulseCell[] {
   const byKey = new Map((annual?.series ?? []).map((entry) => [entry.metric_key, entry]));
-  const cells = ANNUAL_CELLS.map((spec) => annualCell(spec, byKey.get(spec.key)));
+  const cells = ANNUAL_CELLS.map((spec) =>
+    annualCell(spec, byKey.get(spec.key), annual?.scope_tr ?? null),
+  );
 
   // --- cell 4: the anchor rate -------------------------------------------
   const usdTry = (board?.pairs ?? []).find((pair) => pair.currency_pair === "USD/TRY");
@@ -177,7 +192,7 @@ export function buildPulseCells(
     key: "fx_usd_try",
     label: "KUR",
     cadence: "live",
-    badge: LIVE_BADGE,
+    badge: liveBadge(usdTry?.as_of, " · 15dk", now),
     asOfLabel: formatUtcTime(usdTry?.as_of),
     // Four decimals for a cross where the fourth digit is the one that moves,
     // two for a TRY or JPY rate where it is not -- the same precision rule the
@@ -213,7 +228,7 @@ export function buildPulseCells(
     key: "oil_price",
     label: "YAKIT · BRENT",
     cadence: "live",
-    badge: "CANLI",
+    badge: liveBadge(brent?.as_of, "", now),
     asOfLabel: formatUtcTime(brent?.as_of),
     value: brent?.value != null ? formatRate(brent.value, 2) : null,
     unit: brent?.unit ?? null,
@@ -240,11 +255,18 @@ export function buildPulseCells(
 
 function Cell({ cell, seam }: { cell: PulseCell; seam: boolean }) {
   const isLive = cell.cadence === "live";
+  // `min-h` and `shrink-0` throughout, where this was a hard `h-[104px]` with
+  // shrinkable children. The five slots below add up to more than 104px once
+  // the annual cells' YearDots (20px of dots + its own year labels) is counted,
+  // so flex was silently compressing whichever child had an `overflow: hidden`
+  // on it -- the unit row rendered 8px tall inside its 12px box and clipped
+  // "RPK" and "$/varil" from below. The row still stands at one height: the
+  // grid stretches all five to the tallest.
   return (
     <div
       title={cell.title}
       className={cn(
-        "relative flex h-[104px] flex-col justify-between rounded-lg border border-border bg-card/60 px-3 py-2.5",
+        "relative flex min-h-[104px] flex-col justify-between gap-1 rounded-lg border border-border bg-card/60 px-3 py-2.5",
         // The seam between the two cadences. Only at the breakpoint where the
         // five cells actually sit in one row -- below that they wrap and a
         // vertical rule would divide the wrong pair.
@@ -252,41 +274,45 @@ function Cell({ cell, seam }: { cell: PulseCell; seam: boolean }) {
           "xl:before:absolute xl:before:-left-1.5 xl:before:top-1 xl:before:bottom-1 xl:before:w-px xl:before:bg-border xl:before:content-['']",
       )}
     >
-      <div className="flex h-[14px] items-center gap-1.5">
+      <div className="flex shrink-0 items-center gap-1.5">
         <span className="truncate text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
           {cell.label}
         </span>
-        <span className="ml-auto flex shrink-0 items-center gap-1 text-[9px] text-muted-foreground/80">
+        <span className="ml-auto flex shrink-0 items-center gap-1 text-[10px] text-muted-foreground">
           {isLive ? (
             <span aria-hidden className="size-1 rounded-full bg-signal" />
           ) : (
             // A filled square, not a dot: the annual cells must not borrow the
             // live cells' vocabulary. No glow here either -- glow means live.
-            <span aria-hidden className="size-1 bg-muted-foreground/70" />
+            <span aria-hidden className="size-1 bg-muted-foreground" />
           )}
           {cell.badge}
           {cell.asOfLabel && <span className="tabular-nums">{cell.asOfLabel}</span>}
         </span>
       </div>
 
-      <div className="flex h-[26px] items-center">
+      <div className="flex shrink-0 items-center">
         <span
           className={cn(
             "text-[26px] font-semibold leading-none tracking-tight tabular-nums",
             // Only a live reading is allowed to glow.
             isLive && cell.value !== null && "dark:text-glow",
-            cell.value === null && "text-muted-foreground/60",
+            cell.value === null && "text-muted-foreground",
           )}
         >
           {cell.value ?? "—"}
         </span>
       </div>
 
-      <div className="h-[12px] truncate text-[9px] leading-[12px] text-muted-foreground">
+      {/* A fixed 10px even when empty. A percentage prints as "%84,0" with no
+          unit after it, and letting that cell's unit row collapse to zero
+          would slide its delta and its dots out of line with the four cells
+          beside it -- the row is a comparison, so the slots have to agree. */}
+      <div className="h-[10px] shrink-0 truncate text-[10px] leading-none text-muted-foreground">
         {cell.unit ?? ""}
       </div>
 
-      <div className="flex h-[14px] items-center gap-2.5">
+      <div className="flex shrink-0 items-center gap-2.5">
         {cell.deltas.map((delta) => (
           <Delta
             key={delta.scope}
@@ -298,13 +324,17 @@ function Cell({ cell, seam }: { cell: PulseCell; seam: boolean }) {
         ))}
       </div>
 
-      <div className="h-5">
+      {/* The trend slot. Tall enough for YearDots (dots plus its own year
+          labels) so the annual cells no longer overflow their card; the live
+          cells' 20px line and the empty note sit inside the same box, so the
+          five cells still line up row for row. */}
+      <div className="flex h-8 shrink-0 items-center">
         {cell.emptyNote ? (
-          <span className="block text-[9px] leading-5 text-muted-foreground/70">
+          <span className="block text-[10px] leading-none text-muted-foreground">
             {cell.emptyNote}
           </span>
         ) : cell.cadence === "annual" ? (
-          <YearDots points={cell.points} unitLabel={cell.unit ?? undefined} />
+          <YearDots points={cell.points} unitLabel={cell.unit ?? undefined} className="w-full" />
         ) : (
           <MicroTrend data={cell.series} tone={cell.tone} title={`${cell.label} trendi`} />
         )}

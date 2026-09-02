@@ -99,7 +99,11 @@ export function Delta({
     return (
       <span
         title={emptyTitle}
-        className={cn("text-[11px] text-muted-foreground/70 tabular-nums", className)}
+        // Full-strength muted, not `/70`: on the light surface that alpha
+        // measured 2,84:1, and this is the em dash that stands in for a number
+        // -- the reader has to be able to see that it is a dash and not a
+        // missing render.
+        className={cn("text-[11px] text-muted-foreground tabular-nums", className)}
       >
         {scope ? `${scope} ` : ""}—
       </span>

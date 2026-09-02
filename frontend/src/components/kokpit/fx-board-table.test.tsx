@@ -1,8 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it, vi } from "vitest";
 
 import type { FxForecastOut, KokpitFxBoardOut, KokpitFxPairOut } from "@/lib/types";
 
-import { buildFxRows, nearestForecast } from "./fx-board-table";
+import { FxBoardTable, buildFxRows, nearestForecast } from "./fx-board-table";
+
+// The forecast chart mounts ECharts and fetches a year of history; neither is
+// what this file is about, and jsdom has no layout for the former.
+vi.mock("./fx-forecast-chart-lazy", () => ({
+  FxForecastChart: ({ pair }: { pair: string }) => <div data-testid="chart">{pair}</div>,
+}));
 
 const pair = (currency_pair: string, value: number, overrides: Partial<KokpitFxPairOut> = {}): KokpitFxPairOut => ({
   currency_pair,
@@ -172,5 +180,76 @@ describe("nearestForecast", () => {
 
   it("returns nothing for a pair nobody has published on", () => {
     expect(nearestForecast([forecast()], "USD/CNY", NOW)).toBeNull();
+  });
+
+  it("prefers a target date in the FUTURE over a nearer one already spent", () => {
+    // "Closest in absolute time" quietly admits the past. From 2026-11-22 the
+    // seeded Danske row (target 2026-11-21) sits a day behind while JPMorgan's
+    // live 2026-12-31 target sits weeks ahead -- and the column, headed
+    // "Tahmin", would have printed the spent one.
+    const after = new Date("2026-11-22T00:00:00Z").getTime();
+    const cell = nearestForecast(
+      [
+        forecast({ institution: "Danske Bank", value: 52, target_date: "2026-11-21" }),
+        forecast({ institution: "JPMorgan", value: 55, target_date: "2026-12-31" }),
+      ],
+      "USD/TRY",
+      after,
+    );
+    expect(cell?.label).toContain("JPMorgan");
+    expect(cell?.expired).toBe(false);
+  });
+
+  it("labels the last published figure as spent when nothing ahead remains", () => {
+    // Still shown -- "the last thing anyone published" is information -- but it
+    // can never be read as a current expectation.
+    const after = new Date("2027-06-01T00:00:00Z").getTime();
+    const cell = nearestForecast([forecast()], "USD/TRY", after);
+    expect(cell?.expired).toBe(true);
+    expect(cell?.label).toContain("vadesi geçti");
+    expect(cell?.title).toContain("ileri tarihli yayımlanmış tahmin kalmadı");
+  });
+
+  it("never prints the DERIVED target date, only the institution's own wording", () => {
+    // `target_date` exists so the chart has an x coordinate; the institution
+    // never published it (see FxForecastOut in lib/types.ts).
+    const cell = nearestForecast([forecast()], "USD/TRY", NOW);
+    expect(cell?.label).not.toContain("2026-11-21");
+    expect(cell?.label).not.toContain("Kas");
+  });
+});
+
+describe("FxBoardTable", () => {
+  it("carries each row's own reading time in its tooltip", () => {
+    // `asOfLabel` was computed for every row and then rendered nowhere, so the
+    // nine rows shared one collective freshness stamp in the page header and a
+    // pair whose cron run had failed looked exactly as current as one whose
+    // had not.
+    const rows = buildFxRows(board(ALL_PAIRS), [], NOW);
+    expect(rows[0].title).toContain("19:50 UTC");
+  });
+
+  it("lets the keyboard change the charted pair", async () => {
+    // The section byline promises every reader that clicking a row switches
+    // the chart. The row used to be a bare <tr onClick>: not focusable, so for
+    // a keyboard or screen-reader user no pair but the default was reachable.
+    render(
+      <FxBoardTable
+        board={board(ALL_PAIRS)}
+        forecasts={[
+          forecast(),
+          forecast({ currency_pair: "EUR/USD", value: 1.12, institution: "JPMorgan" }),
+        ]}
+      />,
+    );
+    expect(screen.getByTestId("chart")).toHaveTextContent("USD/TRY");
+
+    const row = screen.getByText("EUR/USD").closest("tr")!;
+    expect(row).toHaveAttribute("tabindex", "0");
+    row.focus();
+    await userEvent.keyboard("{Enter}");
+
+    expect(screen.getByTestId("chart")).toHaveTextContent("EUR/USD");
+    expect(row).toHaveAttribute("aria-pressed", "true");
   });
 });

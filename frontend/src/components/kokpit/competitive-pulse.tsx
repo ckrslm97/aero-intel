@@ -1,6 +1,6 @@
 "use client";
 
-import { Megaphone, Route, TrendingUp } from "lucide-react";
+import { Megaphone, RotateCw, Route, TrendingUp } from "lucide-react";
 import Link from "next/link";
 import { useCallback } from "react";
 
@@ -15,6 +15,32 @@ import type { InsightsOut, NetworkSignalGroup, PromotionNewCountOut } from "@/li
 const REGION_NAME = new Map<string, string>(
   worldRegions.map((region) => [region.slug, region.name]),
 );
+
+/** "The stream did not answer" -- which is NOT "the stream answered zero".
+ *
+ * All three cells used to branch on `loaded` alone and then read
+ * `data?.count ?? 0` / an empty array, so a 500 from any of the three
+ * endpoints printed a confident "0" and "Son 48 saatte yeni kampanya yok."
+ * A count is a claim about the world; an error is a claim about us. The page's
+ * whole argument is that it never prints the first when it only knows the
+ * second. `SignalStream` already had this right with `DataSourceError`; this
+ * is the same contract at cell scale, where a full error panel would not fit.
+ */
+function SourceDown({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+      <span>Kaynak okunamadı.</span>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="flex items-center gap-1 rounded border border-border px-1.5 py-px font-medium transition-colors hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+      >
+        <RotateCw className="size-2.5" aria-hidden />
+        Yeniden dene
+      </button>
+    </div>
+  );
+}
 
 function Cell({
   icon: Icon,
@@ -86,9 +112,8 @@ export function CompetitivePulse() {
   const insights = useDataSource(insightsFetcher, []);
   const routes = useDataSource(routesFetcher, []);
 
-  const movers = (insights.data?.airline_momentum ?? [])
-    .filter((mover) => mover.delta !== 0)
-    .slice(0, 3);
+  const momentum = insights.data?.airline_momentum ?? [];
+  const movers = momentum.filter((mover) => mover.delta !== 0).slice(0, 3);
   const routeGroups = routes.data ?? [];
   const routeTotal = routeGroups.reduce((sum, group) => sum + group.count, 0);
   const firstRoute = routeGroups.find((group) => group.articles.length > 0);
@@ -98,22 +123,24 @@ export function CompetitivePulse() {
       <Cell icon={Megaphone} title="48 saatte kampanya" href="/kampanyalar">
         {!newCount.loaded ? (
           <Skeleton className="h-6 w-full rounded" />
+        ) : !newCount.data ? (
+          <SourceDown onRetry={newCount.retry} />
         ) : (
           <div className="flex items-center gap-2">
             <span className="text-xl font-semibold leading-none tabular-nums">
-              {newCount.data?.count ?? 0}
+              {newCount.data.count}
             </span>
             <div className="flex min-w-0 flex-wrap gap-1">
-              {(newCount.data?.airline_codes ?? []).slice(0, 4).map((code) => (
+              {newCount.data.airline_codes.slice(0, 4).map((code) => (
                 <span
                   key={code}
-                  className="flex items-center gap-0.5 rounded-full border border-border px-1 text-[9px]"
+                  className="flex items-center gap-0.5 rounded-full border border-border px-1 text-[10px]"
                 >
                   <AirlineLogo code={code} className="size-2.5" />
                   {code}
                 </span>
               ))}
-              {(newCount.data?.airline_codes ?? []).length === 0 && (
+              {newCount.data.airline_codes.length === 0 && (
                 <span className="text-[10px] text-muted-foreground">
                   Son 48 saatte yeni kampanya yok.
                 </span>
@@ -126,8 +153,17 @@ export function CompetitivePulse() {
       <Cell icon={TrendingUp} title="Haber momentumu (7g vs 7g)" href="/biz">
         {!insights.loaded ? (
           <Skeleton className="h-6 w-full rounded" />
+        ) : !insights.data ? (
+          <SourceDown onRetry={insights.retry} />
         ) : movers.length === 0 ? (
-          <p className="text-[10px] text-muted-foreground">Momentum verisi yok.</p>
+          // "Measured, and nothing moved" and "we have no measurement" are
+          // different facts and now read differently. The old single sentence
+          // collapsed them.
+          <p className="text-[10px] text-muted-foreground">
+            {momentum.length === 0
+              ? "Momentum verisi yok."
+              : "Bu hafta belirgin bir hareket yok."}
+          </p>
         ) : (
           <ul className="flex flex-wrap gap-x-3 gap-y-0.5">
             {movers.map((mover) => (
@@ -146,12 +182,19 @@ export function CompetitivePulse() {
       <Cell icon={Route} title="Yeni rota sinyali (30g)" href="/hublar">
         {!routes.loaded ? (
           <Skeleton className="h-6 w-full rounded" />
+        ) : !routes.data ? (
+          <SourceDown onRetry={routes.retry} />
         ) : !firstRoute ? (
           <p className="text-[10px] text-muted-foreground">Yeni rota sinyali yok.</p>
         ) : (
           <div className="flex flex-col gap-0.5">
+            {/* The count is WORLDWIDE; the region belongs to the headline
+                underneath it. They used to share one line -- "14 · Avrupa" --
+                which reads as "fourteen new route signals in Europe" and was
+                never true: 14 is every region added up, Europe is merely the
+                first group that had an article. Two scopes, two lines. */}
             <span className="text-[11px] tabular-nums">
-              <b>{routeTotal}</b> · {REGION_NAME.get(firstRoute.region ?? "") ?? "Diğer"}
+              <b>{routeTotal}</b> sinyal · 30g · tüm bölgeler
             </span>
             <a
               href={firstRoute.articles[0].url}
@@ -159,7 +202,7 @@ export function CompetitivePulse() {
               rel="noopener noreferrer"
               className="truncate rounded text-[10px] text-muted-foreground hover:text-primary hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
             >
-              {firstRoute.articles[0].headline}
+              {REGION_NAME.get(firstRoute.region ?? "") ?? "Diğer"} · {firstRoute.articles[0].headline}
             </a>
           </div>
         )}
