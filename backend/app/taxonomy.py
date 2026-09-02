@@ -27,6 +27,20 @@ class CategoryDef:
     subcategories: list[SubcategoryDef] = field(default_factory=list)
 
 
+# A note that every keyword list below depends on, and that cost three dead
+# keywords before it was written down: the scorer matches against
+# app.pipeline.hashing.normalize_text(text), which lowercases and then replaces
+# every character outside [a-z0-9\s] with a space. So "add-on" in the article
+# arrives as "add on", and the keyword "add-on" -- escaped into `\badd\-on\b` --
+# could never match it. Hyphens, apostrophes and Turkish letters are all in that
+# class: "gecikme" is matchable, "gecikmeler" is a different word, and
+# "kapasitesi"/"artışı" arrive as "kapasitesi"/"art" respectively.
+#
+# Two rules follow. Write phrases the way normalize_text leaves them (spaces,
+# never punctuation), and keep Turkish keywords to ASCII-only stems that stand
+# alone as words. test_taxonomy_keywords.py enforces the first one.
+
+
 # Order matters: this is also the default display/ranking order (Revenue
 # Management first, per the RM-department focus of this portal).
 CATEGORIES: list[CategoryDef] = [
@@ -41,12 +55,27 @@ CATEGORIES: list[CategoryDef] = [
             "revenue per", "load factors", "pricing power", "demand outlook", "rpk", "ask",
             "upsell", "bundling", "fare class", "revenue growth", "unbundling",
         ],
+        # The desk's own nine beats, in reading order. Order is load-bearing:
+        # subcategorize() keeps the first slug to reach the top score, so a
+        # phrase that could plausibly belong to two of them is written into
+        # exactly one -- "schedule change" is capacity (a schedule is where
+        # capacity is expressed), not competitor, even though a rival's
+        # schedule change is competitive news. Repeating it in both lists would
+        # not make it reachable from the later one; it would only make the
+        # tie-break, rather than the taxonomy, decide.
         subcategories=[
             SubcategoryDef(
                 "competitor",
                 [
-                    "competitor", "rival", "undercut", "market share", "competition",
-                    "compete", "vs ", "battle",
+                    "competitor", "competitors", "rival", "rivals", "undercut", "undercuts",
+                    "market share", "competition", "compete", "vs ", "battle",
+                    # The owner's RAKIP beat is wider than the word "rival": a
+                    # carrier entering or leaving a market, or rebuilding a hub,
+                    # is a competitive move whether or not the copy says so.
+                    "market entry", "market exit", "new entrant", "enters the market",
+                    "exits the market", "pulls out of", "hub strategy", "network strategy",
+                    "network change", "head to head", "market leader", "gains share",
+                    "loses share", "rakip", "rekabet",
                     # NOTE: rival airline NAMES deliberately do not live here.
                     # They were added in round 5 so rival stories would surface,
                     # but any article merely mentioning a carrier landed under
@@ -65,8 +94,12 @@ CATEGORIES: list[CategoryDef] = [
             SubcategoryDef(
                 "pricing",
                 [
-                    "fare", "pricing", "price hike", "price cut", "dynamic pricing", "airfare",
-                    "ticket price", "cheaper", "expensive", "fare war", "seat sale", "discount",
+                    "fare", "fares", "pricing", "price hike", "price cut", "price increase",
+                    "dynamic pricing", "airfare", "airfares", "ticket price", "ticket prices",
+                    "cheaper", "expensive", "fare war", "price war", "seat sale", "discount",
+                    "fare increase", "fare cut", "raises fares", "cuts fares", "lowers fares",
+                    "base fare", "surcharge", "fuel surcharge", "fare level", "fare structure",
+                    "fiyat", "zam", "ucuz",
                 ],
             ),
             SubcategoryDef(
@@ -76,21 +109,83 @@ CATEGORIES: list[CategoryDef] = [
                 [
                     "promotion", "promo code", "promotional fare", "flash sale", "fare sale",
                     "seat sale", "special offer", "discount code", "black friday",
-                    "kampanya", "indirim",
+                    "cyber monday", "summer sale", "winter sale", "limited time offer",
+                    "campaign fare", "promo fare", "kampanya", "indirim",
+                ],
+            ),
+            # TALEP and KAPASİTE were one slug ("demand_capacity") and answered
+            # two different questions with one word. A desk reading "bookings to
+            # Europe up 12%" is looking at what the market wants; one reading
+            # "third daily frequency on IST-LHR" is looking at what a carrier
+            # supplies -- opposite sides of the same trade, and the one thing an
+            # RM analyst most needs the newspaper to keep apart. Splitting them
+            # is why this PR exists; the old combined slug is retired, not
+            # aliased, and `python -m app.cli reclassify` re-files the history.
+            SubcategoryDef(
+                "demand",
+                [
+                    "demand", "demand trend", "demand trends", "booking trend", "booking trends",
+                    "forward bookings", "advance bookings", "bookings", "booking momentum",
+                    "passenger demand", "travel demand", "leisure travel", "business travel",
+                    "corporate travel", "consumer behaviour", "consumer behavior",
+                    "seasonal demand", "summer demand", "peak demand", "demand recovery",
+                    "demand growth", "soft demand", "weak demand", "strong demand",
+                    "pent up demand", "traffic growth", "talep",
                 ],
             ),
             SubcategoryDef(
-                "demand_capacity",
-                ["demand", "capacity", "overbooking", "forecast", "bookings", "traffic growth", "seats"],
+                "capacity",
+                [
+                    "capacity", "capacity increase", "capacity cut", "capacity growth",
+                    "capacity reduction", "capacity discipline", "adds capacity",
+                    "seat capacity", "available seat", "seats", "seat count", "frequency",
+                    "frequencies", "frequency increase", "additional frequency",
+                    "extra flights", "adds flights", "additional flights", "daily frequency",
+                    "schedule change", "route suspension", "suspends route", "aircraft deployment",
+                    "deploys", "redeploy", "overbooking", "kapasite", "ek sefer", "tarife",
+                ],
             ),
-            SubcategoryDef("load_factor", ["load factor", "seat factor", "occupancy", "load factors"]),
+            SubcategoryDef(
+                "load_factor",
+                [
+                    "load factor", "load factors", "seat factor", "occupancy",
+                    "occupancy rate", "passenger load factor", "plf", "doluluk",
+                ],
+            ),
             SubcategoryDef(
                 "ancillary",
-                ["ancillary", "baggage fee", "seat selection", "upsell", "bundling", "extra fee", "add-on"],
+                [
+                    "ancillary", "ancillary revenue", "ancillary income", "baggage fee",
+                    "baggage fees", "seat selection", "seat fee", "paid seat", "extra legroom",
+                    "priority boarding", "upsell", "bundling", "unbundling", "extra fee",
+                    # "add on", not "add-on": see the normalize_text note above --
+                    # the hyphenated spelling was unmatchable for as long as it
+                    # was in this list.
+                    "add on", "a la carte", "onboard sales", "loyalty revenue",
+                    "ek gelir", "bagaj",
+                ],
             ),
             SubcategoryDef(
                 "distribution",
-                ["ndc", "distribution", "gds", "direct booking", "ota", "travel agent", "booking channel"],
+                [
+                    "ndc", "distribution", "gds", "direct booking", "direct channel", "ota",
+                    "travel agent", "travel agency", "booking channel", "distribution cost",
+                    "offer and order", "one order", "airline retailing", "retailing", "api",
+                    "amadeus", "sabre", "travelport", "metasearch", "dynamic offer", "acente",
+                ],
+            ),
+            # FORECASTING is new: the desk plans against next season, and a
+            # forecast revision was previously filed under demand alongside the
+            # actuals it revises, which reads as if it had already happened.
+            SubcategoryDef(
+                "forecasting",
+                [
+                    "forecast", "forecasts", "forecasting", "forecast revision",
+                    "demand forecast", "revenue forecast", "capacity forecast",
+                    "traffic forecast", "industry forecast", "market outlook",
+                    "demand outlook", "revenue outlook", "capacity outlook",
+                    "industry outlook", "projection", "projections", "tahmin", "beklenti",
+                ],
             ),
         ],
     ),
@@ -147,12 +242,12 @@ CATEGORIES: list[CategoryDef] = [
             "revenue", "profit", "earnings", "stock", "shares", "ipo", "quarterly", "loss", "margin",
             "results", "financial", "guidance", "outlook", "investor", "dividend", "debt",
             "bankruptcy", "chapter 11", "merger", "acquisition", "stake", "valuation",
-            "net income", "ebit", "q1", "q2", "q3", "q4", "full-year", "billion", "profitability",
+            "net income", "ebit", "q1", "q2", "q3", "q4", "full year", "billion", "profitability",
         ],
         subcategories=[
             SubcategoryDef(
                 "results",
-                ["earnings", "quarterly", "profit", "loss", "results", "net income", "ebit", "full-year"],
+                ["earnings", "quarterly", "profit", "loss", "results", "net income", "ebit", "full year"],
             ),
             SubcategoryDef(
                 "equity", ["stock", "shares", "ipo", "market cap", "investor", "dividend", "stake", "shareholder"]
@@ -193,6 +288,94 @@ CATEGORIES: list[CategoryDef] = [
             "airport capacity", "new terminal", "airport opens", "ground handling",
             "security checkpoint", "customs", "passenger experience", "lounge",
         ],
+        # Havalimanı had no subcategories at all, which was survivable while it
+        # was one tab among six and is not now that it is one of the paper's
+        # three sections: every airport story landed in one undifferentiated
+        # pile, and a slot decision at LHR read the same as a lounge refurb.
+        # These nine are the owner's beats, and between them they give every
+        # keyword in the category list above somewhere specific to land.
+        subcategories=[
+            SubcategoryDef(
+                "slot",
+                [
+                    "slot", "slots", "slot allocation", "slot coordination", "slot pair",
+                    "slot swap", "slot waiver", "slot rules", "slot coordinator",
+                    "level 3 airport", "use it or lose it",
+                ],
+            ),
+            # Compound phrases only, deliberately: bare "capacity" is the single
+            # most common word in an airport story and would have swallowed the
+            # terminal, runway and congestion beats below. The Turkish stem is
+            # the exception -- "kapasite" standing alone in Turkish copy really
+            # is about capacity, and Turkish agglutination gives us no compound
+            # that survives normalize_text.
+            SubcategoryDef(
+                "airport_capacity",
+                [
+                    "airport capacity", "capacity constraint", "capacity constraints",
+                    "capacity crunch", "capacity cap", "capacity limit", "declared capacity",
+                    "handling capacity", "annual capacity", "passenger capacity",
+                    "capacity shortfall", "kapasite",
+                ],
+            ),
+            SubcategoryDef(
+                "terminal",
+                [
+                    "terminal", "new terminal", "terminal expansion", "terminal building",
+                    "concourse", "pier", "boarding gate", "check in hall", "satellite terminal",
+                    "yeni terminal",
+                ],
+            ),
+            SubcategoryDef(
+                "infrastructure",
+                [
+                    "runway", "new runway", "third runway", "second runway", "taxiway", "apron",
+                    "stand", "infrastructure", "expansion project", "expansion plan",
+                    "construction", "modernisation", "modernization", "refurbishment",
+                    "master plan", "pist",
+                ],
+            ),
+            SubcategoryDef(
+                "disruption",
+                [
+                    "congestion", "congested", "disruption", "disruptions", "delays",
+                    "closure", "closed", "shutdown", "outage", "power outage", "restriction",
+                    "restrictions", "flight cap", "queues", "overcrowding", "bottleneck",
+                    "gecikme", "aksama",
+                ],
+            ),
+            SubcategoryDef(
+                "traffic",
+                [
+                    "passenger traffic", "passenger numbers", "passengers handled",
+                    "throughput", "record traffic", "traffic figures", "cargo traffic",
+                    "cargo volume", "tonnage", "footfall", "kargo",
+                ],
+            ),
+            SubcategoryDef(
+                "new_service",
+                [
+                    "new route", "new routes", "new service", "new airline", "new carrier",
+                    "airline entry", "starts flights", "launches flights", "adds airline",
+                    "hub development", "new base", "base opening", "yeni hat",
+                ],
+            ),
+            SubcategoryDef(
+                "ground_handling",
+                [
+                    "ground handling", "handling agent", "baggage handling", "baggage system",
+                    "de icing", "ramp", "turnaround", "pushback", "yer hizmetleri",
+                ],
+            ),
+            SubcategoryDef(
+                "passenger_experience",
+                [
+                    "passenger experience", "lounge", "security checkpoint", "customs",
+                    "immigration", "e gate", "biometric", "fast track", "duty free",
+                    "wayfinding", "pasaport",
+                ],
+            ),
+        ],
     ),
     CategoryDef(
         slug="labor",
@@ -221,6 +404,60 @@ CATEGORIES: list[CategoryDef] = [
         ],
     ),
 ]
+
+# --- the fleet/finance -> revenue_management shift rule ---------------------
+#
+# The owner's rule, stated as a rule rather than as a keyword: "Airline X orders
+# 50 aircraft" is not on its own a story this desk publishes, but the same order
+# *is* when it lands as serious added capacity in a market we sell -- then it is
+# a capacity or a competitor story, and belongs under Gelir Yönetimi where the
+# desk will actually see it.
+#
+# Deliberately narrow, and measured before it was written. Of 223 fleet/finance/
+# general headlines sampled from production, 11 carried a strong RM signal and 8
+# of those 11 were listicle clickbait -- so the real move rate is on the order of
+# 1-3%. This is a correctness rule, not a way to refill three sections the paper
+# just gave up; anything that reads it as a volume lever has misread it.
+#
+# Three things keep it narrow:
+#   * it only ever fires on the two categories below -- a safety, labor or
+#     regulatory story is never pulled into RM by a stray "new route";
+#   * every phrase is a compound naming a concrete market effect. Bare "order",
+#     "delivery", "profit" and "revenue" are absent by design: a plain order,
+#     delivery or set of results is exactly what must NOT move;
+#   * the evidence has to be loud (RM_SHIFT_MIN_SCORE), which at the scorer's
+#     3x title weight means one hit in the headline or three in the body.
+#
+# Both classifiers apply it: app/llm/heuristic.py after keyword scoring, and the
+# live models through the same rule spelled out in Turkish in
+# app/llm/prompts.py categorize_prompt().
+RM_SHIFT_FROM_CATEGORIES: tuple[str, ...] = ("fleet", "finance")
+
+RM_SHIFT_KEYWORDS: list[str] = [
+    # Capacity actually landing in a market.
+    "capacity increase", "capacity boost", "capacity growth", "adds capacity",
+    "add capacity", "boost capacity", "increase capacity", "expand capacity",
+    "capacity expansion", "capacity cut", "cuts capacity", "capacity reduction",
+    "seat capacity", "additional seats", "extra seats",
+    # Network moves that change what is on sale.
+    "new route", "new routes", "route launch", "launches route", "adds flights",
+    "add flights", "additional flights", "extra flights", "additional frequency",
+    "additional frequencies", "frequency increase", "daily frequency",
+    "route suspension", "suspends route", "drops route",
+    # Competitive and price effects.
+    "market share", "market entry", "enters the market", "exits the market",
+    "fare war", "price war", "undercut", "undercuts", "lower fares", "cut fares",
+    "pricing power",
+    # Turkish equivalents that survive normalize_text -- see the note at the top
+    # of this module for why the list is this short.
+    "ek sefer", "yeni hat", "kapasite",
+]
+
+#: One hit in the title (weighted 3x by the scorer), or three in the body.
+RM_SHIFT_MIN_SCORE = 3
+
+RM_SHIFT_TARGET = "revenue_management"
+
 
 # The competitive set the product is scoped to: IATA code -> display name.
 # Every carrier here owns a lane on the campaign timeline, a filter chip on the

@@ -25,11 +25,11 @@ function matches(term: Term, needle: string): boolean {
 }
 
 /** The Gazete deep link, or null when the term's category is not one the paper
- * shows (Regülasyon, and the Ağ & Rota terms). Those slugs are still perfectly
- * good classifications -- they simply have no tab to land on since the
- * newspaper was cut down to six categories, and `?category=regulatory` would
- * silently fall back to Gelir Yönetimi, promising "Regülasyon haberleri" and
- * delivering someone else's. A definition with no reading list is a case
+ * shows (Regülasyon, Filo, Finans and the Ağ & Rota terms). Those slugs are
+ * still perfectly good classifications -- they simply have no tab to land on
+ * since the newspaper was cut down to three sections, and `?category=regulatory`
+ * would silently fall back to Gelir Yönetimi, promising "Regülasyon haberleri"
+ * and delivering someone else's. A definition with no reading list is a case
  * knowhow.ts already anticipates; the chip just becomes plain text. */
 function newsHref(term: Term): string | null {
   if (!NEWSPAPER_CATEGORY_SLUGS.some((slug) => slug === term.category)) return null;

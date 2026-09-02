@@ -111,10 +111,11 @@ const PAGE_LIMIT = 30;
  * exposed to float-comparison edge cases. */
 const MIN_IMPORTANCE = 0.47;
 
-/** Appended to every Gazete query: the tab row's allow-list hides these four
- * categories, and this keeps their articles out of the list (and out of the
- * badge counts) rather than letting them resurface under Genel. Query-time
- * only -- nothing stops being ingested or classified. */
+/** Appended to every Gazete query: the tab row's allow-list shows three
+ * categories, and this keeps every other category's articles out of the list
+ * (and out of the badge counts) rather than letting them resurface behind
+ * whichever tab is open. Query-time only -- nothing stops being ingested or
+ * classified. */
 function appendGazeteFilters(params: URLSearchParams): URLSearchParams {
   // Repeated keys, one per value -- the same shape FastAPI parses into a list
   // that recommendations-client.tsx uses for its multi-select filters.
@@ -447,7 +448,7 @@ export function NewspaperBrowser() {
       {/* Sticky category bar -- horizontally scrollable on mobile, blurred so
           content reads through it while scrolling. */}
       <div className="sticky top-0 z-20 -mx-2 border-b border-border bg-background/80 px-2 pb-3 pt-2 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-        {/* Six tabs, in the order the desk ranked them (see
+        {/* Three tabs, in the order the desk ranked them (see
             NEWSPAPER_CATEGORY_SLUGS) -- not the full taxonomy. Gelir Yönetimi
             leads and keeps its amber identity even when inactive; the row
             component itself is shared with Öneriler, which still shows all

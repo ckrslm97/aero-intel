@@ -1,3 +1,5 @@
+import pytest
+
 from app.llm.base import EntityMention
 from app.llm.heuristic import HeuristicProvider, detect_region
 
@@ -159,3 +161,208 @@ async def test_rival_airline_name_lands_rm_article_in_competitor():
         "revenue_management",
     )
     assert sub == "competitor"
+
+
+# --- the nine Gelir Yönetimi beats -------------------------------------------
+#
+# One realistic story per slug, headline and body written the way the wires
+# actually file them. They are a specification, not coverage padding: the
+# keyword lists are tuned against these, and a list that stops answering one of
+# them has stopped answering the beat it was written for.
+
+
+@pytest.mark.parametrize(
+    "expected,title,body",
+    [
+        (
+            "competitor",
+            "Ryanair enters the Italian market as Wizz Air exits",
+            "The new entrant is chasing market share from a rival that is pulling out of three bases.",
+        ),
+        (
+            "pricing",
+            "Transatlantic airfares fall as carriers cut fares for winter",
+            "The fare war pushed average ticket prices down; one carrier lowers fares on 20 routes.",
+        ),
+        (
+            "promotion",
+            "Emirates launches flash sale with promo code for summer",
+            "The promotional fare covers selected routes until August.",
+        ),
+        (
+            "load_factor",
+            "Load factor climbs to 86% in June",
+            "The passenger load factor beat last year's occupancy rate across the network.",
+        ),
+        (
+            "ancillary",
+            "Carrier lifts ancillary revenue with paid seat selection",
+            "Baggage fees and extra legroom drove the ancillary income; priority boarding was bundled.",
+        ),
+        (
+            "distribution",
+            "Lufthansa pushes NDC content through Amadeus",
+            "The GDS deal covers offer and order retailing, with a new API for travel agency bookings.",
+        ),
+        (
+            "forecasting",
+            "IATA lifts its 20-year industry forecast for air travel",
+            "The market outlook projection sees traffic doubling; the forecast revision follows a strong year.",
+        ),
+    ],
+)
+async def test_revenue_management_subcategories(expected, title, body):
+    assert await provider.subcategorize(title, body, "revenue_management") == expected
+
+
+async def test_demand_and_capacity_are_told_apart():
+    """The split that this taxonomy round exists for. Both stories used to land
+    in one "demand_capacity" bucket, which is the one distinction an RM desk
+    cannot afford to lose: the first says what the market wants, the second says
+    what a carrier decided to supply, and they are opposite sides of the trade.
+    """
+    demand = await provider.subcategorize(
+        "Bookings to Europe up 12% for summer",
+        "Forward bookings show strong demand from leisure travel, with booking trends improving.",
+        "revenue_management",
+    )
+    capacity = await provider.subcategorize(
+        "Airline adds third daily frequency on IST-LHR",
+        "The schedule change lifts seat capacity on the route; the carrier adds flights from March.",
+        "revenue_management",
+    )
+    assert demand == "demand"
+    assert capacity == "capacity"
+
+
+# --- the nine Havalimanı beats -----------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "expected,title,body",
+    [
+        (
+            "slot",
+            "Heathrow slot allocation reshuffled for the winter season",
+            "The slot coordinator approved a slot swap between two carriers under use it or lose it rules.",
+        ),
+        (
+            "airport_capacity",
+            "Schiphol keeps its capacity cap for another year",
+            "The declared capacity stays at 500,000 movements; the capacity constraint bites in summer.",
+        ),
+        (
+            "terminal",
+            "Istanbul opens new terminal pier for wide-body aircraft",
+            "The terminal expansion adds a concourse and 20 boarding gates.",
+        ),
+        (
+            "infrastructure",
+            "Third runway construction begins at Gatwick",
+            "The master plan covers a new taxiway and apron modernisation.",
+        ),
+        (
+            "disruption",
+            "Congestion and delays hit Frankfurt after power outage",
+            "The closure of one pier caused queues and overcrowding; restrictions stay in place.",
+        ),
+        (
+            "traffic",
+            "Passenger traffic at Dubai up 8% in the first half",
+            "Passenger numbers reached 45 million; cargo volume and tonnage also rose.",
+        ),
+        (
+            "new_service",
+            "Riga wins new airline as Wizz opens a new base",
+            "The new carrier starts flights in March, part of the airport's hub development.",
+        ),
+        (
+            "ground_handling",
+            "Ground handling contract at Oslo goes to new agent",
+            "The handling agent takes over baggage handling, de icing and ramp turnaround duties.",
+        ),
+        (
+            "passenger_experience",
+            "Biometric e gate rollout speeds security checkpoint queues",
+            "The airport added fast track lanes, a new lounge and duty free wayfinding.",
+        ),
+    ],
+)
+async def test_airport_subcategories(expected, title, body):
+    """Havalimanı had no subcategories at all until this round -- every airport
+    story landed in one undifferentiated pile, which was survivable as one tab
+    of six and is not as one of the paper's three sections."""
+    assert await provider.subcategorize(title, body, "airport") == expected
+
+
+# --- the fleet/finance -> revenue_management shift ---------------------------
+
+
+@pytest.mark.parametrize(
+    "title,body",
+    [
+        (
+            "Wizz Air adds capacity in Italy with 20 new Airbus jets",
+            "The Airbus deal covers A321 aircraft. Deliveries begin in 2027 and the "
+            "fleet plan calls for further deliveries from Toulouse.",
+        ),
+        (
+            "Emirates deploys new Boeing 777 fleet to add flights on India routes",
+            "The widebody deliveries let the carrier run an additional frequency to "
+            "three cities; the fleet renewal continues.",
+        ),
+        (
+            "Q3 profit funds a capacity increase across Southeast Asia",
+            "The airline said full year guidance is unchanged; net income of $400 "
+            "million and a lower debt load pay for the expansion.",
+        ),
+    ],
+)
+async def test_fleet_or_finance_news_with_a_market_effect_becomes_revenue_management(title, body):
+    """The owner's rule: an order is not a story this desk publishes, but the
+    capacity it lands in a market we sell is. Every case here keeps scoring
+    highest as fleet or finance on raw keywords -- the shift is what files it
+    where the desk will see it."""
+    assert await provider.categorize(title, body) == "revenue_management"
+
+
+@pytest.mark.parametrize(
+    "expected,title,body",
+    [
+        (
+            "fleet",
+            "Airline orders 50 Boeing 737 MAX aircraft",
+            "The firm order covers deliveries from 2028. The aircraft purchase is "
+            "valued at $6 billion and includes an option for 25 more Boeing jets.",
+        ),
+        (
+            "fleet",
+            "SR Technics signs engine maintenance agreement",
+            "The MRO deal covers overhaul and inspection work on the lessor's A320 "
+            "fleet, with a retrofit programme to follow.",
+        ),
+        (
+            "finance",
+            "Airline posts $1.2 billion net income for the third quarter",
+            "Quarterly earnings beat estimates. The full year guidance was raised and "
+            "the dividend held; investors pushed the stock up.",
+        ),
+    ],
+)
+async def test_plain_order_and_results_news_stays_put(expected, title, body):
+    """The other half of the same rule, and the half that keeps it honest. The
+    shift is a correctness rule, not a way to refill the sections the newspaper
+    just dropped: a bare order, a maintenance deal and a set of quarterly
+    results carry no market signal and must not move."""
+    assert await provider.categorize(title, body) == expected
+
+
+async def test_the_shift_never_fires_outside_fleet_and_finance():
+    """A safety story is a safety story however commercially it is worded --
+    the rule reads only the two categories it names."""
+    category = await provider.categorize(
+        "Emergency landing after mayday call on a new route",
+        "The aircraft was diverted following an in-flight emergency and mayday "
+        "declaration; an investigation is under way.",
+    )
+    assert category == "safety"

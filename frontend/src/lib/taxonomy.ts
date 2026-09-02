@@ -55,10 +55,15 @@ export const CATEGORIES: CategoryDef[] = [
       { slug: "competitor", label: "Rakip" },
       { slug: "pricing", label: "Fiyatlandırma" },
       { slug: "promotion", label: "Kampanya" },
-      { slug: "demand_capacity", label: "Talep & Kapasite" },
+      // "Talep & Kapasite" used to be one chip. Talep is what the market wants
+      // and Kapasite is what a carrier supplies -- the two sides of the trade
+      // this desk exists to price, and the split is the point of the change.
+      { slug: "demand", label: "Talep" },
+      { slug: "capacity", label: "Kapasite" },
       { slug: "load_factor", label: "Yük Faktörü" },
       { slug: "ancillary", label: "Ek Gelir" },
       { slug: "distribution", label: "Dağıtım/NDC" },
+      { slug: "forecasting", label: "Tahminleme" },
     ],
   },
   {
@@ -125,7 +130,17 @@ export const CATEGORIES: CategoryDef[] = [
     textClass: "text-category-airport",
     bgClass: "bg-category-airport/10",
     icon: TowerControl,
-    subcategories: [],
+    subcategories: [
+      { slug: "slot", label: "Slot" },
+      { slug: "airport_capacity", label: "Kapasite" },
+      { slug: "terminal", label: "Terminal" },
+      { slug: "infrastructure", label: "Pist & Altyapı" },
+      { slug: "disruption", label: "Tıkanıklık & Aksama" },
+      { slug: "traffic", label: "Trafik" },
+      { slug: "new_service", label: "Yeni Hat & Taşıyıcı" },
+      { slug: "ground_handling", label: "Yer Hizmetleri" },
+      { slug: "passenger_experience", label: "Yolcu Deneyimi" },
+    ],
   },
   {
     slug: "labor",
@@ -193,24 +208,26 @@ export function getCategory(slug: string): CategoryDef {
   return CATEGORY_BY_SLUG[slug] ?? CATEGORY_BY_SLUG.general;
 }
 
-/** The Gazete's visible categories, in the product owner's priority order:
- * Gelir Yönetimi first, Etkinlik second, then Filo, Finans, Havalimanı, and
- * Genel last as the fallback bucket.
+/** The Gazete's three sections, in the product owner's priority order: Gelir
+ * Yönetimi, Havalimanı, Etkinlik.
+ *
+ * Down from six. The paper was six tabs deep and the desk read one of them:
+ * Filo, Finans and Genel were shelf-fillers next to the beat this portal was
+ * built for, and Genel in particular was where everything the classifier could
+ * not place went to be scrolled past. Three sections that are each worth
+ * opening beat six where the reader has to pick.
  *
  * A display allow-list, NOT a taxonomy change. Every slug above still exists
- * and is still classified server-side -- `network` in particular keeps
- * powering "Yeni hat sinyalleri"; it simply isn't a newspaper tab. The four
- * omitted slugs (safety, regulatory, sustainability, labor) are additionally
- * filtered out of the Gazete's article list via the API's
- * `exclude_categories` param, so they don't leak in under Genel either.
- * Reverting the simplification is deleting this list's use, nothing more. */
+ * and is still classified server-side -- `network` in particular keeps powering
+ * "Yeni hat sinyalleri", and Filo/Finans stories still reach Öneriler, arama
+ * and the newsletter. What changes for the paper is that a fleet or finance
+ * story only appears here when it is genuinely an RM story, and then it is
+ * filed as one: see RM_SHIFT_KEYWORDS in backend/app/taxonomy.py. Reverting the
+ * simplification is putting the slugs back in these two lists, nothing more. */
 export const NEWSPAPER_CATEGORY_SLUGS: readonly CategorySlug[] = [
   "revenue_management",
-  "events",
-  "fleet",
-  "finance",
   "airport",
-  "general",
+  "events",
 ] as const;
 
 export const NEWSPAPER_CATEGORIES: CategoryDef[] = NEWSPAPER_CATEGORY_SLUGS.map(
@@ -219,13 +236,23 @@ export const NEWSPAPER_CATEGORIES: CategoryDef[] = NEWSPAPER_CATEGORY_SLUGS.map(
 
 /** Classified server-side but deliberately absent from the Gazete -- sent to
  * the API as `exclude_categories` so these stories never appear in the paper's
- * list or its tab badges. `network` is NOT here: it stays out of the tab row
- * but its articles are still legitimate reading. */
+ * list or its tab badges.
+ *
+ * This is every slug that is not one of the three sections above, `general`
+ * included: with only three tabs, anything left out would otherwise pile up
+ * behind whichever tab happened to be showing rather than being honestly
+ * absent. `network` joins the list for the first time here -- its stories are
+ * still legitimate reading, but with no tab of their own the alternative is
+ * showing them under a heading that does not describe them. */
 export const NEWSPAPER_EXCLUDED_CATEGORY_SLUGS: readonly CategorySlug[] = [
+  "fleet",
+  "network",
+  "finance",
   "safety",
   "regulatory",
   "sustainability",
   "labor",
+  "general",
 ] as const;
 
 /** A taxonomy slug as a CSS custom-property reference, e.g.
