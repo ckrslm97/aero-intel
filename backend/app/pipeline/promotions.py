@@ -490,11 +490,51 @@ def _coherent(fields: PromotionFields) -> PromotionFields:
     return fields
 
 
-async def _candidate_articles(db: AsyncSession, limit: int | None) -> list[Article]:
-    """Campaign articles that name a carrier we track.
+#: Default ceiling on how many articles one extraction run will read.
+#:
+#: There was none, and the cost of that was measurable: `_candidate_articles`
+#: returned every matching article in the ARCHIVE on every run, the scheduled
+#: job runs at :10 and :40 (48 runs/day), and each candidate costs one LLM
+#: call. The candidate set only ever grows, so the daily bill grew with the
+#: archive forever.
+#:
+#: 40 is comfortably above the daily intake of campaign articles, so a normal
+#: run is bounded by the "not yet extracted" guard below rather than by this
+#: number. It is the backstop for the abnormal run -- a backfill, or the first
+#: run after deploy -- not the mechanism.
+DEFAULT_EXTRACT_LIMIT = 40
+
+
+async def _candidate_articles(
+    db: AsyncSession, limit: int | None, *, rescan: bool = False
+) -> list[Article]:
+    """Campaign articles that name a carrier we track and have NOT been read yet.
 
     Duplicates are excluded: the same campaign filed by three outlets should be
     one bar on the timeline, and dedup has already picked the canonical row.
+
+    The `promo_extracted_at IS NULL` clause is the fix for a real production
+    cost bug. This query had no memory: every 30 minutes it returned the whole
+    matching archive and handed each row to an LLM again. The module's own
+    comment below already conceded the behaviour -- "this extractor re-reads
+    the same article text every 30 minutes with an LLM whose answer is not
+    stable to the field" -- and used it to justify dropping the resulting
+    version rows as audit noise. The answer to producing noise 48 times a day
+    is to stop producing it, not to keep discarding it.
+
+    Why a timestamp column and not `NOT EXISTS (promotions WHERE url = ...)`,
+    which would have needed no migration: because it would be wrong. An article
+    whose campaign is MERGED into an existing row (see `find_duplicate` below)
+    never gets a promotions row under its own URL, and neither does one the
+    extractor read and correctly found no campaign in. Both would be re-read
+    forever -- and those are the majority. `promo_extracted_at` records that
+    the question was ASKED, which is the thing worth remembering; it is the
+    same argument app/pipeline/outcomes.py makes for persisting NOT_APPLICABLE
+    ("so the next run does not spend another call re-asking a question that was
+    already answered").
+
+    `rescan=True` ignores the guard, so a prompt change or a model upgrade can
+    still be replayed over the archive deliberately.
     """
     query = (
         select(Article)
@@ -504,6 +544,11 @@ async def _candidate_articles(db: AsyncSession, limit: int | None) -> list[Artic
             ArticleEnrichment.category == "revenue_management",
             ArticleEnrichment.subcategory.in_(PROMO_SUBCATEGORIES),
             Article.is_duplicate.is_(False),
+            *(
+                ()
+                if rescan
+                else (ArticleEnrichment.promo_extracted_at.is_(None),)
+            ),
             select(ArticleEntity.article_id)
             .join(Entity, Entity.id == ArticleEntity.entity_id)
             .where(
@@ -541,18 +586,38 @@ async def _primary_airline(db: AsyncSession, article_id) -> tuple[str, str] | No
 
 
 async def extract_promotions(
-    db: AsyncSession, limit: int | None = None, use_llm: bool = True
+    db: AsyncSession,
+    limit: int | None = DEFAULT_EXTRACT_LIMIT,
+    use_llm: bool = True,
+    *,
+    rescan: bool = False,
 ) -> dict[str, int]:
     """Walk campaign articles and upsert a `promotions` row for each.
 
     Returns counts rather than a bare number: "12 scanned, 3 new, 9 refreshed,
     2 merged" is the shape that tells you whether a run did anything, and the
-    scheduled job logs it every 45 minutes.
+    scheduled job logs it every 30 minutes.
+
+    Bounded twice, where it used to be bounded not at all: by
+    DEFAULT_EXTRACT_LIMIT, and by the "not yet extracted" guard in
+    `_candidate_articles`. The guard is the mechanism -- it makes a run's cost
+    proportional to the day's new campaign articles instead of to the size of
+    the archive -- and the limit is the backstop.
+
+    Every article the run reaches is stamped `promo_extracted_at`, campaign or
+    not, INCLUDING the ones skipped for having no tracked carrier. A skip is a
+    conclusion the next run does not need to reach again.
+
+    `limit=None` still means "no ceiling" and is now something a caller has to
+    ask for explicitly -- a deliberate backfill, usually alongside `rescan`.
+    Unbounded used to be the default, which is how this became the most
+    expensive job in the repo.
     """
     from app.llm.factory import get_raw_generator
 
     generate = get_raw_generator() if use_llm else None
-    articles = await _candidate_articles(db, limit)
+    articles = await _candidate_articles(db, limit, rescan=rescan)
+    run_started_at = datetime.now(timezone.utc)
     stats = {
         "scanned": len(articles),
         "inserted": 0,
@@ -563,13 +628,20 @@ async def extract_promotions(
     }
 
     for article in articles:
+        enrichment = article.enrichment
+        # Stamped before the work, not after, and for every outcome including
+        # the skips below: the point of the column is "this article has been
+        # looked at", and an article with no tracked carrier is one whose
+        # answer will not change on the next run either.
+        if enrichment is not None:
+            enrichment.promo_extracted_at = run_started_at
+
         airline = await _primary_airline(db, article.id)
         if airline is None:
             stats["skipped"] += 1
             continue
         code, name = airline
 
-        enrichment = article.enrichment
         title = (enrichment.headline_tr or enrichment.headline or article.title) if enrichment else article.title
         summary = (enrichment.summary_tr or enrichment.summary or "") if enrichment else ""
         body = f"{summary}\n{article.raw_content or ''}".strip()

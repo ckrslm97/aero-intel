@@ -56,4 +56,15 @@ jobs:
           LLM_MODEL: openai/gpt-oss-120b
           LLM_MODEL_FAST: openai/gpt-oss-20b
           LLM_API_KEY: ${{ secrets.GROQ_API_KEY }}
-        run: python -m app.cli refresh-promotions
+        # --limit is not decoration: `extract_promotions` had NO ceiling and
+        # `_candidate_articles` returned the whole matching ARCHIVE every run.
+        # At 48 runs/day that is one LLM call per archived campaign article per
+        # run, forever, growing with the archive -- measured at 6 candidates x
+        # 48 = 288 wasted calls/day on a 484-article local snapshot, and the
+        # extractor's own comment already conceded it ("re-reads the same
+        # article text every 30 minutes with an LLM").
+        #
+        # The real fix is the `promo_extracted_at` guard, which makes a run
+        # cost one call per NEW campaign article instead of one per archived
+        # one. This is the backstop for a run after a backfill.
+        run: python -m app.cli refresh-promotions --limit 40

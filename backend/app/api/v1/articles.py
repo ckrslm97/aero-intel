@@ -139,6 +139,26 @@ async def list_articles(
             "this desk's priority"
         ),
     ),
+    min_intelligence: float | None = Query(
+        None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Floor on the INTELLIGENCE score -- how much the story matters to "
+            "a revenue-management desk (app/services/news_scoring.py). This is "
+            "the filter the Gazete's 'fewer, more critical stories' control "
+            "should use. Unlike `min_importance`, which floors "
+            "importance_score + FOCUS_BONUS and is therefore a floor on the "
+            "publisher's trust weight plus a per-CATEGORY constant, this scores "
+            "each article on its own: recency, source, whether a rival or the "
+            "home carrier is named and where, hub proximity, keyword relevance, "
+            "and -- for the day's shortlist only -- the model's read on revenue, "
+            "demand and capacity impact. Articles the scoring pass has never "
+            "reached are EXCLUDED rather than treated as zero, so this can only "
+            "ever narrow to rows the system has actually judged. Both filters "
+            "may be sent together; they AND"
+        ),
+    ),
     tier: list[str] | None = Query(None, description=_TIER_DESCRIPTION),
     source: list[str] | None = Query(
         None,
@@ -163,7 +183,7 @@ async def list_articles(
         region=region, since=since, airline=airline, on_date=date,
         country=country, airport=airport, translated_only=translated_only,
         exclude_categories=exclude_categories, min_importance=min_importance,
-        tiers=tiers, source_names=source,
+        min_intelligence=min_intelligence, tiers=tiers, source_names=source,
     )
     # Filtered total (same clause as the list) so "load more" knows when to stop.
     # A short page IS the end of the result set, so the count query -- the more
@@ -176,7 +196,8 @@ async def list_articles(
             category=category, subcategory=subcategory, region=region, since=since,
             airline=airline, on_date=date, country=country, airport=airport,
             translated_only=translated_only, exclude_categories=exclude_categories,
-            min_importance=min_importance, tiers=tiers, source_names=source,
+            min_importance=min_importance, min_intelligence=min_intelligence,
+            tiers=tiers, source_names=source,
         )
     return ArticleListOut(total=total, items=[ArticleOut.model_validate(a) for a in items])
 
@@ -209,6 +230,16 @@ async def article_counts(
             "same FOCUS_BONUS weighting, so a badge counts what the list shows"
         ),
     ),
+    min_intelligence: float | None = Query(
+        None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Intelligence-score floor -- mirrors the list endpoint, so a tab "
+            "badge counts exactly the rows the filtered list will render. See "
+            "the list endpoint for what the two floors each measure"
+        ),
+    ),
     response: Response = None,  # type: ignore[assignment]
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, int]:
@@ -224,6 +255,7 @@ async def article_counts(
         translated_only=translated_only,
         exclude_categories=exclude_categories,
         min_importance=min_importance,
+        min_intelligence=min_intelligence,
     )
 
 
@@ -255,6 +287,9 @@ async def article_source_facets(
     min_importance: float | None = Query(
         None, ge=0.0, le=1.0, description="Focus-weighted importance floor -- mirrors the list"
     ),
+    min_intelligence: float | None = Query(
+        None, ge=0.0, le=1.0, description="Intelligence-score floor -- mirrors the list"
+    ),
     response: Response = None,  # type: ignore[assignment]
     db: AsyncSession = Depends(get_db),
 ) -> list[ArticleSourceFacetOut]:
@@ -280,6 +315,7 @@ async def article_source_facets(
         translated_only=translated_only,
         exclude_categories=exclude_categories,
         min_importance=min_importance,
+        min_intelligence=min_intelligence,
     )
     return [
         ArticleSourceFacetOut(name=name, tier=tier, count=count) for name, tier, count in rows

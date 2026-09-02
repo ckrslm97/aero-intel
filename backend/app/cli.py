@@ -316,20 +316,54 @@ async def _scrape_promotions() -> None:
             print(f"  ! {name} unavailable: {error}")
 
 
-async def _refresh_promotions() -> None:
-    """Both detection paths in one pass -- what the scheduled job runs."""
+async def _refresh_promotions(limit: int | None) -> None:
+    """Both detection paths in one pass -- what the scheduled job runs.
+
+    `limit` is passed through to the article extractor rather than left to its
+    default so the ceiling is visible in the workflow file, where the :10/:40
+    cadence that multiplies it is also visible. See DEFAULT_EXTRACT_LIMIT.
+    """
     from app.ingest.promo_scrape import scrape_promotions
-    from app.pipeline.promotions import extract_promotions
+    from app.pipeline.promotions import DEFAULT_EXTRACT_LIMIT, extract_promotions
 
     async with AsyncSessionLocal() as db:
         scraped = await scrape_promotions(db)
-        extracted = await extract_promotions(db)
+        extracted = await extract_promotions(
+            db, limit=limit if limit is not None else DEFAULT_EXTRACT_LIMIT
+        )
         print(
             f"Scrape: {scraped['inserted']} new / {scraped['updated']} refreshed "
             f"/ {scraped['merged']} merged. "
             f"Articles: {extracted['inserted']} new / {extracted['updated']} refreshed "
             f"/ {extracted['merged']} merged, from {extracted['scanned']} scanned"
         )
+
+
+async def _select_critical(limit: int | None, window_hours: int | None) -> None:
+    """Score the window's articles and spend the LLM on the per-category best.
+
+    The command the Gazete's "10-20 critical developments a day" target is
+    implemented by. Everything in the window gets a free deterministic
+    intelligence_score; only the quota-limited shortlist costs model calls.
+    """
+    from app.services.critical_selection import (
+        DEFAULT_QUOTAS,
+        DEFAULT_WINDOW_HOURS,
+        select_critical_articles,
+    )
+
+    async with AsyncSessionLocal() as db:
+        stats = await select_critical_articles(
+            db,
+            window_hours=window_hours or DEFAULT_WINDOW_HOURS,
+            limit=limit,
+        )
+    quotas = ", ".join(f"{k}={v}" for k, v in DEFAULT_QUOTAS.items())
+    print(
+        f"Scored {stats['scored']} of {stats['candidates']} candidate articles; "
+        f"{stats['shortlisted']} shortlisted (quotas: {quotas}), "
+        f"{stats['llm_scored']} scored by the model, {stats['llm_failed']} unavailable"
+    )
 
 
 async def _deep_scan(carriers: str | None, dry_run: bool, max_llm_calls: int) -> None:
@@ -760,6 +794,7 @@ def main() -> None:
             "repair-translations",
             "clean-headlines",
             "translate-backlog",
+            "select-critical",
             "build-edition",
             "refresh-kpis",
             "seed-kpi-history",
@@ -817,6 +852,19 @@ def main() -> None:
             "backfill-regions: articles to walk (default: all). "
             "backfill-risks: articles to reclassify (default: all)"
             "pipeline-v2: articles to process this run (default: 40)"
+            "select-critical: hard ceiling on LLM calls this run (default: the "
+            "per-category quotas). refresh-promotions: campaign articles to "
+            "read this run (default: 40)"
+        ),
+    )
+    parser.add_argument(
+        "--window-hours",
+        type=int,
+        default=None,
+        help=(
+            "select-critical: how far back to look for candidate articles "
+            "(default: 48). Shorter makes the run cheaper and the paper more "
+            "reactive; longer catches a burst nothing scored in time."
         ),
     )
     parser.add_argument(
@@ -875,6 +923,11 @@ def main() -> None:
         asyncio.run(_repair_translations())
     elif args.command == "clean-headlines":
         asyncio.run(_clean_headlines())
+    elif args.command == "select-critical":
+        # No --limit means the per-category quotas are the only ceiling,
+        # which is the intended steady state; --limit is the hard cap for
+        # a run after an ingest backlog has piled candidates up.
+        asyncio.run(_select_critical(args.limit, args.window_hours))
     elif args.command == "translate-backlog":
         asyncio.run(_translate_backlog(args.limit if args.limit is not None else 12))
     elif args.command == "build-edition":
@@ -896,7 +949,7 @@ def main() -> None:
     elif args.command == "scrape-promotions":
         asyncio.run(_scrape_promotions())
     elif args.command == "refresh-promotions":
-        asyncio.run(_refresh_promotions())
+        asyncio.run(_refresh_promotions(args.limit))
     elif args.command == "deep-scan":
         asyncio.run(_deep_scan(args.carriers, args.dry_run, args.max_llm_calls))
     elif args.command == "generate-campaign-alerts":

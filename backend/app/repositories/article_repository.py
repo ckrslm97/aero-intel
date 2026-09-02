@@ -50,6 +50,25 @@ def _focus_weighted_importance():
     return func.coalesce(ArticleEnrichment.importance_score, 0.0) + bonus
 
 
+def _intelligence_floor(minimum: float):
+    """`intelligence_score >= minimum`, as SQL, excluding unscored rows.
+
+    Deliberately NOT null-coalesced to 0.0 the way `_focus_weighted_importance`
+    coalesces its column. There, a NULL importance means the article scored
+    nothing and belongs at the bottom of the ranking. Here, a NULL means the
+    scoring pass has never run on this row -- the pre-migration archive, or an
+    article enriched between the deploy and the first run -- which is not the
+    same claim at all. `col >= x` is already NULL-safe in SQL (NULL >= 0.4 is
+    NULL, not true), so an unscored row is excluded rather than being asserted
+    to be unimportant.
+
+    That is the conservative direction for a filter whose entire purpose is
+    "show me only the critical stories": an unscored row shown under that
+    heading would be a story the system is claiming to have judged and has not.
+    """
+    return ArticleEnrichment.intelligence_score >= minimum
+
+
 def _effective_tier_expr():
     """`Source.tier`, or its trust_weight bucket -- as SQL.
 
@@ -141,6 +160,7 @@ class ArticleRepository:
         translated_only: bool = False,
         exclude_categories: list[str] | None = None,
         min_importance: float | None = None,
+        min_intelligence: float | None = None,
         tiers: list[str] | None = None,
         source_names: list[str] | None = None,
     ):
@@ -162,6 +182,7 @@ class ArticleRepository:
             or translated_only
             or exclude_categories
             or min_importance is not None
+            or min_intelligence is not None
         ):
             # One join covers every enrichment-backed filter; the condition
             # mirrors the clauses below so translated_only can pull the join in
@@ -193,6 +214,19 @@ class ArticleRepository:
                 # is a floor on how widely syndicated a story is, which culls
                 # the desk's two priority beats hardest.
                 query = query.where(_focus_weighted_importance() >= min_importance)
+            if min_intelligence is not None:
+                # The replacement for the line above, and the reason it needed
+                # one: `importance_score + FOCUS_BONUS` still has importance
+                # (i.e. the publisher) as its only per-article term, so the
+                # bonus can shift a whole CATEGORY up or down and nothing can
+                # separate two articles within one. intelligence_score is
+                # per-article by construction.
+                #
+                # The two coexist rather than one replacing the other in place:
+                # the frontend still sends min_importance, and changing what
+                # that parameter means under a deployed client is how a filter
+                # silently starts answering a different question.
+                query = query.where(_intelligence_floor(min_intelligence))
         if airline:
             # Entity-based: the "Ana Rakipler" filter matches any article that
             # *mentions* the airline, regardless of category -- rival news lives
@@ -260,6 +294,7 @@ class ArticleRepository:
         translated_only: bool = False,
         exclude_categories: list[str] | None = None,
         min_importance: float | None = None,
+        min_intelligence: float | None = None,
         tiers: list[str] | None = None,
         source_names: list[str] | None = None,
     ) -> list[Article]:
@@ -290,6 +325,7 @@ class ArticleRepository:
             translated_only=translated_only,
             exclude_categories=exclude_categories,
             min_importance=min_importance,
+            min_intelligence=min_intelligence,
             tiers=tiers,
             source_names=source_names,
         )
@@ -309,6 +345,7 @@ class ArticleRepository:
         translated_only: bool = False,
         exclude_categories: list[str] | None = None,
         min_importance: float | None = None,
+        min_intelligence: float | None = None,
         tiers: list[str] | None = None,
         source_names: list[str] | None = None,
     ) -> int:
@@ -328,6 +365,7 @@ class ArticleRepository:
             translated_only=translated_only,
             exclude_categories=exclude_categories,
             min_importance=min_importance,
+            min_intelligence=min_intelligence,
             tiers=tiers,
             source_names=source_names,
         )
@@ -361,6 +399,7 @@ class ArticleRepository:
         translated_only: bool = False,
         exclude_categories: list[str] | None = None,
         min_importance: float | None = None,
+        min_intelligence: float | None = None,
     ) -> dict[str, int]:
         """One grouped query behind the newspaper's tab badges -- the alternative
         is a request per category every time the page loads."""
@@ -383,6 +422,8 @@ class ArticleRepository:
             # a badge counting rows on a different rule than the list is a badge
             # that lies, and the weighting shifts counts a long way per category.
             query = query.where(_focus_weighted_importance() >= min_importance)
+        if min_intelligence is not None:
+            query = query.where(_intelligence_floor(min_intelligence))
         result = await self.db.execute(query)
         return {category: count for category, count in result.all()}
 
@@ -394,6 +435,7 @@ class ArticleRepository:
         translated_only: bool = False,
         exclude_categories: list[str] | None = None,
         min_importance: float | None = None,
+        min_intelligence: float | None = None,
     ) -> list[tuple[str, str, int]]:
         """(source name, effective tier, article count), busiest outlet first.
 
@@ -427,7 +469,13 @@ class ArticleRepository:
         )
         if since is not None:
             query = query.where(Article.published_at >= since)
-        if category or translated_only or exclude_categories or min_importance is not None:
+        if (
+            category
+            or translated_only
+            or exclude_categories
+            or min_importance is not None
+            or min_intelligence is not None
+        ):
             query = query.join(ArticleEnrichment, ArticleEnrichment.article_id == Article.id)
             if category:
                 query = query.where(ArticleEnrichment.category == category)
@@ -437,6 +485,8 @@ class ArticleRepository:
                 query = query.where(ArticleEnrichment.category.notin_(exclude_categories))
             if min_importance is not None:
                 query = query.where(_focus_weighted_importance() >= min_importance)
+            if min_intelligence is not None:
+                query = query.where(_intelligence_floor(min_intelligence))
         result = await self.db.execute(query)
         return [(name, tier, count) for name, tier, count in result.all()]
 

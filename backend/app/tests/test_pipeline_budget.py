@@ -478,7 +478,15 @@ async def test_the_batch_limit_bounds_llm_calls_not_throughput(db_session, monke
 async def test_translation_backlog_serves_the_important_stories_first(db_session, monkeypatch):
     """Once the heuristic path absorbs the overflow the untranslated queue fills
     with routine wire copy, and strict recency spends the translation budget on
-    whatever arrived last instead of on what the desk actually reads."""
+    whatever arrived last instead of on what the desk actually reads.
+
+    The queue is ordered by `intelligence_score`, not `importance_score`. Every
+    row here carries BOTH, and they are deliberately inverted -- the story with
+    the highest intelligence has the LOWEST importance -- so this test fails if
+    anything ever puts the old column back in the ORDER BY. Ordering by
+    importance_score was ordering by publisher: with corroborating_source_count
+    == 1 on every production row it reduces to 0.34 + 0.21 * trust_weight.
+    """
     from datetime import timedelta
 
     from app.pipeline.enrich import translate_pending_articles
@@ -495,7 +503,7 @@ async def test_translation_backlog_serves_the_important_stories_first(db_session
     db_session.add(source)
     await db_session.flush()
 
-    async def _untranslated(slug, importance, published_at):
+    async def _untranslated(slug, intelligence, published_at, importance):
         article = Article(
             source_id=source.id, url=f"https://example.com/q/{slug}", title=slug,
             raw_content="body", published_at=published_at, fetched_at=NOW,
@@ -506,15 +514,21 @@ async def test_translation_backlog_serves_the_important_stories_first(db_session
         db_session.add(
             ArticleEnrichment(
                 article_id=article.id, headline=slug, summary="s",
-                category="revenue_management", importance_score=importance,
+                category="revenue_management",
+                intelligence_score=intelligence,
+                # Inverted against intelligence on purpose: whichever row wins
+                # names the column the queue actually reads.
+                importance_score=importance,
             )
         )
         await db_session.flush()
 
-    # The important story is also the oldest -- recency alone would skip it.
-    await _untranslated("routine", 0.20, NOW)
-    await _untranslated("decisive", 0.90, NOW - timedelta(days=2))
-    await _untranslated("middling", 0.50, NOW - timedelta(days=1))
+    # The important story is also the oldest -- recency alone would skip it --
+    # and it has the LOWEST importance_score of the three. All three clear the
+    # translation floor, so ordering is the only thing under test here.
+    await _untranslated("routine", 0.60, NOW, importance=0.95)
+    await _untranslated("decisive", 0.90, NOW - timedelta(days=2), importance=0.10)
+    await _untranslated("middling", 0.70, NOW - timedelta(days=1), importance=0.50)
     await db_session.commit()
 
     assert await translate_pending_articles(db_session, limit=1) == 1
@@ -534,9 +548,9 @@ async def test_risk_classified_rows_jump_the_translation_queue(db_session, monke
 
     Everywhere else an English headline is still a headline; there the page is
     a Turkish disaster board, and risk articles are a small enough minority of
-    the feed that under `importance_score DESC` they sat behind the day's
-    loudest business story on every single run. Budget-neutral: the same
-    `limit` rows are translated, in a different order.
+    the feed that under a plain score DESC they sat behind the day's loudest
+    business story on every single run. Budget-neutral: the same `limit` rows
+    are translated, in a different order.
     """
     from datetime import timedelta
 
@@ -554,7 +568,7 @@ async def test_risk_classified_rows_jump_the_translation_queue(db_session, monke
     db_session.add(source)
     await db_session.flush()
 
-    async def _untranslated(slug, importance, published_at, risk_type=None):
+    async def _untranslated(slug, intelligence, published_at, risk_type=None):
         article = Article(
             source_id=source.id, url=f"https://example.com/rq/{slug}", title=slug,
             raw_content="body", published_at=published_at, fetched_at=NOW,
@@ -565,17 +579,18 @@ async def test_risk_classified_rows_jump_the_translation_queue(db_session, monke
         db_session.add(
             ArticleEnrichment(
                 article_id=article.id, headline=slug, summary="s",
-                category="safety", importance_score=importance,
+                category="safety", intelligence_score=intelligence,
                 risk_type=risk_type,
             )
         )
         await db_session.flush()
 
-    # The risk story loses on BOTH of the old sort keys -- lowest importance
-    # and oldest -- so it can only come first if risk_type is read at all.
+    # The risk story loses on BOTH of the other sort keys -- lowest score and
+    # oldest -- so it can only come first if risk_type is read at all. All
+    # three clear the translation floor.
     await _untranslated("loud-business-story", 0.95, NOW)
-    await _untranslated("middling", 0.50, NOW - timedelta(days=1))
-    await _untranslated("rhodes-wildfire", 0.10, NOW - timedelta(days=3), risk_type="wildfire")
+    await _untranslated("middling", 0.70, NOW - timedelta(days=1))
+    await _untranslated("rhodes-wildfire", 0.60, NOW - timedelta(days=3), risk_type="wildfire")
     await db_session.commit()
 
     assert await translate_pending_articles(db_session, limit=1) == 1
@@ -589,7 +604,7 @@ async def test_risk_classified_rows_jump_the_translation_queue(db_session, monke
     # rest of the queue is untouched rather than additionally translated.
     assert len([row for row in rows if row.translated_at is None]) == 2
 
-    # ...and behind the risk rows the old order is intact: importance, then
+    # ...and behind the risk rows the order is intact: intelligence, then
     # recency. The next run takes the loud business story, not the middling one.
     assert await translate_pending_articles(db_session, limit=1) == 1
     translated = [

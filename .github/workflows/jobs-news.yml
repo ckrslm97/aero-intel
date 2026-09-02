@@ -46,14 +46,44 @@ jobs:
           # low-signal articles off the LLM entirely, and translation now costs
           # one call instead of two, so the same token budget covers more.
           LLM_ENRICH_BATCH_SIZE: "24"
+          # "Filter first, then translate" (see app/pipeline/enrich.py
+          # _should_translate). Translation used to run for EVERY article on
+          # the LLM path -- 24 x 12 = 288 calls/day -- selected for carrying any
+          # commercial-aviation signal rather than for being worth printing.
+          # 0.55 is measured: 26.8% of the LLM path clears it on the production
+          # archive, so the inline path drops to ~102 calls/day.
+          #
+          # THE ROLLBACK: translation is effectively the publication gate (the
+          # Gazete queries translated_only=true), so if the paper thins out
+          # after this ships, set TRANSLATE_ALL_ENRICHED to "true" here. That
+          # restores the previous behaviour exactly, with no code change and no
+          # deploy. Watch the first 24 hours before tuning the floor up.
+          TRANSLATE_MIN_INTELLIGENCE: "0.55"
+          TRANSLATE_ALL_ENRICHED: "false"
           LLM_API_KEY: ${{ secrets.GROQ_API_KEY }}
         run: |
           alembic upgrade head
           python -m app.cli full-cycle
+          # Pick the day's critical stories and spend the model on them.
+          #
+          # Runs AFTER full-cycle so it sees the articles this run just
+          # enriched. Per-category quotas (RM 8 / Havalimanı 5 / Etkinlik 5)
+          # cap one run at 18 calls, but an article scored once is never
+          # re-scored, so twelve runs a day cost far less than 12 x 18: the
+          # real bound is how many new articles land in the three printed
+          # sections, ~32/day in production. --limit is the hard ceiling.
+          python -m app.cli select-critical --limit 20
           # Articles enriched before a translator was configured (or skipped by
           # the gate on a busy day) had no automatic drain at all -- the command
           # existed but ran only on manual dispatch.
-          python -m app.cli translate-backlog --limit 8
+          #
+          # Raised 8 -> 12 because the limit now means something different.
+          # This queue used to be "drain the oldest N of an unbounded backlog"
+          # and is now "translate up to N of the day's CRITICAL stories" --
+          # it is filtered by TRANSLATE_MIN_INTELLIGENCE and ordered by
+          # intelligence_score, so a bigger number buys coverage of the stories
+          # that matter instead of a deeper trawl through wire copy.
+          python -m app.cli translate-backlog --limit 12
 
       - name: Pipeline v2 (Faz 16 dual-write)
         env:

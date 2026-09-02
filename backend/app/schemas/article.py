@@ -47,7 +47,31 @@ class ArticleEnrichmentOut(BaseModel):
     category: str
     subcategory: str | None
     region: str | None
+    #: How widely SYNDICATED the story is, despite the name. With
+    #: corroborating_source_count == 1 -- every production row -- its formula
+    #: reduces to `0.34 + 0.21 * source.trust_weight`, i.e. a restatement of
+    #: which outlet published it. Kept on the wire because the frontend still
+    #: reads it; `intelligence_score` below is what replaces it.
     importance_score: float
+    #: How much the story matters to a revenue-management desk, 0-1 -- eight
+    #: weighted sub-scores, see app/services/news_scoring.py. Null on rows
+    #: enriched before this column existed, so it must stay optional to read.
+    intelligence_score: float | None = None
+    #: The model's three impact axes, 0-1 each.
+    #:
+    #: NULL AND 0.0 MEAN DIFFERENT THINGS AND A CLIENT MUST NOT CONFLATE THEM.
+    #: Only the day's shortlist (~20 articles) is scored by the model, so NULL
+    #: is the common case and means "not assessed"; 0.0 means the model read
+    #: the article and found no impact on that axis. Render the absence as an
+    #: absence -- a "0" badge on an article nobody scored is a claim the system
+    #: never made.
+    rm_impact: float | None = None
+    demand_impact: float | None = None
+    capacity_impact: float | None = None
+    #: The sub-scores and the weights that combined them, as stored. Exposed so
+    #: the analysis drawer can show WHY a story scored what it did without a
+    #: second endpoint -- the same role confidence_detail plays for campaigns.
+    score_detail: dict | None = None
     sentiment: str
     confidence_score: float
     corroborating_source_count: int
