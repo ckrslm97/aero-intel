@@ -8,12 +8,12 @@ import { Skeleton } from "@/components/ui/skeleton";
 // rejected by the compiler inside one ("Please move it into a Client
 // Component") -- so the lazy import has to live in a client module of its own
 // rather than inline at the call site. Components that are already
-// `"use client"` (kokpit/market-strip.tsx, kokpit/fuel-energy.tsx) declare
-// theirs inline for exactly that reason.
+// `"use client"` (kokpit/fx-board-table.tsx) declare theirs inline for exactly
+// that reason.
 //
-// The skeleton is 320px to match the chart plus its tab row, so the section
-// does not jump under the reader when the real chart arrives.
+// The skeleton is 240px, matching the chart, so the section does not jump
+// under the reader when the real chart arrives.
 export const AnnualTrendChart = dynamic(
   () => import("@/components/kokpit/annual-trend-chart").then((m) => m.AnnualTrendChart),
-  { ssr: false, loading: () => <Skeleton className="h-[320px] w-full rounded-xl" /> },
+  { ssr: false, loading: () => <Skeleton className="h-[240px] w-full rounded-xl" /> },
 );

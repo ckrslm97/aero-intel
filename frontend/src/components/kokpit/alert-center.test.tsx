@@ -1,4 +1,5 @@
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AlertCenter } from "./alert-center";
@@ -82,14 +83,39 @@ describe("AlertCenter", () => {
     apiFetch.mockReset();
   });
 
-  it("merges both streams and labels which one each row came from", async () => {
+  /** The section opens CLOSED, so every row assertion has to expand it first.
+   *
+   * The wait for `toBeEnabled()` is what makes this deterministic. The button
+   * is `disabled` until rows arrive, `findByRole` matches disabled buttons
+   * too, and `userEvent.click` on a disabled button is silently swallowed --
+   * so whenever the mocked promise had not yet flushed, the panel simply never
+   * opened and the row assertion failed with "Unable to find an element". Six
+   * of the seven tests here go through this helper, so all six were racing;
+   * over fifteen full runs it lost twice. */
+  async function expand() {
+    const button = await screen.findByRole("button", { name: /Genişlet/ });
+    await waitFor(() => expect(button).toBeEnabled());
+    await userEvent.click(button);
+  }
+
+  it("starts collapsed, showing counts rather than rows", async () => {
     routes({ alerts: [campaignAlert()], risks: radar([riskItem()]) });
     render(<AlertCenter />);
 
-    expect(await screen.findByText("TK Avrupa kampanyası bitiyor")).toBeInTheDocument();
+    expect(await screen.findByText(/1 ORTA/)).toBeInTheDocument();
+    expect(await screen.findByText(/1 YÜKSEK/)).toBeInTheDocument();
+    // The bottom of the page is not where a reader is scanning; the rows are
+    // one click away, the counts are not.
+    expect(screen.queryByText("TK Avrupa kampanyası bitiyor")).not.toBeInTheDocument();
+  });
+
+  it("merges both streams once expanded", async () => {
+    routes({ alerts: [campaignAlert()], risks: radar([riskItem()]) });
+    render(<AlertCenter />);
+    await expand();
+
+    expect(screen.getByText("TK Avrupa kampanyası bitiyor")).toBeInTheDocument();
     expect(screen.getByText("Etna'da kül bulutu uçuşları durdurdu")).toBeInTheDocument();
-    expect(screen.getByText("Kampanya")).toBeInTheDocument();
-    expect(screen.getByText("Risk")).toBeInTheDocument();
   });
 
   it("orders by priority before recency", async () => {
@@ -106,36 +132,86 @@ describe("AlertCenter", () => {
       risks: radar([]),
     });
     render(<AlertCenter />);
+    await expand();
 
-    await screen.findByText("Kritik");
     const titles = screen.getAllByText(/^(Kritik|Bilgi)$/).map((node) => node.textContent);
     // A CRITICAL from nine hours ago outranks an INFO from six minutes ago.
     expect(titles).toEqual(["Kritik", "Bilgi"]);
   });
 
+  it("caps the open list at three rows", async () => {
+    routes({
+      alerts: Array.from({ length: 5 }, (_, i) =>
+        campaignAlert({ id: `c${i}`, title_tr: `Uyarı ${i}` }),
+      ),
+      risks: radar([]),
+    });
+    render(<AlertCenter />);
+    await expand();
+
+    expect(screen.getByText("Uyarı 0")).toBeInTheDocument();
+    expect(screen.queryByText("Uyarı 3")).not.toBeInTheDocument();
+    // ...but the BAND still counts all five. A count computed over the three
+    // visible rows would be a number nobody could reconcile with /kampanyalar.
+    expect(screen.getByText(/5 ORTA/)).toBeInTheDocument();
+  });
+
   it("only lifts high-severity risk items in, and only as HIGH", async () => {
     routes({
       alerts: [],
-      risks: radar([riskItem(), riskItem({ id: "r2", severity: "medium", headline: "Orta" })]),
+      risks: radar([riskItem(), riskItem({ id: "r2", severity: "medium", headline: "Orta önem" })]),
     });
     render(<AlertCenter />);
+    await expand();
 
-    await screen.findByText("Etna'da kül bulutu uçuşları durdurdu");
-    expect(screen.queryByText("Orta")).not.toBeInTheDocument();
-    expect(screen.getByText(/Yüksek 1/)).toBeInTheDocument();
+    expect(screen.getByText("Etna'da kül bulutu uçuşları durdurdu")).toBeInTheDocument();
+    expect(screen.queryByText("Orta önem")).not.toBeInTheDocument();
+    expect(screen.getByText(/1 YÜKSEK/)).toBeInTheDocument();
   });
 
   it("still renders one stream when the other fails", async () => {
     routes({ alerts: [campaignAlert()], risks: new Error("API request failed: 500") });
     render(<AlertCenter />);
+    await expand();
 
-    expect(await screen.findByText("TK Avrupa kampanyası bitiyor")).toBeInTheDocument();
+    expect(screen.getByText("TK Avrupa kampanyası bitiyor")).toBeInTheDocument();
   });
 
-  it("is honestly empty rather than hopeful when both are quiet", async () => {
+  it("refuses to print zeroes when BOTH streams failed", async () => {
+    // The regression this locks: `useDataSource` sets `loaded` on a failed
+    // request too, so a component branching on `loaded` alone rendered a dead
+    // endpoint as "0 KRİTİK · 0 YÜKSEK · 0 ORTA" -- the most reassuring
+    // sentence on the page, produced by knowing nothing.
+    routes({
+      alerts: new Error("API request failed: 500"),
+      risks: new Error("API request failed: 500"),
+    });
+    render(<AlertCenter />);
+
+    expect(await screen.findByText(/okunamadı/)).toBeInTheDocument();
+    expect(screen.queryByText(/0 KRİTİK/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/0 YÜKSEK/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Yeniden dene/ })).toBeInTheDocument();
+  });
+
+  it("marks the counts as partial when only one stream failed", async () => {
+    routes({ alerts: [campaignAlert()], risks: new Error("API request failed: 500") });
+    render(<AlertCenter />);
+
+    // The campaign count is real and printed; the band says what is missing
+    // from it, so "1 ORTA" is not read as the whole picture.
+    expect(await screen.findByText(/1 ORTA/)).toBeInTheDocument();
+    expect(screen.getByText(/Eksik: risk sinyalleri/)).toBeInTheDocument();
+  });
+
+  it("prints its zeroes rather than hiding the section", async () => {
+    // A silent section says nothing; "0 KRİTİK" says the streams answered and
+    // had nothing to report, which is a different and useful statement.
     routes({ alerts: [], risks: radar([]) });
     render(<AlertCenter />);
 
-    await waitFor(() => expect(screen.getByText("Aktif uyarı yok.")).toBeInTheDocument());
+    expect(await screen.findByText(/0 KRİTİK/)).toBeInTheDocument();
+    expect(screen.getByText(/0 YÜKSEK/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Genişlet/ })).toBeDisabled();
   });
 });

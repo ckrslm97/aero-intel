@@ -1,19 +1,24 @@
 "use client";
 
-import { CircleAlert, Clock, Info, TriangleAlert, type LucideIcon } from "lucide-react";
+import { ChevronDown, Clock, RotateCw, TriangleAlert, type LucideIcon } from "lucide-react";
+import { CircleAlert, Info } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 
+import { Collapse } from "@/components/ui/collapse";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDataSource } from "@/hooks/use-data-source";
 import { apiFetch } from "@/lib/api";
-import { relativeTimeTr } from "@/lib/campaigns";
+import { formatRelativeTr } from "@/lib/format";
 import type { CampaignAlert, RiskRadarOut } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const ALERT_LIMIT = 12;
 const RISK_LIMIT = 4;
-const ROW_LIMIT = 10;
+/** Three, down from ten. The section sits at the very bottom of the page and
+ * opens closed; a reader who expands it wants the top of the list, and the
+ * full list is one click away on /kampanyalar and /risk-radari. */
+const ROW_LIMIT = 3;
 
 type Priority = "CRITICAL" | "HIGH" | "MEDIUM" | "INFO";
 
@@ -43,29 +48,40 @@ interface AlertRow {
   title: string;
   kindLabel: string;
   createdAt: string | null;
-  /** Which stream the row came from. Shown as a chip, because "TK Avrupa
-   * kampanyası bitiyor" and "Etna'da kül bulutu" need different reflexes and
-   * a merged list that hid the difference would be worse than two lists. */
   source: "campaign" | "risk";
   href: string;
   /** True only for the newest CRITICAL, and only on first paint. */
   flash: boolean;
 }
 
-/** "Alert Merkezi": the two real alert streams this system has, in one
- * priority-ordered list.
+/**
+ * ALERT MERKEZİ -- the page's last section, a 44px band that opens on demand.
  *
- * Campaign alerts arrive pre-prioritised from the backend. Risk items do not
- * have a priority at all -- they have a severity -- so only `high` ones are
- * lifted in, mapped to HIGH rather than CRITICAL: a high-severity disaster
- * signal genuinely is one rung below "a rival's campaign expires today" in
- * terms of what a revenue desk must act on this morning, and inventing a
- * CRITICAL for it would push the campaign alerts the desk actually owns off
- * the top of the list.
+ * It was a full-height panel in the upper half of the page. The owner's order
+ * puts alerts at the BOTTOM, which is right: an alert centre near the top
+ * competes for attention with the market state a reader came for, and on a
+ * local database with no recent campaign alerts it competed while empty.
  *
- * Both streams degrade independently: whichever one answers gets rendered.
+ * The closed band still prints its counts, including zeroes. "0 KRİTİK · 0
+ * YÜKSEK · 0 ORTA" is information -- it says the streams answered and had
+ * nothing -- and it is a different statement from the section being absent,
+ * which would say nothing at all. So the section never hides itself.
+ *
+ * THAT SENTENCE IS ONLY TRUE IF THE STREAMS ANSWERED, which is why this
+ * component now reads `error` as well as `data`. It used to build its counts
+ * out of `alerts.data ?? []` and `risks.data?.countries ?? []` and branch on
+ * `loaded` alone -- and `useDataSource` sets `loaded` on a FAILED request too.
+ * So a 500 from /campaign-alerts printed "0 KRİTİK · 0 YÜKSEK · 0 ORTA" under
+ * a byline promising the reader that a zero here is a measurement. Three
+ * zeroes is the most reassuring thing this page can say; it must never be what
+ * a dead endpoint looks like.
+ *
+ * Both streams still degrade independently: whichever one answers is rendered,
+ * and the band names the one that did not.
  */
 export function AlertCenter() {
+  const [open, setOpen] = useState(false);
+
   const alertsFetcher = useCallback(
     (signal: AbortSignal) =>
       apiFetch<CampaignAlert[]>(`/campaign-alerts?limit=${ALERT_LIMIT}`, {
@@ -83,7 +99,7 @@ export function AlertCenter() {
   const alerts = useDataSource(alertsFetcher, []);
   const risks = useDataSource(risksFetcher, []);
 
-  const rows = useMemo<AlertRow[]>(() => {
+  const merged = useMemo<AlertRow[]>(() => {
     const campaignRows: AlertRow[] = (alerts.data ?? []).map((alert) => ({
       id: `campaign-${alert.id}`,
       priority: alert.priority,
@@ -95,6 +111,10 @@ export function AlertCenter() {
       flash: false,
     }));
 
+    // Risk items have a SEVERITY, not a priority. Only `high` ones are lifted
+    // in, and they map to HIGH rather than CRITICAL: inventing a CRITICAL for
+    // them would push the campaign alerts a revenue desk actually owns off the
+    // top of the list.
     const riskRows: AlertRow[] = (risks.data?.countries ?? [])
       .flatMap((country) => country.items)
       .filter((item) => item.severity === "high")
@@ -110,9 +130,8 @@ export function AlertCenter() {
         flash: false,
       }));
 
-    const merged = [...campaignRows, ...riskRows].sort((a, b) => {
-      const byPriority =
-        PRIORITY_ORDER.indexOf(a.priority) - PRIORITY_ORDER.indexOf(b.priority);
+    const rows = [...campaignRows, ...riskRows].sort((a, b) => {
+      const byPriority = PRIORITY_ORDER.indexOf(a.priority) - PRIORITY_ORDER.indexOf(b.priority);
       if (byPriority !== 0) return byPriority;
       return (b.createdAt ?? "").localeCompare(a.createdAt ?? "");
     });
@@ -121,38 +140,103 @@ export function AlertCenter() {
     // paint. `animate-pulse-once` does not loop and is off under reduced
     // motion; a list where several rows pulsed would be a notification tray,
     // which this is not.
-    const firstCritical = merged.findIndex((row) => row.priority === "CRITICAL");
-    if (firstCritical !== -1) merged[firstCritical].flash = true;
-
-    return merged.slice(0, ROW_LIMIT);
+    const firstCritical = rows.findIndex((row) => row.priority === "CRITICAL");
+    if (firstCritical !== -1) rows[firstCritical].flash = true;
+    return rows;
   }, [alerts.data, risks.data]);
 
+  /** Counted over EVERYTHING the two streams returned, not over the three rows
+   * the open panel shows. A band that said "2 kritik" because it had truncated
+   * to three rows would be a band nobody could reconcile with /kampanyalar. */
   const counts = useMemo(() => {
-    const tally: Partial<Record<Priority, number>> = {};
-    for (const row of rows) tally[row.priority] = (tally[row.priority] ?? 0) + 1;
+    const tally: Record<Priority, number> = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, INFO: 0 };
+    for (const row of merged) tally[row.priority] += 1;
     return tally;
-  }, [rows]);
+  }, [merged]);
 
+  const rows = merged.slice(0, ROW_LIMIT);
   const loading = !alerts.loaded || !risks.loaded;
+  // "Down" is error AND no data: a failed refresh that still has an earlier
+  // result keeps showing it (that is `stale`), and those counts are real.
+  const alertsDown = alerts.error !== null && alerts.data === null;
+  const risksDown = risks.error !== null && risks.data === null;
+  const allDown = alertsDown && risksDown;
+  const downLabel = alertsDown ? "kampanya uyarıları" : "risk sinyalleri";
+
+  const retryDown = () => {
+    if (alertsDown) alerts.retry();
+    if (risksDown) risks.retry();
+  };
 
   return (
-    <div className="flex h-full flex-col gap-2 rounded-xl border border-border bg-card bg-card-sheen p-3 shadow-elev-1">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-          {rows.length} bekleyen
-        </span>
-        <span className="flex items-center gap-2">
-          {PRIORITY_ORDER.filter((priority) => counts[priority]).map((priority) => (
-            <span
-              key={priority}
-              className={cn("flex items-center gap-1 text-[11px] tabular-nums", PRIORITY_META[priority].text)}
+    <div className="flex flex-col gap-1.5 rounded-lg border border-border bg-card/60 px-3 py-2">
+      <div className="flex h-7 flex-wrap items-center gap-x-3 gap-y-1">
+        <TriangleAlert
+          className={cn("size-3.5 shrink-0", counts.CRITICAL > 0 ? "text-critical" : "text-muted-foreground")}
+          aria-hidden
+        />
+        {loading ? (
+          <Skeleton className="h-3 w-40 rounded" />
+        ) : allDown ? (
+          <span className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+            Uyarı kaynakları okunamadı — sayaç üretilemiyor.
+            <button
+              type="button"
+              onClick={retryDown}
+              className="flex items-center gap-1 rounded border border-border px-1.5 py-px text-[10px] font-medium transition-colors hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
             >
-              <span aria-hidden className={cn("size-1.5 rounded-full", PRIORITY_META[priority].dot)} />
-              {PRIORITY_META[priority].label} {counts[priority]}
-            </span>
-          ))}
-        </span>
-        <span className="ml-auto flex gap-3 text-[11px]">
+              <RotateCw className="size-2.5" aria-hidden />
+              Yeniden dene
+            </button>
+          </span>
+        ) : (
+          <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            {(["CRITICAL", "HIGH", "MEDIUM"] as const).map((priority) => (
+              <span
+                key={priority}
+                className={cn(
+                  "flex items-center gap-1 text-[11px] tabular-nums",
+                  counts[priority] > 0 ? PRIORITY_META[priority].text : "text-muted-foreground",
+                )}
+              >
+                <span aria-hidden className={cn("size-1.5 rounded-full", PRIORITY_META[priority].dot)} />
+                {counts[priority]} {PRIORITY_META[priority].label.toLocaleUpperCase("tr-TR")}
+              </span>
+            ))}
+            {/* One stream answered and one did not. The counts below are real
+                but PARTIAL, and a reader who is not told that will read them
+                as the whole picture. */}
+            {(alertsDown || risksDown) && (
+              <span className="flex items-center gap-1.5 text-[10px] text-warning">
+                Eksik: {downLabel}
+                <button
+                  type="button"
+                  onClick={retryDown}
+                  className="flex items-center gap-1 rounded border border-border px-1.5 py-px font-medium text-muted-foreground transition-colors hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                >
+                  <RotateCw className="size-2.5" aria-hidden />
+                  Yeniden dene
+                </button>
+              </span>
+            )}
+          </span>
+        )}
+
+        <button
+          type="button"
+          onClick={() => setOpen((value) => !value)}
+          aria-expanded={open}
+          disabled={rows.length === 0}
+          className="rounded border border-border px-2 py-0.5 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-accent disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+        >
+          {open ? "Daralt" : "Genişlet"}
+          <ChevronDown
+            className={cn("ml-1 inline size-3 transition-transform", open && "rotate-180")}
+            aria-hidden
+          />
+        </button>
+
+        <span className="ml-auto flex gap-3 text-[10px]">
           <Link
             href="/kampanyalar"
             className="rounded text-muted-foreground underline-offset-2 hover:text-primary hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
@@ -168,18 +252,8 @@ export function AlertCenter() {
         </span>
       </div>
 
-      {loading ? (
-        <div className="flex flex-col gap-1.5">
-          {Array.from({ length: 5 }).map((_, i) => (
-            <Skeleton key={i} className="h-9 w-full rounded-lg" />
-          ))}
-        </div>
-      ) : rows.length === 0 ? (
-        <p className="flex flex-1 items-center justify-center rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
-          Aktif uyarı yok.
-        </p>
-      ) : (
-        <ul className="flex flex-col gap-1">
+      <Collapse open={open && rows.length > 0}>
+        <ul className="flex flex-col gap-0.5 pt-1">
           {rows.map((row) => {
             const meta = PRIORITY_META[row.priority];
             const Icon = meta.icon;
@@ -187,32 +261,30 @@ export function AlertCenter() {
               <li key={row.id}>
                 <Link
                   href={row.href}
+                  style={{ "--glow-color": "var(--critical)" } as React.CSSProperties}
                   className={cn(
-                    "flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs transition-colors hover:bg-accent/50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
-                    row.flash && "animate-pulse-once",
+                    "flex h-7 items-center gap-2 rounded px-2 text-xs transition-colors hover:bg-accent/50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
+                    row.flash && "edge-lit animate-pulse-once",
                   )}
                 >
-                  <Icon className={cn("size-3.5 shrink-0", meta.text)} aria-hidden />
+                  <Icon className={cn("size-3 shrink-0", meta.text)} aria-hidden />
                   <span className="sr-only">{meta.label} öncelikli:</span>
                   <span className="min-w-0 flex-1 truncate font-medium text-foreground">
                     {row.title}
-                  </span>
-                  <span className="hidden shrink-0 rounded-full bg-muted px-1.5 py-px text-[10px] text-muted-foreground sm:inline">
-                    {row.source === "campaign" ? "Kampanya" : "Risk"}
                   </span>
                   <span className="hidden shrink-0 text-[10px] text-muted-foreground lg:inline">
                     {row.kindLabel}
                   </span>
                   <span className="flex shrink-0 items-center gap-1 text-[10px] tabular-nums text-muted-foreground">
                     <Clock className="size-2.5" aria-hidden />
-                    {row.createdAt ? relativeTimeTr(row.createdAt) : "—"}
+                    {row.createdAt ? formatRelativeTr(row.createdAt) : "—"}
                   </span>
                 </Link>
               </li>
             );
           })}
         </ul>
-      )}
+      </Collapse>
     </div>
   );
 }

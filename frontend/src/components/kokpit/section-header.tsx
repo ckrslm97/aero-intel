@@ -39,7 +39,7 @@ export function SectionHeader({
         )}
       </div>
       <MotionRail style={{ "--glow-color": glowVar } as React.CSSProperties} />
-      {caption && <p className="text-[11px] leading-relaxed text-muted-foreground">{caption}</p>}
+      {caption && <p className="text-[10px] leading-relaxed text-muted-foreground">{caption}</p>}
     </div>
   );
 }

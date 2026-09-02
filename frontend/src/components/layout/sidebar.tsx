@@ -64,10 +64,17 @@ function NavLinks({
               className="absolute inset-y-1 left-0 w-0.5 rounded-full bg-gradient-to-b from-primary to-chart-4"
             />
           )}
-          <Icon className="relative z-10 size-4 shrink-0" />
-          {!collapsed && (
-            <span className="relative z-10 flex-1 truncate">{item.label}</span>
-          )}
+          <Icon className="relative z-10 size-4 shrink-0" aria-hidden />
+          {/* The label is ALWAYS rendered, and merely hidden visually when the
+              rail is collapsed. It used to be dropped from the tree entirely,
+              leaving seven icon-only links whose accessible name came from
+              `title` -- the last resort of the accname algorithm, which some
+              screen readers never reach. These seven are the first seven stops
+              of every page's tab order, so that was the whole product's
+              keyboard entry point announcing nothing. */}
+          <span className={cn("relative z-10 flex-1 truncate", collapsed && "sr-only")}>
+            {item.label}
+          </span>
         </Link>
       );
     });

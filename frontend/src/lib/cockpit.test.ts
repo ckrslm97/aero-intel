@@ -1,21 +1,19 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  adjacentYearPair,
+  annualScopeLabel,
   forecastBuckets,
   forecastSplitIndex,
   freshnessOf,
-  HIGH_IMPACT_IMPORTANCE,
   latestAsOf,
   LIVE_WINDOW_MINUTES,
   MEDIAN_MIN_INSTITUTIONS,
-  sentimentTotals,
   signalLevelStyle,
   splitForecast,
-  toFeedRow,
-  topByImportance,
-  type FeedRow,
+  unionYears,
 } from "./cockpit";
-import type { AnnualPoint, ArticleOut, FxForecastOut } from "./types";
+import type { AnnualPoint, FxForecastOut } from "./types";
 
 const NOW = new Date("2026-08-30T12:00:00Z");
 const minutesAgo = (minutes: number) =>
@@ -38,6 +36,18 @@ describe("freshnessOf", () => {
     expect(freshness.live).toBe(false);
     expect(freshness.label).toContain("Gecikmeli");
     expect(freshness.label).toContain("09:15");
+  });
+
+  it("measures HOW LATE it is, in the unit a reader would use", () => {
+    // The header used to print "Gecikmeli · son 16:50" beside "Veri: 16:50
+    // UTC" -- one timestamp twice, and not a word about the size of the gap.
+    // "son 16:50" reads as today's 16:50; the board was two days old.
+    expect(freshnessOf(minutesAgo(45), NOW).delayLabel).toBe("45 dk");
+    expect(freshnessOf(minutesAgo(5 * 60), NOW).delayLabel).toBe("5 sa");
+    expect(freshnessOf(minutesAgo(2 * 24 * 60), NOW).delayLabel).toBe("2 gün");
+    // Nothing to confess inside the live window.
+    expect(freshnessOf(minutesAgo(5), NOW).delayLabel).toBeNull();
+    expect(freshnessOf(null, NOW).delayLabel).toBeNull();
   });
 
   it("says 'Veri yok' rather than inventing a timestamp", () => {
@@ -122,146 +132,6 @@ describe("splitForecast", () => {
     // split is 0, so there is no preceding real year to join to -- the guard
     // in splitForecast is what stops index -1 leaking a stray point.
     expect(projected).toEqual([null]);
-  });
-});
-
-describe("toFeedRow", () => {
-  const article = (overrides: Partial<ArticleOut["enrichment"]> = {}, rest: Partial<ArticleOut> = {}) =>
-    ({
-      id: "a1",
-      url: "https://example.test/a",
-      title: "Original English Title",
-      author: null,
-      published_at: "2026-08-30T09:00:00Z",
-      fetched_at: "2026-08-30T09:05:00Z",
-      status: "published",
-      source: { id: "s", name: "Reuters", url: "u", category: "wire", trust_weight: 1 },
-      enrichment: {
-        headline: "English headline",
-        summary: "s",
-        category: "network",
-        subcategory: null,
-        region: "europe",
-        importance_score: 0.4,
-        sentiment: "neutral",
-        confidence_score: 0.7,
-        corroborating_source_count: 1,
-        verified_at: null,
-        tags: "",
-        headline_tr: "Türkçe başlık",
-        summary_tr: null,
-        translated_at: "2026-08-30T09:06:00Z",
-        is_translated: true,
-        risk_severity: null,
-        ...overrides,
-      },
-      reading_time_minutes: 2,
-      airlines: [],
-      airports: [],
-      ...rest,
-    }) as ArticleOut;
-
-  it("prefers the Turkish headline", () => {
-    expect(toFeedRow(article()).headline).toBe("Türkçe başlık");
-  });
-
-  it("falls back through the English headline to the raw title, never inventing one", () => {
-    expect(toFeedRow(article({ headline_tr: null })).headline).toBe("English headline");
-    expect(toFeedRow(article({ headline_tr: null, headline: "" })).headline).toBe(
-      "Original English Title",
-    );
-    expect(toFeedRow(article({}, { enrichment: null })).headline).toBe("Original English Title");
-  });
-
-  it("earns the high-impact badge from a real classification, not from a guess", () => {
-    expect(toFeedRow(article()).highImpact).toBe(false);
-    expect(toFeedRow(article({ risk_severity: "high" })).highImpact).toBe(true);
-    expect(toFeedRow(article({ risk_severity: "medium" })).highImpact).toBe(false);
-    expect(
-      toFeedRow(article({ importance_score: HIGH_IMPACT_IMPORTANCE })).highImpact,
-    ).toBe(false);
-    expect(
-      toFeedRow(article({ importance_score: HIGH_IMPACT_IMPORTANCE + 0.01 })).highImpact,
-    ).toBe(true);
-  });
-
-  it("keeps an unclassified article renderable rather than dropping it", () => {
-    const row = toFeedRow(article({}, { enrichment: null }));
-    expect(row.category).toBe("general");
-    expect(row.region).toBeNull();
-    expect(row.sentiment).toBeNull();
-    expect(row.highImpact).toBe(false);
-  });
-
-  it("carries the raw importance and severity through, unenriched as null", () => {
-    // "no enrichment at all" and "scored zero" must stay distinguishable: only
-    // the first is allowed to sink a row silently in topByImportance.
-    expect(toFeedRow(article()).importance).toBe(0.4);
-    expect(toFeedRow(article({ importance_score: 0 })).importance).toBe(0);
-    expect(toFeedRow(article({}, { enrichment: null })).importance).toBeNull();
-    expect(toFeedRow(article({ risk_severity: "medium" })).riskSeverity).toBe("medium");
-    expect(toFeedRow(article({}, { enrichment: null })).riskSeverity).toBeNull();
-  });
-
-  describe("topByImportance", () => {
-    const row = (id: string, importance: number | null): FeedRow => ({
-      id,
-      headline: id,
-      url: `https://example.test/${id}`,
-      category: "general",
-      region: null,
-      publishedAt: null,
-      sourceName: "Reuters",
-      highImpact: false,
-      sentiment: null,
-      importance,
-      riskSeverity: null,
-    });
-
-    it("ranks by the enrichment's own score, most important first", () => {
-      const ranked = topByImportance([row("a", 0.3), row("b", 0.9), row("c", 0.6)]);
-      expect(ranked.map((entry) => entry.id)).toEqual(["b", "c", "a"]);
-    });
-
-    it("takes only the requested count", () => {
-      const ranked = topByImportance(
-        [row("a", 0.3), row("b", 0.9), row("c", 0.6), row("d", 0.7)],
-        3,
-      );
-      expect(ranked).toHaveLength(3);
-      expect(ranked.map((entry) => entry.id)).toEqual(["b", "d", "c"]);
-    });
-
-    it("sorts unenriched stories last but never drops them", () => {
-      const ranked = topByImportance([row("unenriched", null), row("scored", 0.1)]);
-      expect(ranked.map((entry) => entry.id)).toEqual(["scored", "unenriched"]);
-      expect(ranked).toHaveLength(2);
-    });
-
-    it("does not mutate the caller's array", () => {
-      const input = [row("a", 0.1), row("b", 0.9)];
-      topByImportance(input);
-      expect(input.map((entry) => entry.id)).toEqual(["a", "b"]);
-    });
-  });
-});
-
-describe("sentimentTotals", () => {
-  const rows = [
-    { category: "network", positive: 3, neutral: 5, negative: 1 },
-    { category: "fleet", positive: 2, neutral: 4, negative: 6 },
-  ];
-
-  it("sums the per-category counts the insights endpoint returns", () => {
-    const totals = sentimentTotals(rows);
-    expect(totals).toEqual({ positive: 5, neutral: 9, negative: 7, total: 21 });
-  });
-
-  it("returns a zero total rather than a fabricated split for no data", () => {
-    // The bar renders "henüz sınıflandırılmış haber yok" off this, never a
-    // three-way 33% split of nothing.
-    expect(sentimentTotals([]).total).toBe(0);
-    expect(sentimentTotals(undefined).total).toBe(0);
   });
 });
 
@@ -363,3 +233,59 @@ describe("forecastBuckets", () => {
     ]);
   });
 });
+
+describe("unionYears + splitForecast on a shared axis", () => {
+  const point = (year: number, value: number, kind: AnnualPoint["kind"] = "actual"): AnnualPoint => ({
+    year,
+    value,
+    kind,
+  });
+
+  it("builds the axis from every series, not from the first one", () => {
+    const a = { points: [point(2023, 1), point(2024, 2), point(2025, 3)] };
+    const b = { points: [point(2024, 9), point(2026, 11)] };
+    expect(unionYears([a, b])).toEqual([2023, 2024, 2025, 2026]);
+  });
+
+  it("aligns a gapped series to the axis BY YEAR instead of by position", () => {
+    // The bug this closes: a chart that took `chosen[0]`'s years and then fed
+    // every series a positional array plotted a gapped second series one slot
+    // left -- 2024's figure printed under the 2023 label, with no symptom.
+    const years = [2023, 2024, 2025, 2026];
+    const gapped = [point(2023, 10), point(2024, 12), point(2026, 15, "forecast")];
+    const { actual, projected } = splitForecast(gapped, years);
+    expect(actual).toEqual([10, 12, null, null]);
+    // Nothing is invented for the missing 2025; `connectNulls: false` then
+    // breaks the line there rather than drawing an IATA figure nobody
+    // published.
+    expect(projected[2]).toBeNull();
+    expect(projected[3]).toBe(15);
+  });
+});
+
+describe("adjacentYearPair", () => {
+  const point = (year: number, value: number, kind: AnnualPoint["kind"] = "actual"): AnnualPoint => ({
+    year,
+    value,
+    kind,
+  });
+
+  it("returns the pair when the previous year is really there", () => {
+    const pair = adjacentYearPair([point(2024, 8.4), point(2025, 8.67), point(2026, 9.66, "forecast")]);
+    expect(pair?.previous.year).toBe(2025);
+    expect(pair?.latest.year).toBe(2026);
+    expect(annualScopeLabel(pair!.previous, pair!.latest)).toBe("25→26T");
+  });
+
+  it("refuses to pair across a missing year", () => {
+    // `cask`'s real shape in this database: no 2025 row at all. "Last two
+    // POINTS" would hand back 2024 and 2026T -- a two-year change printed in
+    // the same pill its neighbours fill with a one-year one.
+    expect(adjacentYearPair([point(2024, 8.67), point(2026, 9.66, "forecast")])).toBeNull();
+  });
+
+  it("has nothing to pair in an empty series", () => {
+    expect(adjacentYearPair([])).toBeNull();
+  });
+});
+

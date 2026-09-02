@@ -6,13 +6,7 @@
  * "canlı" is a claim about data and has to be earned by a timestamp rather
  * than printed as decoration.
  */
-import type {
-  AnnualPoint,
-  ArticleOut,
-  CockpitSignal,
-  FxForecastOut,
-  InsightsOut,
-} from "@/lib/types";
+import type { AnnualPoint, CockpitSignal, FxForecastOut } from "@/lib/types";
 
 /* --- Signal levels ------------------------------------------------------ */
 
@@ -65,6 +59,25 @@ export interface Freshness {
   label: string;
   /** UTC HH:MM of the reading, or null when there is no reading at all. */
   timeLabel: string | null;
+  /** HOW FAR behind: "45 dk", "3 sa", "2 gün". Null inside the live window
+   * (there is nothing to confess) and null with no reading at all.
+   *
+   * The header used to print "Gecikmeli · son 16:50" beside "Veri: 16:50 UTC"
+   * -- one timestamp, twice, and between them not a word about the size of
+   * the gap. A reader could easily take "son 16:50" for today's 16:50 while
+   * the data was two days old. The magnitude is the part that decides whether
+   * the number below is usable, so it is the part that gets printed. */
+  delayLabel: string | null;
+}
+
+/** Coarse, honest units. Minutes below an hour, hours below two days, days
+ * after that: a stale board is measured in the unit a reader would use to
+ * describe it, not in 2 870 minutes. */
+function delayLabelOf(minutes: number): string {
+  if (minutes < 60) return `${Math.round(minutes)} dk`;
+  const hours = minutes / 60;
+  if (hours < 48) return `${Math.round(hours)} sa`;
+  return `${Math.round(hours / 24)} gün`;
 }
 
 function utcTime(date: Date): string {
@@ -82,17 +95,22 @@ function utcTime(date: Date): string {
  * the newest as_of supports, and says "Veri yok" when it supports nothing.
  */
 export function freshnessOf(asOf: string | null | undefined, now: Date = new Date()): Freshness {
-  if (!asOf) return { live: false, label: "Veri yok", timeLabel: null };
+  if (!asOf) return { live: false, label: "Veri yok", timeLabel: null, delayLabel: null };
   const then = new Date(asOf);
   if (Number.isNaN(then.getTime())) {
-    return { live: false, label: "Veri yok", timeLabel: null };
+    return { live: false, label: "Veri yok", timeLabel: null, delayLabel: null };
   }
   const time = utcTime(then);
   const minutes = (now.getTime() - then.getTime()) / 60_000;
   if (minutes <= LIVE_WINDOW_MINUTES) {
-    return { live: true, label: "Canlı", timeLabel: time };
+    return { live: true, label: "Canlı", timeLabel: time, delayLabel: null };
   }
-  return { live: false, label: `Gecikmeli · son ${time}`, timeLabel: time };
+  return {
+    live: false,
+    label: `Gecikmeli · son ${time}`,
+    timeLabel: time,
+    delayLabel: delayLabelOf(minutes),
+  };
 }
 
 /** The newest as_of across the FX board's pairs, or null for an empty board. */
@@ -114,19 +132,91 @@ export function forecastSplitIndex(points: AnnualPoint[]): number {
   return index === -1 ? points.length : index;
 }
 
-/** [solid, dashed] halves of one series, overlapping by a point so the two
- * lines meet. Nulls keep both arrays the length of the x axis. */
-export function splitForecast(points: AnnualPoint[]): {
+/** Every year any of the given series carries, ascending and de-duplicated.
+ *
+ * The x axis of a multi-series annual chart has to be built from the UNION,
+ * not from whichever series happens to be first. A chart that takes
+ * `chosen[0].points.map(p => p.year)` and then feeds every series a
+ * POSITIONAL array is only correct while all of them carry exactly the same
+ * years -- and this database already contains a series that does not (`cask`
+ * lost its 2025 row upstream). One missing year would slide a whole series one
+ * slot left and plot 2024's revenue under the 2023 label, silently.
+ */
+export function unionYears(seriesList: { points: AnnualPoint[] }[]): number[] {
+  const years = new Set<number>();
+  for (const entry of seriesList) for (const point of entry.points) years.add(point.year);
+  return [...years].sort((a, b) => a - b);
+}
+
+/** [solid, dashed] halves of one series, aligned to an x axis.
+ *
+ * `years` names the axis: each output slot is that year's value, or null where
+ * this series has no point for it (`connectNulls: false` then breaks the line
+ * rather than interpolating a figure IATA never published). Omit `years` and
+ * the series' own years are the axis, which is the single-series case.
+ *
+ * Nulls keep both arrays the length of the axis, and the last real year
+ * appears in BOTH so the dashed tail starts on the solid line rather than
+ * floating.
+ */
+export function splitForecast(
+  points: AnnualPoint[],
+  years?: number[],
+): {
   actual: (number | null)[];
   projected: (number | null)[];
 } {
-  const split = forecastSplitIndex(points);
+  const byYear = new Map(points.map((point) => [point.year, point]));
+  const axis = years ?? points.map((point) => point.year);
+  const aligned = axis.map((year) => byYear.get(year) ?? null);
+  const found = aligned.findIndex((point) => point !== null && point.kind !== "actual");
+  const split = found === -1 ? aligned.length : found;
   return {
-    actual: points.map((point, i) => (i < split ? point.value : null)),
-    // `split - 1` is the join: the last real year appears in both series so
-    // the dashed tail starts on the solid line rather than floating.
-    projected: points.map((point, i) => (i >= split - 1 && split > 0 ? point.value : null)),
+    actual: aligned.map((point, i) => (point && i < split ? point.value : null)),
+    // `split - 1` is the join.
+    projected: aligned.map((point, i) =>
+      point && split > 0 && i >= split - 1 ? point.value : null,
+    ),
   };
+}
+
+/** The one-letter suffix a year label carries when the year is not a
+ * measurement: "25G" for IATA's own estimate, "26T" for its forecast.
+ *
+ * Lives here rather than in a component because four surfaces print it
+ * (YearDots' labels, the Market Pulse badge, both delta scopes) and three
+ * private copies of it had already appeared. A reader who learns "T = tahmin"
+ * in one cell must not meet a different letter in the next.
+ */
+export const ANNUAL_KIND_SUFFIX: Record<AnnualPoint["kind"], string> = {
+  actual: "",
+  estimate: "G",
+  forecast: "T",
+};
+
+/** "25→26T" -- the window a year-on-year figure was computed over, in the
+ * page's own two-digit year vocabulary. */
+export function annualScopeLabel(from: AnnualPoint, to: AnnualPoint): string {
+  return `${String(from.year).slice(2)}→${String(to.year).slice(2)}${ANNUAL_KIND_SUFFIX[to.kind]}`;
+}
+
+/** The last point and the point for the year IMMEDIATELY before it, or null.
+ *
+ * "Last two POINTS" is the trap this exists to close. `cask` has no 2025 row
+ * (an upstream de-duplication bug, D3 in the design spec), so taking the last
+ * two points there hands back 2024 and 2026T -- a TWO-year change, which the
+ * surfaces above then print in a pill that every neighbouring cell fills with
+ * a ONE-year change. Nothing on screen distinguishes them. Refusing the
+ * comparison, and saying why, is the only honest option; interpolating a 2025
+ * would be inventing an IATA figure.
+ */
+export function adjacentYearPair(
+  points: AnnualPoint[],
+): { previous: AnnualPoint; latest: AnnualPoint } | null {
+  const latest = points[points.length - 1];
+  if (!latest) return null;
+  const previous = points.find((point) => point.year === latest.year - 1);
+  return previous ? { previous, latest } : null;
 }
 
 export const ANNUAL_KIND_LABELS_TR: Record<AnnualPoint["kind"], string> = {
@@ -134,124 +224,6 @@ export const ANNUAL_KIND_LABELS_TR: Record<AnnualPoint["kind"], string> = {
   estimate: "tahmini gerçekleşme",
   forecast: "tahmin",
 };
-
-/* --- Aviation feed ------------------------------------------------------ */
-
-/** One row of "Havacılık Akışı", reduced to what the row actually draws.
- *
- * Every field is either present on the article or explicitly null. Nothing is
- * defaulted: a story with no Turkish headline falls back to its original title
- * rather than to an invented translation, and `highImpact` is earned by a real
- * classification, never by "looks important".
- */
-export interface FeedRow {
-  id: string;
-  headline: string;
-  url: string;
-  category: string;
-  region: string | null;
-  publishedAt: string | null;
-  sourceName: string;
-  /** True for a high-severity risk story or a top-decile importance score --
-   * the two flags the enrichment genuinely produces. */
-  highImpact: boolean;
-  sentiment: string | null;
-  /** The enrichment's own 0-1 importance score, or null for an article with no
-   * enrichment at all. Kept nullable rather than defaulted to 0: "never
-   * classified" and "classified as unimportant" are different, and only the
-   * first should sink a row silently. */
-  importance: number | null;
-  /** The classified risk severity, where the enrichment assigned one. */
-  riskSeverity: string | null;
-}
-
-/** Above this, the enrichment's own importance score is "top of the feed". */
-export const HIGH_IMPACT_IMPORTANCE = 0.8;
-
-export function toFeedRow(article: ArticleOut): FeedRow {
-  const enrichment = article.enrichment;
-  return {
-    id: article.id,
-    headline: enrichment?.headline_tr || enrichment?.headline || article.title,
-    url: article.url,
-    category: enrichment?.category ?? "general",
-    region: enrichment?.region ?? null,
-    publishedAt: article.published_at,
-    sourceName: article.source?.name ?? "",
-    highImpact:
-      enrichment?.risk_severity === "high" ||
-      (enrichment?.importance_score ?? 0) > HIGH_IMPACT_IMPORTANCE,
-    sentiment: enrichment?.sentiment ?? null,
-    importance: enrichment?.importance_score ?? null,
-    riskSeverity: enrichment?.risk_severity ?? null,
-  };
-}
-
-/** The `count` highest-scoring rows, most important first.
- *
- * GET /articles orders by publication time, not by importance -- so "en önemli
- * 3" has to be a ranking over rows already fetched, and it is only ever the
- * top three OF THAT WINDOW (the last few days, above the same importance floor
- * the feed uses). It is not a claim about the archive, which is why the panel
- * prints its window in the caption.
- *
- * Unenriched rows sort last rather than being dropped: a story the pipeline
- * never classified is still a story, and it should only lose to one that
- * actually scored higher. Ties keep the incoming (most recent first) order.
- */
-export function topByImportance(rows: FeedRow[], count = 3): FeedRow[] {
-  return [...rows]
-    .sort((a, b) => (b.importance ?? -1) - (a.importance ?? -1))
-    .slice(0, count);
-}
-
-export const SENTIMENT_LABELS_TR: Record<string, string> = {
-  positive: "Olumlu",
-  negative: "Olumsuz",
-  neutral: "Nötr",
-};
-
-/** Only the two that carry information. A "Nötr" badge on two thirds of the
- * feed is noise, so neutral gets no badge at all. */
-export const SENTIMENT_STYLES: Record<string, string> = {
-  positive: "bg-good/10 text-good",
-  negative: "bg-critical/10 text-critical",
-};
-
-/* --- Sentiment distribution --------------------------------------------- */
-
-export interface SentimentTotals {
-  positive: number;
-  neutral: number;
-  negative: number;
-  total: number;
-}
-
-/** The whole archive's sentiment split, summed across categories.
- *
- * `/insights` returns sentiment PER CATEGORY (see
- * backend/app/services/insights_service.py); the Kokpit bar is the same counts
- * rolled up, so the bar and the per-category view on /insights can never
- * disagree about how many articles there were. Nothing is weighted or scored:
- * these are counts of classified articles, which is all the classification
- * produces.
- *
- * A zero total is returned as-is rather than as an empty object, so the caller
- * renders "henüz sınıflandırılmış haber yok" instead of a three-way 33% split
- * of nothing.
- */
-export function sentimentTotals(
-  rows: InsightsOut["sentiment_by_category"] | undefined,
-): SentimentTotals {
-  const totals = { positive: 0, neutral: 0, negative: 0, total: 0 };
-  for (const row of rows ?? []) {
-    totals.positive += row.positive;
-    totals.neutral += row.neutral;
-    totals.negative += row.negative;
-  }
-  totals.total = totals.positive + totals.neutral + totals.negative;
-  return totals;
-}
 
 /* --- FX forecast buckets ------------------------------------------------- */
 

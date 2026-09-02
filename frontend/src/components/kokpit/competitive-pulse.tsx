@@ -1,73 +1,94 @@
 "use client";
 
-import { ArrowDown, ArrowUp, Megaphone, Route, TrendingUp } from "lucide-react";
+import { Megaphone, RotateCw, Route, TrendingUp } from "lucide-react";
 import Link from "next/link";
 import { useCallback } from "react";
 
 import { AirlineLogo } from "@/components/airline-logo";
+import { Delta } from "@/components/ui/delta";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDataSource } from "@/hooks/use-data-source";
 import { apiFetch } from "@/lib/api";
-import { airlineTabs, worldRegions } from "@/lib/nav";
+import { worldRegions } from "@/lib/nav";
 import type { InsightsOut, NetworkSignalGroup, PromotionNewCountOut } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-// Keyed by plain string: the codes arriving from the API are strings, and
-// narrowing them to CarrierCode at every lookup would be a cast asserting
-// something the response cannot guarantee.
-const BRAND_COLOR = new Map<string, string>(
-  airlineTabs.map((airline) => [airline.code, airline.color]),
-);
 const REGION_NAME = new Map<string, string>(
   worldRegions.map((region) => [region.slug, region.name]),
 );
 
-function Panel({
-  icon: Icon,
-  title,
-  caption,
-  href,
-  hrefLabel,
-  children,
-}: {
-  icon: typeof Megaphone;
-  title: string;
-  /** What the number in this panel actually measures. Not optional, and not a
-   * tooltip: every figure in this section is a NEWS/CAMPAIGN VOLUME, and a
-   * reader who skims one of them as market share has been misled by us. */
-  caption: string;
-  href: string;
-  hrefLabel: string;
-  children: React.ReactNode;
-}) {
+/** "The stream did not answer" -- which is NOT "the stream answered zero".
+ *
+ * All three cells used to branch on `loaded` alone and then read
+ * `data?.count ?? 0` / an empty array, so a 500 from any of the three
+ * endpoints printed a confident "0" and "Son 48 saatte yeni kampanya yok."
+ * A count is a claim about the world; an error is a claim about us. The page's
+ * whole argument is that it never prints the first when it only knows the
+ * second. `SignalStream` already had this right with `DataSourceError`; this
+ * is the same contract at cell scale, where a full error panel would not fit.
+ */
+function SourceDown({ onRetry }: { onRetry: () => void }) {
   return (
-    <div className="flex flex-col gap-2 rounded-xl border border-border bg-card bg-card-sheen p-3 shadow-elev-1">
-      <div className="flex items-center gap-2">
-        <Icon className="size-3.5 text-muted-foreground" aria-hidden />
-        <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-          {title}
-        </h3>
-        <Link
-          href={href}
-          className="ml-auto rounded text-[10px] text-muted-foreground underline-offset-2 hover:text-primary hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-        >
-          {hrefLabel} →
-        </Link>
-      </div>
-      <div className="flex flex-1 flex-col gap-2">{children}</div>
-      <p className="text-[10px] leading-relaxed text-muted-foreground">{caption}</p>
+    <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+      <span>Kaynak okunamadı.</span>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="flex items-center gap-1 rounded border border-border px-1.5 py-px font-medium transition-colors hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+      >
+        <RotateCw className="size-2.5" aria-hidden />
+        Yeniden dene
+      </button>
     </div>
   );
 }
 
-/** "Rekabet Nabzı": three counts of what rivals are being written about.
+function Cell({
+  icon: Icon,
+  title,
+  href,
+  children,
+}: {
+  icon: typeof Megaphone;
+  title: string;
+  href: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex min-h-[56px] flex-col gap-1 rounded-lg border border-border bg-card/60 px-3 py-2">
+      <div className="flex items-center gap-1.5">
+        <Icon className="size-3 shrink-0 text-muted-foreground" aria-hidden />
+        <h3 className="min-w-0 flex-1 truncate text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+          {title}
+        </h3>
+        <Link
+          href={href}
+          className="shrink-0 rounded text-[10px] text-muted-foreground underline-offset-2 hover:text-primary hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+        >
+          →
+        </Link>
+      </div>
+      <div className="min-h-0 flex-1 overflow-hidden">{children}</div>
+    </div>
+  );
+}
+
+/**
+ * REKABET / PİYASA GÖRÜNÜMÜ -- three counts, one row, 68px.
  *
- * Everything here is a COUNT OF NEWS AND CAMPAIGNS. This system has no rival
- * capacity, load factor, market share or schedule data of any kind -- see the
- * Hub page's own note about there being no OAG feed on the free tier -- so no
- * number in this section may be captioned as any of those, and each panel
- * carries the caveat in its own footer rather than relying on one shared line
- * a reader might scroll past.
+ * EVERY NUMBER IN THIS SECTION IS A COUNT OF NEWS AND CAMPAIGNS. This system
+ * carries no rival capacity, load factor, market share, yield or price-pressure
+ * data of any kind -- not in a model, not in a column, not behind an endpoint.
+ * The owner's example dashboard showed "COMPETITOR CAPACITY +5,2% / MARKET LF
+ * 82,1% / PRICE PRESSURE MEDIUM"; none of those three numbers can be produced
+ * here, and producing something that looked like them would be a fabrication
+ * dressed as a KPI. The section caption says so in the reader's own language,
+ * above these cells, and it is not removable.
+ *
+ * The 48-hour campaign count stays here (rather than moving to Günün Özeti)
+ * precisely because the Günün Özeti tiles print no numbers at all -- so this
+ * is the only place on the page the figure appears, and no duplication is
+ * created by keeping it.
  */
 export function CompetitivePulse() {
   const newCountFetcher = useCallback(
@@ -92,127 +113,108 @@ export function CompetitivePulse() {
   const insights = useDataSource(insightsFetcher, []);
   const routes = useDataSource(routesFetcher, []);
 
-  const movers = (insights.data?.airline_momentum ?? [])
-    .filter((mover) => mover.delta !== 0)
-    .slice(0, 3);
-  const newRoutes = (routes.data ?? [])
-    .flatMap((group) =>
-      group.articles.map((article) => ({ ...article, region: group.region })),
-    )
-    .slice(0, 3);
+  const momentum = insights.data?.airline_momentum ?? [];
+  const movers = momentum.filter((mover) => mover.delta !== 0).slice(0, 3);
+  const routeGroups = routes.data ?? [];
+  const routeTotal = routeGroups.reduce((sum, group) => sum + group.count, 0);
+  const firstRoute = routeGroups.find((group) => group.articles.length > 0);
 
   return (
-    <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
-      <Panel
-        icon={Megaphone}
-        title="Son 48 saat"
-        caption="Tespit edilen kampanya duyurusu sayısı — kapasite veya fiyat endeksi değil."
-        href="/kampanyalar"
-        hrefLabel="Kampanyalar"
-      >
+    <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+      <Cell icon={Megaphone} title="48 saatte kampanya" href="/kampanyalar">
         {!newCount.loaded ? (
-          <Skeleton className="h-16 w-full rounded-lg" />
+          <Skeleton className="h-6 w-full rounded" />
+        ) : !newCount.data ? (
+          <SourceDown onRetry={newCount.retry} />
         ) : (
-          <>
-            <span className="text-3xl font-semibold tabular-nums leading-none dark:text-glow">
-              {newCount.data?.count ?? 0}
+          <div className="flex items-center gap-2">
+            {/* A zero is printed ONCE, and quietly. It used to be a 20px/600
+                figure -- the same weight as the KPI strip's real numbers --
+                followed by a sentence repeating it in words: the largest type
+                in the section, spent twice on "nothing happened". */}
+            <span
+              className={cn(
+                "leading-none tabular-nums",
+                newCount.data.count === 0
+                  ? "text-sm font-medium text-muted-foreground"
+                  : "text-xl font-semibold",
+              )}
+            >
+              {newCount.data.count}
             </span>
-            <div className="flex flex-wrap gap-1">
-              {(newCount.data?.airline_codes ?? []).map((code) => (
+            <span className="text-[10px] text-muted-foreground">son 48 saat</span>
+            <div className="flex min-w-0 flex-wrap gap-1">
+              {newCount.data.airline_codes.slice(0, 4).map((code) => (
                 <span
                   key={code}
-                  style={{ "--glow-color": BRAND_COLOR.get(code) ?? "var(--primary)" } as React.CSSProperties}
-                  className="flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-medium edge-lit"
+                  className="flex items-center gap-0.5 rounded-full border border-border px-1 text-[10px]"
                 >
-                  <AirlineLogo code={code} className="size-3" />
+                  <AirlineLogo code={code} className="size-2.5" />
                   {code}
                 </span>
               ))}
-              {(newCount.data?.airline_codes ?? []).length === 0 && (
-                <span className="text-[11px] text-muted-foreground">
-                  Son 48 saatte yeni kampanya yok.
-                </span>
-              )}
             </div>
-          </>
+          </div>
         )}
-      </Panel>
+      </Cell>
 
-      <Panel
-        icon={TrendingUp}
-        title="Haber momentumu"
-        caption="Son 7 günün haber sayısı, önceki 7 güne göre. Haber hacmi ölçüsüdür; performans değil."
-        href="/biz"
-        hrefLabel="Biz"
-      >
+      <Cell icon={TrendingUp} title="Haber momentumu (7g vs 7g)" href="/biz">
         {!insights.loaded ? (
-          <Skeleton className="h-16 w-full rounded-lg" />
+          <Skeleton className="h-6 w-full rounded" />
+        ) : !insights.data ? (
+          <SourceDown onRetry={insights.retry} />
         ) : movers.length === 0 ? (
-          <p className="text-[11px] text-muted-foreground">Bu hafta belirgin bir hareket yok.</p>
+          // "Measured, and nothing moved" and "we have no measurement" are
+          // different facts and now read differently. The old single sentence
+          // collapsed them.
+          <p className="text-[10px] text-muted-foreground">
+            {momentum.length === 0
+              ? "Momentum verisi yok."
+              : "Bu hafta belirgin bir hareket yok."}
+          </p>
         ) : (
-          <ul className="flex flex-col gap-1.5">
-            {movers.map((mover) => {
-              const up = mover.delta > 0;
-              return (
-                <li key={mover.code} className="flex items-center gap-2 text-xs">
-                  <AirlineLogo code={mover.code} className="size-3.5 shrink-0" />
-                  <span
-                    className="size-1.5 shrink-0 rounded-full"
-                    style={{ backgroundColor: BRAND_COLOR.get(mover.code) ?? "var(--primary)" }}
-                    aria-hidden
-                  />
-                  <span className="min-w-0 flex-1 truncate">{mover.name}</span>
-                  <span
-                    className={cn(
-                      "flex shrink-0 items-center gap-0.5 tabular-nums font-semibold",
-                      up ? "text-good" : "text-critical",
-                    )}
-                  >
-                    {up ? <ArrowUp className="size-3" aria-hidden /> : <ArrowDown className="size-3" aria-hidden />}
-                    {Math.abs(mover.delta)}
-                  </span>
-                  <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground">
-                    {mover.previous}→{mover.current}
-                  </span>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </Panel>
-
-      <Panel
-        icon={Route}
-        title="Yeni rota sinyalleri"
-        caption="Son 30 günde yeni hat duyurusu olarak sınıflanan haberler — tarife verisi değil."
-        href="/hublar"
-        hrefLabel="Hublar"
-      >
-        {!routes.loaded ? (
-          <Skeleton className="h-16 w-full rounded-lg" />
-        ) : newRoutes.length === 0 ? (
-          <p className="text-[11px] text-muted-foreground">Son 30 günde yeni hat sinyali yok.</p>
-        ) : (
-          <ul className="flex flex-col gap-1.5">
-            {newRoutes.map((signal) => (
-              <li key={signal.id} className="flex flex-col gap-0.5">
-                <a
-                  href={signal.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="line-clamp-2 rounded text-xs leading-snug hover:text-primary hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-                >
-                  {signal.headline}
-                </a>
-                <span className="text-[10px] text-muted-foreground">
-                  {REGION_NAME.get(signal.region ?? "") ?? "Diğer"}
-                  {signal.airlines.length > 0 && ` · ${signal.airlines.join(", ")}`}
-                </span>
+          <ul className="flex flex-wrap gap-x-3 gap-y-0.5">
+            {movers.map((mover) => (
+              <li key={mover.code} className="flex items-center gap-1 text-[11px]">
+                <AirlineLogo code={mover.code} className="size-3 shrink-0" />
+                <span className="font-medium">{mover.code}</span>
+                {/* Neutral: more press coverage is not "good". It is more
+                    press coverage. */}
+                <Delta pct={mover.delta} tone="neutral" valueLabel={`${mover.previous}→${mover.current}`} />
               </li>
             ))}
           </ul>
         )}
-      </Panel>
+      </Cell>
+
+      <Cell icon={Route} title="Yeni rota sinyali (30g)" href="/hublar">
+        {!routes.loaded ? (
+          <Skeleton className="h-6 w-full rounded" />
+        ) : !routes.data ? (
+          <SourceDown onRetry={routes.retry} />
+        ) : !firstRoute ? (
+          <p className="text-[10px] text-muted-foreground">Yeni rota sinyali yok.</p>
+        ) : (
+          <div className="flex flex-col gap-0.5">
+            {/* The count is WORLDWIDE; the region belongs to the headline
+                underneath it. They used to share one line -- "14 · Avrupa" --
+                which reads as "fourteen new route signals in Europe" and was
+                never true: 14 is every region added up, Europe is merely the
+                first group that had an article. Two scopes, two lines. */}
+            <span className="text-[11px] tabular-nums">
+              <b>{routeTotal}</b> sinyal · 30g · tüm bölgeler
+            </span>
+            <a
+              href={firstRoute.articles[0].url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="truncate rounded text-[10px] text-muted-foreground hover:text-primary hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            >
+              {REGION_NAME.get(firstRoute.region ?? "") ?? "Diğer"} · {firstRoute.articles[0].headline}
+            </a>
+          </div>
+        )}
+      </Cell>
     </div>
   );
 }

@@ -12,6 +12,25 @@ import { forecastBuckets, MEDIAN_MIN_INSTITUTIONS } from "@/lib/cockpit";
 import { formatRate } from "@/lib/format";
 import type { FxForecastOut, KpiDetailOut } from "@/lib/types";
 
+/** Turkish short month names for the time axis. `toLocaleDateString("tr-TR")`
+ * would work in a browser but not identically under the test runner's ICU
+ * build, and an axis label is not worth an ICU dependency. */
+const MONTHS_TR = [
+  "Oca",
+  "Şub",
+  "Mar",
+  "Nis",
+  "May",
+  "Haz",
+  "Tem",
+  "Ağu",
+  "Eyl",
+  "Eki",
+  "Kas",
+  "Ara",
+] as const;
+
+
 /** metric_key per pair, for the history fetch. Only pairs the KPI cron
  * actually records appear here -- a pair with forecasts but no live metric
  * gets its markers on their own, with no history line, rather than a fake one. */
@@ -19,6 +38,7 @@ const PAIR_METRIC_KEYS: Record<string, string> = {
   "USD/TRY": "fx_usd_try",
   "EUR/TRY": "fx_eur_try",
   "EUR/USD": "fx_eur_usd",
+  "GBP/TRY": "fx_gbp_try",
   "GBP/USD": "fx_gbp_usd",
   "USD/JPY": "fx_usd_jpy",
   "EUR/GBP": "fx_eur_gbp",
@@ -182,7 +202,26 @@ export function FxForecastChart({
         type: "time",
         axisLine: { lineStyle: { color: theme.gridline } },
         axisTick: { show: false },
-        axisLabel: { color: theme.ink, fontSize: 11, hideOverlap: true },
+        axisLabel: {
+          color: theme.ink,
+          fontSize: 11,
+          hideOverlap: true,
+          // AN EXPLICIT FORMATTER, and it is doing two jobs.
+          //
+          // A `type: "time"` axis with no formatter picks its own two-level
+          // labelling, in ENGLISH and at ECharts' default 16px -- so this one
+          // axis printed "Oct / Apr / Jul" on a page whose every other string
+          // is Turkish, in the second-largest type on the screen, next to a
+          // y axis of its own at 11px. Writing a formatter makes ECharts drop
+          // the automatic level, which is what lets `fontSize: 11` above
+          // finally apply.
+          formatter: (value: number) => {
+            const date = new Date(value);
+            return date.getMonth() === 0
+              ? String(date.getFullYear())
+              : `${MONTHS_TR[date.getMonth()]} ${String(date.getFullYear()).slice(2)}`;
+          },
+        },
         splitLine: { show: false },
       },
       yAxis: {
@@ -263,7 +302,7 @@ export function FxForecastChart({
     };
   }, [detail, buckets, theme, reduceMotion, pair]);
 
-  if (!loaded) return <Skeleton className="h-[260px] w-full rounded-xl" />;
+  if (!loaded) return <Skeleton className="h-[240px] w-full rounded-xl" />;
 
   if (!option) {
     return (
@@ -278,18 +317,29 @@ export function FxForecastChart({
 
   return (
     <div className="flex flex-col gap-1.5">
-      <ReactECharts
-        option={option}
-        style={{ height: 260, width: "100%" }}
-        opts={{ renderer: "svg" }}
-        notMerge
-      />
+      {/* The 11px is on the CONTAINER, not only in `axisLabel`.
+          ECharts 6 emits no font-size attribute on this axis' label nodes, so
+          the SVG text inherited the document's 16px and the time axis rendered
+          as the second-largest type on the page, next to its own y axis at 11.
+          Inheriting from the wrapper fixes it for whatever the renderer leaves
+          unstyled, without fighting the option tree. */}
+      <div className="text-[11px]">
+        <ReactECharts
+          option={option}
+          style={{ height: 240, width: "100%" }}
+          opts={{ renderer: "svg" }}
+          notMerge
+        />
+      </div>
+      {/* Trimmed from sixty words to twenty-five. What stays is the part a
+          reader cannot infer and would be misled without: the band is a RANGE,
+          not a confidence interval, and the median has a floor. How "Q4 2026"
+          became an x coordinate is written on each point's own tooltip, where
+          the reader who needs it is already looking. */}
       <p className="text-[10px] leading-relaxed text-muted-foreground">
-        Çizgi: gerçekleşen kapanışlar (Yahoo Finance). Noktalar: her kurumun kendi yayımladığı
-        rakam, kendi vadesinin işaret ettiği tarihe konumlandırılmıştır — “Q4 2026” gibi aralık
-        ifadeleri çeyreğin orta noktasına, “yıl sonu” 31 Aralık’a çevrilir ve her noktanın ipucu
-        bu çevrimi yazar. Gölgeli alan aynı hedef tarihteki en düşük–en yüksek{" "}
-        <b>aralıktır</b>; güven aralığı değildir.{" "}
+        Çizgi: gerçekleşen kapanışlar (Yahoo). Noktalar: kurumların kendi rakamı, kendi vadesine
+        konumlandırıldı. Gölgeli alan en düşük–en yüksek <b>aralıktır</b>, güven aralığı
+        değildir.{" "}
         {medianCount > 0
           ? `Medyan yalnızca aynı tarihi paylaşan ${MEDIAN_MIN_INSTITUTIONS}+ kurum olan ${medianCount} noktada çizilir.`
           : `Hiçbir hedef tarihte ${MEDIAN_MIN_INSTITUTIONS} ayrı kurum bulunmadığı için medyan çizilmemiştir.`}

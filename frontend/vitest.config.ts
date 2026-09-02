@@ -36,13 +36,28 @@ export default defineConfig({
         // The swimlane's clustered marker: geometry stays out of the runner,
         // but the count, the list it opens and its keyboard exits do not.
         "src/components/campaign-cluster-marker.tsx",
-        // Kokpit'in yeniden tasarımı: the page's own rules (freshness, the
-        // forecast split, feed-row mapping, level styling) plus the two
-        // components that carry real merge/ordering logic. The chart, the
-        // strips and the header are composition over already-decided numbers
-        // and are checked in a browser instead.
+        // Kokpit V2: the page's own rules (freshness, the forecast split,
+        // level styling) plus every surface that carries real mapping,
+        // ordering or arithmetic logic, plus the two chart primitives whose
+        // whole job is to refuse to draw something untrue. The composition
+        // (page.tsx, section-header, cockpit-header) and the two echarts
+        // wrappers are checked in a browser instead.
+        //
+        // KEEP THIS LIST IN SYNC WITH THE FILES. The v8 provider does NOT
+        // error on an `include` entry that no longer exists -- it silently
+        // stops counting it, and coverage drops with no failure anywhere.
         "src/components/kokpit/alert-center.tsx",
-        "src/components/kokpit/signal-board.tsx",
+        "src/components/kokpit/competitive-pulse.tsx",
+        "src/components/kokpit/daily-summary.tsx",
+        "src/components/kokpit/kpi-strip.tsx",
+        "src/components/kokpit/market-pulse-row.tsx",
+        "src/components/kokpit/fx-board-table.tsx",
+        "src/components/kokpit/iata-outlook.tsx",
+        "src/components/kokpit/sector-balance.tsx",
+        "src/components/kokpit/signal-stream.tsx",
+        "src/components/charts/micro-trend.tsx",
+        "src/components/charts/year-dots.tsx",
+        "src/components/ui/delta.tsx",
         // Risk Radarı'nın yeniden tasarımı: the page's rules (filtering,
         // search folding, the coverage/aviation-link wording, the trend
         // transform) plus the drawer, which is where the honesty labels and

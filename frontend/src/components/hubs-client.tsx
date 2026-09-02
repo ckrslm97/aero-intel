@@ -10,6 +10,7 @@ import { AirlineLogo } from "@/components/airline-logo";
 import { ArticleCard } from "@/components/article-card";
 import { HubNetworkSignals } from "@/components/hub-network-signals";
 import { MotionItem, MotionList } from "@/components/motion/motion-list";
+import { Collapse } from "@/components/ui/collapse";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiFetch } from "@/lib/api";
 
@@ -20,12 +21,7 @@ const HubMap = dynamic(
   () => import("@/components/hub-map").then((m) => m.HubMap),
   { ssr: false, loading: () => <Skeleton className="h-[380px] w-full rounded-xl" /> },
 );
-import {
-  collapseSection,
-  fadeUpItem,
-  reduceVariants,
-  useMeasuredHeight,
-} from "@/lib/motion";
+import { fadeUpItem, reduceVariants } from "@/lib/motion";
 import { worldRegions } from "@/lib/nav";
 import { CATEGORY_BY_SLUG, categoryVar } from "@/lib/taxonomy";
 import type {
@@ -442,13 +438,13 @@ function HubDetailPanel({
                 <CarrierRow key={carrier.code} carrier={carrier} />
               ))}
             </div>
-            <Expandable open={carriersOpen} reduceMotion={reduceMotion}>
+            <Collapse open={carriersOpen}>
               <div className="flex flex-col gap-1.5 pt-1.5">
                 {restCarriers.map((carrier) => (
                   <CarrierRow key={carrier.code} carrier={carrier} />
                 ))}
               </div>
-            </Expandable>
+            </Collapse>
             <MoreToggle
               open={carriersOpen}
               hidden={restCarriers.length}
@@ -475,7 +471,7 @@ function HubDetailPanel({
               />
             ))}
           </div>
-          <Expandable open={categoriesOpen} reduceMotion={reduceMotion}>
+          <Collapse open={categoriesOpen}>
             <div className="flex flex-wrap gap-1.5 pt-1.5">
               {restCategories.map((entry) => (
                 <CategoryChip
@@ -486,7 +482,7 @@ function HubDetailPanel({
               />
               ))}
             </div>
-          </Expandable>
+          </Collapse>
           <MoreToggle
             open={categoriesOpen}
             hidden={restCategories.length}
@@ -562,42 +558,6 @@ function CategoryChip({
     >
       {CATEGORY_BY_SLUG[entry.slug]?.label ?? entry.slug} · {entry.count}
     </button>
-  );
-}
-
-/** Animated-height reveal for the tail of a capped list.
- *
- * The wrapper animates to a measured pixel height rather than to `"auto"`,
- * which cannot be composited and re-lays-out the list on every frame. The
- * measurement is taken on the inner div, which the `overflow-hidden` wrapper
- * clips without constraining.
- */
-function Expandable({
-  open,
-  reduceMotion,
-  children,
-}: {
-  open: boolean;
-  reduceMotion: boolean | null;
-  children: React.ReactNode;
-}) {
-  const [contentRef, measuredHeight] = useMeasuredHeight<HTMLDivElement>();
-  const variants = collapseSection(measuredHeight);
-
-  return (
-    <AnimatePresence initial={false}>
-      {open && (
-        <motion.div
-          variants={reduceMotion ? reduceVariants(variants) : variants}
-          initial="hidden"
-          animate="show"
-          exit="exit"
-          className="overflow-hidden"
-        >
-          <div ref={contentRef}>{children}</div>
-        </motion.div>
-      )}
-    </AnimatePresence>
   );
 }
 

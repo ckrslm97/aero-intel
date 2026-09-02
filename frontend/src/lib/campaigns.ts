@@ -1,3 +1,4 @@
+import { formatRelativeTr } from "@/lib/format";
 import {
   CAMPAIGN_STATUS_LABELS_TR,
   REGION_LABELS_TR,
@@ -415,17 +416,12 @@ export function sourceTierLabel(tier: string | null): string {
 }
 
 /** "3 sa önce". Deliberately coarse: the alert strip is a glance, and a
- * seconds-accurate clock there would be re-rendered noise. */
-export function relativeTimeTr(iso: string, now: number = Date.now()): string {
-  const then = new Date(iso).getTime();
-  if (Number.isNaN(then)) return "";
-  const minutes = Math.floor((now - then) / 60_000);
-  if (minutes < 1) return "az önce";
-  if (minutes < 60) return `${minutes} dk önce`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} sa önce`;
-  return `${Math.floor(hours / 24)} gün önce`;
-}
+ * seconds-accurate clock there would be re-rendered noise.
+ *
+ * The implementation moved to `formatRelativeTr` in lib/format.ts when Kokpit
+ * V2's signal board needed the same string; this stays as the name seven call
+ * sites already import, delegating rather than duplicating. */
+export const relativeTimeTr = formatRelativeTr;
 
 /** The query string for `/promotions/export` and `/promotions`, built from the
  * same filter state the page is showing.
