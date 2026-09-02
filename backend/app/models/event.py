@@ -10,12 +10,13 @@ never drift apart.
 from datetime import date
 
 from sqlalchemy import Date, Integer, String, Text
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, validates
 
 from app.core.db import Base
 from app.models.base import TimestampMixin, UUIDPrimaryKeyMixin
 
 EVENT_TYPES = ("airshow", "conference", "sports", "holiday", "festival")
+IMPACT_LEVELS = ("high", "medium", "low")
 
 
 class AviationEvent(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -46,5 +47,25 @@ class AviationEvent(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # into that city, and over what window.
     demand_effect_tr: Mapped[str] = mapped_column(Text, default="")
 
+    @validates("event_type", "impact_level")
+    def _validate_closed_vocabulary(self, key: str, value: str) -> str:
+        """Reject a value outside the closed set, at write time.
 
-IMPACT_LEVELS = ("high", "medium", "low")
+        `IMPACT_LEVELS` was declared when this table was created and then never
+        used: nothing checked it on the way in, so a typo'd "hig" would have
+        been stored, filtered out of every `impact_level` query, and read as a
+        legitimately quiet event. The whole point of the column is that a
+        reader can trust it was one of three deliberate judgements.
+
+        Enforced on the model rather than only in the seed so that every writer
+        is covered -- SQLAlchemy fires this on attribute assignment, which
+        includes the in-place refresh in app/ingest/events_seed.py. A CHECK
+        constraint would be stronger still, but it needs a migration; this
+        needs none and fails earlier, with the field name in the message.
+        """
+        allowed = EVENT_TYPES if key == "event_type" else IMPACT_LEVELS
+        if value not in allowed:
+            raise ValueError(
+                f"aviation_events.{key}: {value!r} is not one of {allowed}"
+            )
+        return value

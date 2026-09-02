@@ -173,3 +173,66 @@ async def test_seed_writes_and_refreshes_the_demand_fields(db_session):
     await seed_events(db_session)
     again = (await db_session.execute(select(AviationEventRow))).scalars().all()
     assert len(again) == len(EVENTS)
+
+
+# --- the closed vocabularies are now enforced, not just declared ----------
+
+def test_seed_entries_reject_a_typod_vocabulary_word_at_import():
+    """`IMPACT_LEVELS` was declared when the table was created and then never
+    used -- nothing checked it on the way in, so "hig" would have been stored,
+    filtered out of every impact query, and read as a legitimately quiet event.
+    The dataclass fails on it now, which means the typo surfaces when the module
+    is imported rather than halfway through a seed run."""
+    import pytest
+
+    from app.ingest.events_seed import AviationEvent as SeedEvent
+
+    kwargs = dict(
+        name="Test", starts=date(2027, 1, 1), ends=date(2027, 1, 2),
+        city="Münih", country="Almanya", region="europe",
+        url="https://example.test/x", summary="x",
+    )
+    with pytest.raises(ValueError, match="impact_level"):
+        SeedEvent(**kwargs, impact_level="hig")
+    with pytest.raises(ValueError, match="event_type"):
+        SeedEvent(**kwargs, event_type="airshoww")
+    # The valid combination still constructs.
+    assert SeedEvent(**kwargs, impact_level="low", event_type="airshow").name == "Test"
+
+
+def test_the_calendar_row_rejects_the_same_words_on_write():
+    """Enforced on the model too, so every writer is covered -- including the
+    in-place refresh path, which sets the attribute rather than constructing."""
+    import pytest
+
+    from app.models.event import AviationEvent as Row
+
+    with pytest.raises(ValueError, match="impact_level"):
+        Row(impact_level="hig")
+    row = Row(impact_level="high", event_type="airshow")
+    with pytest.raises(ValueError, match="event_type"):
+        row.event_type = "airshoww"
+
+
+async def test_event_articles_no_longer_all_score_the_same(db_session):
+    """Every event-derived article used to be importance 0.6, so "critical
+    event" was decided by row order. Scorable events now carry the computed
+    score; the 51 without a published headcount keep the old default."""
+    from sqlalchemy import select as sa_select
+
+    from app.ingest.events_seed import UNSCORED_IMPORTANCE
+
+    await seed_events(db_session)
+    scores = [
+        row.importance_score
+        for row in (
+            await db_session.execute(
+                sa_select(ArticleEnrichment).where(ArticleEnrichment.category == "events")
+            )
+        ).scalars()
+    ]
+    assert len(scores) == len(EVENTS)
+    assert len(set(scores)) > 20
+    unscorable = sum(1 for e in EVENTS if e.attendance is None)
+    assert sum(1 for s in scores if s == UNSCORED_IMPORTANCE) == unscorable
+    assert all(0.0 <= s <= 1.0 for s in scores)
