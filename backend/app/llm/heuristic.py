@@ -461,6 +461,23 @@ _WEATHER_NAMED_AIRCRAFT: tuple[str, ...] = (
     "cyclone", "cyclones",
 )
 
+# What happened to the AIRCRAFT. Every entry names an occurrence involving the
+# machine itself -- not a response to something else, which is why "diverted",
+# "emergency landing" and "go-around" are absent: those are exactly how an
+# article about volcanic ash or a closed airspace opens, and vetoing on them
+# would suppress the hazard rather than the accident.
+_AIRCRAFT_OCCURRENCE: tuple[str, ...] = (
+    "runs off runway", "runs off the runway", "ran off the runway",
+    "run off the runway", "runway excursion", "veers off the runway",
+    "veered off the runway", "skids off the runway", "skidded off the runway",
+    "overran the runway", "overruns the runway", "overshot the runway",
+    "hard landing", "belly landing", "gear collapse", "gear collapsed",
+    "landing gear failure", "tail strike", "tailstrike", "bird strike",
+    "birdstrike", "aborted takeoff", "rejected takeoff", "engine failure",
+    "pistten cikti", "pistten cikma", "govde inisi", "kus carpmasi",
+    "motor arizasi",
+)
+
 _MILITARY_AVIATION_CONTEXT: tuple[str, ...] = (
     "eurofighter", "gripen", "rafale", "raf", "luftwaffe", "nato", "squadron",
     "scrambled", "scramble", "intercept", "intercepted", "interceptor",
@@ -823,7 +840,13 @@ def detect_risk_severity(title_text: str, body_text: str) -> str:
     return "low"
 
 
-def _best_rule(title_text: str, body_text: str, *, aircraft_discount: int = 0) -> str | None:
+def _best_rule(
+    title_text: str,
+    body_text: str,
+    *,
+    aircraft_discount: int = 0,
+    use_weak: bool = True,
+) -> str | None:
     """The highest-scoring rule over ALREADY FOLDED text, or None.
 
     Split out of detect_risk_type so risk_veto() below can run the same scoring
@@ -837,7 +860,7 @@ def _best_rule(title_text: str, body_text: str, *, aircraft_discount: int = 0) -
     for rule in _RISK_RULES:
         strong = _score(_keyword_pattern(rule.strong), title_text, body_text)
         weak = 0
-        if has_context:
+        if has_context and use_weak:
             weak = _score(_keyword_pattern(rule.weak), title_text, body_text)
         # One weak word, once, somewhere in the body is not an event.
         #
@@ -953,6 +976,7 @@ RISK_VETO_FIGURATIVE = "figurative_language"
 RISK_VETO_WEATHER_NAMED_AIRCRAFT = "weather_named_aircraft"
 #: Military-aviation prose with no hazard vocabulary anywhere in it.
 RISK_VETO_MILITARY_AVIATION = "military_aviation_prose"
+RISK_VETO_AIRCRAFT_OCCURRENCE = "aircraft_occurrence"
 
 
 def risk_veto(title: str, content: str) -> str | None:
@@ -971,6 +995,27 @@ def risk_veto(title: str, content: str) -> str | None:
     masked_body = _masked(folded_body)
 
     discount = _aircraft_discount(masked_title, masked_body)
+
+    # An aircraft accident is not a natural hazard, whatever the weather was
+    # doing at the time. "LATAM Airbus A320 runs off runway during landing in
+    # heavy rain in Brazil" was published on the radar as a FLOOD: the model
+    # read "heavy rain" -- a weak `flood` keyword -- and this function had
+    # nothing to say about it. The event is a runway excursion; the rain is the
+    # conditions it happened in, and a runway excursion belongs to the safety
+    # feed, not to a map of hazards threatening the network.
+    #
+    # Scoped to the HEADLINE and to WEAK-ONLY evidence, both deliberately. The
+    # headline names this article's event (same reasoning as the retrospective
+    # guard), and a real hazard brings a strong keyword with it -- "Plane skids
+    # off runway as typhoon closes Manila" still classifies as a storm, because
+    # `typhoon` is strong and this guard stands down.
+    if (
+        _any(_AIRCRAFT_OCCURRENCE, masked_title)
+        and _best_rule(masked_title, masked_body, aircraft_discount=discount, use_weak=False)
+        is None
+    ):
+        return RISK_VETO_AIRCRAFT_OCCURRENCE
+
     if _best_rule(masked_title, masked_body, aircraft_discount=discount) is not None:
         # The article's own words support a hazard claim. Which hazard is the
         # classifier's business, not this function's -- the keyword pass is a
@@ -1325,6 +1370,22 @@ def _aliases_by_country() -> dict[str, tuple[str, ...]]:
     return {name: tuple(sorted(set(a for a in aliases if a))) for name, aliases in grouped.items()}
 
 
+def _first_mention_offset(text: str, aliases: tuple[str, ...]) -> int:
+    """Where this country is first named, or len(text) when it is not.
+
+    The tie-break between two countries the role test both accepted and the
+    locative test could not separate. Whichever the article introduces first is
+    the one it is about -- that is what "document order" was always supposed to
+    mean here.
+    """
+    best = len(text)
+    for alias in aliases:
+        match = re.search(rf"\b{re.escape(alias)}\b", text)
+        if match is not None and match.start() < best:
+            best = match.start()
+    return best
+
+
 def resolve_risk_location(
     title: str, content: str, entities: list[EntityMention]
 ) -> RiskLocation:
@@ -1384,10 +1445,17 @@ def resolve_risk_location(
 
     # ---- pass 2: countries ----------------------------------------------
     event_country: str | None = None
-    #: The first event-role country the gazetteer offered, kept separately from
-    #: the first LOCATIVELY MARKED one. Document order is the fallback, never
-    #: the preference -- see _is_locative.
-    event_country_first: str | None = None
+    #: Every event-role country, resolved to the first one the ARTICLE names
+    #: when no locative marker separates them. Document order is the fallback,
+    #: never the preference -- see _is_locative.
+    #:
+    #: It used to be the first one the gazetteer offered, which reads like
+    #: document order and is not: entity extraction walks its alias table, so
+    #: the winner was whichever country that table happened to reach first.
+    #: "EASA eases Jordan warning ..." names Jordan in the headline and again
+    #: in the first sentence, mentions Lebanon once beside it, and was
+    #: published under Lebanon.
+    event_candidates: list[str] = []
     source_country: str | None = None
     unverified_country: str | None = None
     confidence: float | None = None
@@ -1414,8 +1482,7 @@ def resolve_risk_location(
         seen_countries.add(canonical)
         remember(canonical.title(), "country", role or "unverified")
         if role == "event":
-            if event_country_first is None:
-                event_country_first = canonical
+            event_candidates.append(canonical)
             if event_country is None and _is_locative(
                 sentences, alias_index.get(canonical, (canonical,))
             ):
@@ -1426,8 +1493,14 @@ def resolve_risk_location(
         elif unverified_country is None:
             unverified_country = canonical
 
-    if event_country is None:
-        event_country = event_country_first
+    if event_country is None and event_candidates:
+        haystack = " ".join(sentences)
+        event_country = min(
+            event_candidates,
+            key=lambda name: _first_mention_offset(
+                haystack, alias_index.get(name, (name,))
+            ),
+        )
 
     if event_country is not None:
         confidence = LOCATION_CONFIDENCE_COUNTRY

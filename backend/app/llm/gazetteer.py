@@ -380,6 +380,27 @@ _AMBIGUOUS_COUNTRY_NAMES = {
     "niger", "reunion", "saint martin", "sint maarten", "curacao",
 }
 
+# The demonym is the way back in. "Jordan" is Michael; "Jordanian" is only ever
+# the country -- not a given name, not a US state, not a river. Excluding the
+# bare name is right, but excluding the country entirely is not: a story about
+# Jordan then gets pinned to whichever OTHER country the article happens to
+# mention. Production case: "EASA eases Jordan warning on day military
+# intercepts eight missiles" sat on the radar under LEBANON, because Lebanon
+# was the only country in it the gazetteer was allowed to name.
+#
+# Deliberately absent: "Dominican" (the Dominican Republic is a different
+# country and would swallow it), "Georgian" (the US state's demonym, the
+# language, and a furniture period), and the island territories, whose
+# demonyms nobody writes. Those stay reachable through their airports.
+_AMBIGUOUS_COUNTRY_DEMONYMS = {
+    "jordanian": "jordan",
+    "chadian": "chad",
+    "grenadian": "grenada",
+    "guinean": "guinea",
+    "malian": "mali",
+    "nigerien": "niger",
+}
+
 
 def _country_aliases() -> dict[str, str]:
     """Folded alias -> canonical country name (the key COUNTRY_TO_REGION uses)."""
@@ -397,6 +418,8 @@ def _country_aliases() -> dict[str, str]:
         aliases[fold_for_match(name)] = name
     for turkish_name, canonical in _TURKISH_COUNTRY_NAMES.items():
         aliases[fold_for_match(turkish_name)] = canonical
+    for demonym, canonical in _AMBIGUOUS_COUNTRY_DEMONYMS.items():
+        aliases[fold_for_match(demonym)] = canonical
     return aliases
 
 
