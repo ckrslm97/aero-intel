@@ -8,27 +8,55 @@ import {
 } from "@/lib/taxonomy.gen";
 import type { PromotionOut } from "@/lib/types";
 
-/** The Kampanyalar page's filtering, faceting and label rules, kept out of the
- * component so they can be asserted directly.
+/** The Kampanyalar page's filtering, ordering and label rules, kept out of the
+ * components so they can be asserted directly.
  *
  * Filtering is client-side for the same reason Risk Radarı's is: the page
- * fetches one eight-week window in a single request, so narrowing it in memory
- * is exact and costs no round trip. The API grew the identical filters in PR7
+ * fetches every publishable campaign in one request, so narrowing it in memory
+ * is exact and costs no round trip. The API grew the identical filters
  * regardless -- the export links use them, because an export must be able to
  * exceed whatever the page happens to be holding.
  *
  * Every dimension is single-select. That is a deliberate narrowing of the
  * backend's multi-select contract: a chip row where two chips can be lit at
- * once has to explain whether it means AND or OR, and this page already asks
- * the reader to hold six dimensions at a time. */
+ * once has to explain whether it means AND or OR.
+ *
+ * EXPIRED APPEARS NOWHERE. The API stopped returning it by default in v2, and
+ * nothing here asks for it back: `campaignQueryString` never emits
+ * `include_expired`, and `SELECTABLE_CAMPAIGN_STATUSES` below has no EXPIRED
+ * chip to click. The status is still *named* (a row whose dates changed under
+ * us must not render as a blank badge), it is simply never requested. */
+
+/** Which sale/travel window a period filter is asking about, as a horizon in
+ * days from today. `now` is "open on today's date" and is the one people mean
+ * when they say "şu an". */
+export type CampaignPeriod = "now" | "30" | "90";
+
+export const CAMPAIGN_PERIODS: readonly CampaignPeriod[] = ["now", "30", "90"] as const;
+
+export const CAMPAIGN_PERIOD_LABELS_TR: Record<CampaignPeriod, string> = {
+  now: "Şu an açık",
+  "30": "30 gün içinde",
+  "90": "90 gün içinde",
+};
 
 export interface CampaignFilters {
   /** IATA code, or null for every carrier. */
   airline: string | null;
+  /** CAMPAIGN (a price) | PROMOTION (a mechanism). */
+  campaignKind: string | null;
   campaignType: string | null;
   status: string | null;
   /** World-region slug, matched against the flat column AND both JSON shapes. */
   region: string | null;
+  /** Country name as the route resolver spelled it, matched case-insensitively. */
+  country: string | null;
+  /** OND | CITY_PAIR | COUNTRY | REGION | NETWORK_WIDE. */
+  routeScope: string | null;
+  /** Sale window overlaps the horizon. */
+  salePeriod: CampaignPeriod | null;
+  /** Travel window overlaps the horizon. */
+  travelPeriod: CampaignPeriod | null;
   /** high | medium. */
   band: string | null;
   /** Only the rows the classifier flagged for a human. */
@@ -37,42 +65,89 @@ export interface CampaignFilters {
 
 export const EMPTY_CAMPAIGN_FILTERS: CampaignFilters = {
   airline: null,
+  campaignKind: null,
   campaignType: null,
   status: null,
   region: null,
+  country: null,
+  routeScope: null,
+  salePeriod: null,
+  travelPeriod: null,
   band: null,
   reviewOnly: false,
 };
 
-export type CampaignFacet = "airline" | "campaignType" | "status" | "region" | "band";
+export type CampaignFacet =
+  | "airline"
+  | "campaignKind"
+  | "campaignType"
+  | "status"
+  | "region"
+  | "country"
+  | "routeScope"
+  | "band";
 
 export function hasActiveCampaignFilter(filters: CampaignFilters): boolean {
   return (
     filters.airline !== null ||
+    filters.campaignKind !== null ||
     filters.campaignType !== null ||
     filters.status !== null ||
     filters.region !== null ||
+    filters.country !== null ||
+    filters.routeScope !== null ||
+    filters.salePeriod !== null ||
+    filters.travelPeriod !== null ||
     filters.band !== null ||
     filters.reviewOnly
   );
 }
 
-/** Every world region this campaign touches, from the three places a region
- * can be recorded: the flat `region` column (legacy rows have only this), the
- * market list, and the resolved route. Mirrors `_regions_of` in
+/** The statuses a reader may filter on. EXPIRED is absent by construction: the
+ * API hides it and this page never asks for it back, so offering the chip
+ * would be offering an empty result with an explanation nobody could see. */
+export const SELECTABLE_CAMPAIGN_STATUSES: readonly CampaignStatus[] = [
+  "ACTIVE_BOOKING",
+  "UPCOMING",
+  "BOOKING_CLOSED_TRAVEL_ACTIVE",
+  "UNKNOWN",
+] as const;
+
+/* --- dimensions a campaign belongs to ------------------------------------ */
+
+/** Every world region this campaign touches, from the two places a region can
+ * be recorded in the payload: the flat `region` column (legacy rows have only
+ * this) and the resolved route. Mirrors `_regions_of` in
  * backend/app/api/v1/promotions.py -- the export link and the on-screen list
- * have to agree about what "Avrupa" selects. */
+ * have to agree about what "Avrupa" selects.
+ *
+ * `markets_json` is the backend's third place and is not serialised; the flat
+ * `markets` string is what reaches us, region slugs and city names mixed, so
+ * only the slugs REGION_LABELS_TR knows are read out of it. */
 export function campaignRegions(promo: PromotionOut): string[] {
   const found = new Set<string>();
   if (promo.region) found.add(promo.region);
   for (const side of [promo.route_json?.origin, promo.route_json?.dest]) {
     if (side?.region) found.add(side.region);
   }
-  // `markets` is the legacy comma-joined column: region slugs and city names
-  // mixed. Only the slugs are regions, and REGION_LABELS_TR is the test.
   for (const part of (promo.markets ?? "").split(",")) {
     const slug = part.trim();
     if (slug && slug in REGION_LABELS_TR) found.add(slug);
+  }
+  return [...found];
+}
+
+/** Every country this campaign names, from the resolved route.
+ *
+ * Only the route: `markets_json.countries` is the backend's other source and
+ * it is not part of `PromotionOut`, so a client-side country chip built on it
+ * would silently under-select. The chip row is built from these same values,
+ * which is what keeps the offered set and the matched set identical. */
+export function campaignCountries(promo: PromotionOut): string[] {
+  const found = new Set<string>();
+  for (const side of [promo.route_json?.origin, promo.route_json?.dest]) {
+    const country = side?.country?.trim();
+    if (country) found.add(country);
   }
   return [...found];
 }
@@ -85,35 +160,129 @@ export function campaignFacetValues(promo: PromotionOut, facet: CampaignFacet): 
   switch (facet) {
     case "airline":
       return [promo.airline_code];
+    case "campaignKind":
+      return promo.campaign_kind ? [promo.campaign_kind] : [];
     case "campaignType":
       return promo.campaign_type ? [promo.campaign_type] : [];
     case "status":
       return [promo.status];
     case "region":
       return campaignRegions(promo);
+    case "country":
+      return campaignCountries(promo);
+    case "routeScope":
+      return promo.route_scope ? [promo.route_scope] : [];
     case "band":
       return promo.confidence_band ? [promo.confidence_band] : [];
   }
 }
 
+/* --- date windows -------------------------------------------------------- */
+
+const MS_DAY = 86_400_000;
+
+/** Today as "YYYY-MM-DD" in the reader's own timezone.
+ *
+ * A string, not a Date: every comparison in this module is a lexicographic
+ * one between "YYYY-MM-DD" values, which is exactly the comparison the
+ * backend makes between `date` objects and cannot drift by a timezone the way
+ * a Date-to-Date comparison can. */
+export function todayIso(now: Date = new Date()): string {
+  const local = new Date(now.getTime() - now.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 10);
+}
+
+function shiftIso(day: string, days: number): string {
+  const [y, m, d] = day.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
+}
+
+/** Whole days from `today` until `day`, negative once it is past. */
+export function daysUntil(day: string, today: string): number {
+  const at = Date.parse(`${day.slice(0, 10)}T00:00:00Z`);
+  const from = Date.parse(`${today.slice(0, 10)}T00:00:00Z`);
+  if (Number.isNaN(at) || Number.isNaN(from)) return Number.NaN;
+  return Math.round((at - from) / MS_DAY);
+}
+
+/** "2 gün kaldı" / "Son gün" / "Bugün son gün".
+ *
+ * Only ever called for a campaign the API has already said is still on sale,
+ * so there is no past case to word: `/promotions/expiring` filters on
+ * ACTIVE_BOOKING before it filters on the deadline. */
+export function remainingDaysLabel(saleEnds: string, today: string): string {
+  const left = daysUntil(saleEnds, today);
+  if (Number.isNaN(left)) return "Bitiş tarihi okunamadı";
+  if (left <= 0) return "Bugün son gün";
+  if (left === 1) return "Son 1 gün";
+  return `${left} gün kaldı`;
+}
+
+/** Does [start, end] overlap [from, to], with a missing edge counting as open?
+ *
+ * The same convention as the backend's `campaign_status` and
+ * `promo_dedup._windows_overlap`: "a campaign with no stated end has not been
+ * said to stop". A window with NEITHER edge stated does not overlap anything
+ * -- an unstated window cannot support a claim about a period, and a period
+ * filter that swept in every undated row would be the loudest possible lie on
+ * this page. */
+export function windowOverlaps(
+  start: string | null,
+  end: string | null,
+  from: string,
+  to: string,
+): boolean {
+  if (!start && !end) return false;
+  if (end && end < from) return false;
+  if (start && start > to) return false;
+  return true;
+}
+
+/** The [from, to] a period key means, relative to `today`. */
+export function periodRange(period: CampaignPeriod, today: string): [string, string] {
+  if (period === "now") return [today, today];
+  return [today, shiftIso(today, Number(period))];
+}
+
+/* --- filtering ----------------------------------------------------------- */
+
 export function matchesCampaignFilters(
   promo: PromotionOut,
   filters: CampaignFilters,
+  today: string = todayIso(),
 ): boolean {
   if (filters.airline && promo.airline_code !== filters.airline) return false;
+  if (filters.campaignKind && promo.campaign_kind !== filters.campaignKind) return false;
   if (filters.campaignType && promo.campaign_type !== filters.campaignType) return false;
   if (filters.status && promo.status !== filters.status) return false;
+  if (filters.routeScope && promo.route_scope !== filters.routeScope) return false;
   if (filters.band && promo.confidence_band !== filters.band) return false;
   if (filters.reviewOnly && promo.review_required !== true) return false;
   if (filters.region && !campaignRegions(promo).includes(filters.region)) return false;
+  if (filters.country) {
+    const wanted = filters.country.toLocaleLowerCase("tr");
+    const found = campaignCountries(promo).some(
+      (name) => name.toLocaleLowerCase("tr") === wanted,
+    );
+    if (!found) return false;
+  }
+  if (filters.salePeriod) {
+    const [from, to] = periodRange(filters.salePeriod, today);
+    if (!windowOverlaps(promo.sale_starts, promo.sale_ends, from, to)) return false;
+  }
+  if (filters.travelPeriod) {
+    const [from, to] = periodRange(filters.travelPeriod, today);
+    if (!windowOverlaps(promo.travel_starts, promo.travel_ends, from, to)) return false;
+  }
   return true;
 }
 
 export function filterCampaigns(
   promos: readonly PromotionOut[],
   filters: CampaignFilters,
+  today: string = todayIso(),
 ): PromotionOut[] {
-  return promos.filter((promo) => matchesCampaignFilters(promo, filters));
+  return promos.filter((promo) => matchesCampaignFilters(promo, filters, today));
 }
 
 /** Counts for one facet's chips, computed over the set narrowed by every OTHER
@@ -127,11 +296,12 @@ export function campaignFacetCounts(
   promos: readonly PromotionOut[],
   filters: CampaignFilters,
   facet: CampaignFacet,
+  today: string = todayIso(),
 ): Record<string, number> {
   const others: CampaignFilters = { ...filters, [facet]: null };
   const counts: Record<string, number> = {};
   for (const promo of promos) {
-    if (!matchesCampaignFilters(promo, others)) continue;
+    if (!matchesCampaignFilters(promo, others, today)) continue;
     for (const value of campaignFacetValues(promo, facet)) {
       counts[value] = (counts[value] ?? 0) + 1;
     }
@@ -145,100 +315,204 @@ export function campaignFacetCounts(
 export function reviewRequiredCount(
   promos: readonly PromotionOut[],
   filters: CampaignFilters,
+  today: string = todayIso(),
 ): number {
   const others: CampaignFilters = { ...filters, reviewOnly: false };
   return promos.filter(
-    (promo) => promo.review_required === true && matchesCampaignFilters(promo, others),
+    (promo) =>
+      promo.review_required === true && matchesCampaignFilters(promo, others, today),
   ).length;
 }
 
-/* --- timeline clustering -------------------------------------------------- */
+/* --- ordering ------------------------------------------------------------ */
 
-/** A campaign the source published no sale START for.
+/** Mirrors `_STATUS_RANK` in backend/app/api/v1/promotions.py. */
+const STATUS_RANK: Record<string, number> = {
+  ACTIVE_BOOKING: 0,
+  UPCOMING: 1,
+  BOOKING_CLOSED_TRAVEL_ACTIVE: 2,
+  UNKNOWN: 3,
+  EXPIRED: 4,
+};
+
+/** Stands in for a missing date when sorting. A campaign with an open-ended
+ * sale window has not been said to stop, so it sorts behind every campaign
+ * that has a stated deadline rather than ahead of them -- "no deadline" is
+ * not "deadline is today". */
+const FAR_FUTURE = "9999-12-31";
+
+/** The page's order, mirroring `order_promotions` on the API:
  *
- * `sale_starts` alone decides it, exactly as the swimlane's `place()` does:
- * without a start there is no window to draw a bar *along*, whatever the end
- * date happens to say. Exported so the grid and this module cannot drift apart
- * on what "dateless" means. */
-export function isDatelessCampaign(promo: PromotionOut): boolean {
-  return !promo.sale_starts;
-}
-
-/** The day we first saw a campaign, as "YYYY-MM-DD".
+ *   1. on sale today, soonest deadline first -- a deadline is the only thing
+ *      here that expires while you read it;
+ *   2. announced but not open, soonest first;
+ *   3. sale closed but the travel benefit still live;
+ *   4. undated;
+ *   5. expired, which never reaches this page at all.
  *
- * A plain slice, not a Date: the swimlane positions everything with integer
- * day arithmetic precisely so no reader's timezone can shift a campaign onto
- * the wrong column, and re-deriving the day through a local-time Date here
- * would reintroduce exactly that. */
-export function campaignDetectedDay(promo: PromotionOut): string {
-  return (promo.detected_at ?? "").slice(0, 10);
+ * The final tiebreaker is newest-first-seen.
+ *
+ * The list already arrives in this order, so applying it again is a no-op on
+ * a good day. It is here anyway because the page splits, regroups and
+ * re-concatenates the rows, and a resort by `detected_at` -- the order this
+ * page used before v2 -- is a one-line mistake with no visible symptom. */
+export function orderCampaigns(promos: readonly PromotionOut[]): PromotionOut[] {
+  const key = (promo: PromotionOut): [number, string, string, number, string] => {
+    const rank = STATUS_RANK[promo.status] ?? Object.keys(STATUS_RANK).length;
+    const seen = Date.parse(promo.first_seen_at ?? promo.detected_at);
+    return [
+      rank,
+      promo.status === "ACTIVE_BOOKING" ? (promo.sale_ends ?? FAR_FUTURE) : FAR_FUTURE,
+      promo.status === "UPCOMING" ? (promo.sale_starts ?? FAR_FUTURE) : FAR_FUTURE,
+      -(Number.isNaN(seen) ? 0 : seen),
+      promo.id,
+    ];
+  };
+  return promos
+    .map((promo) => ({ promo, key: key(promo) }))
+    .sort((a, b) => {
+      for (let i = 0; i < a.key.length; i += 1) {
+        if (a.key[i] < b.key[i]) return -1;
+        if (a.key[i] > b.key[i]) return 1;
+      }
+      return 0;
+    })
+    .map((entry) => entry.promo);
 }
 
-/** Dateless campaigns one carrier published on one day, as a single mark. */
-export interface CampaignCluster {
-  /** `${airlineCode}:${day}`. Stable across renders, so it is a React key. */
-  key: string;
-  airlineCode: string;
-  /** "YYYY-MM-DD" -- the detected day every item in the cluster shares. */
-  day: string;
-  /** Two or more, in the order they arrived. */
-  items: PromotionOut[];
+/** Drop every expired campaign, wherever it came from.
+ *
+ * Deliberately redundant: `GET /promotions` stopped returning EXPIRED rows by
+ * default in v2, and this page never passes `include_expired`. It is restated
+ * on the client because "no expired campaign ever appears on this page" is a
+ * promise the product makes to a revenue desk, and a promise that costly
+ * should survive one server-side default being changed by someone who did not
+ * read this file. A row whose dates moved between the query and the render
+ * lands here too.
+ *
+ * This is the only place the word EXPIRED is acted on in the frontend. There
+ * is no flag that turns it off. */
+export function dropExpiredCampaigns(promos: readonly PromotionOut[]): PromotionOut[] {
+  return promos.filter((promo) => promo.status !== "EXPIRED");
 }
 
-export interface DatelessGrouping {
-  /** Campaigns with a published sale start. Untouched and in input order:
-   * bars and open-ended bars are placed exactly as they were. */
+/* --- the undated group --------------------------------------------------- */
+
+/** A campaign the sources published no date of any kind for.
+ *
+ * `status === "UNKNOWN"` is the whole definition, and it is the API's own:
+ * `campaign_status` returns UNKNOWN only when neither the sale window nor the
+ * travel window has a single stated edge. Re-deriving it here from the four
+ * date fields would give the page a second opinion about the one rule the
+ * feature rests on.
+ *
+ * Note this is NOT "has no sale start". A campaign with travel dates and no
+ * sale dates is ACTIVE_BOOKING -- we know when it can be flown, which is a
+ * real, dated fact -- and belongs in the main feed. */
+export function isUndatedCampaign(promo: PromotionOut): boolean {
+  return promo.status === "UNKNOWN";
+}
+
+export interface CampaignSplit {
+  /** Campaigns with at least one stated date. The page's main feed. */
   dated: PromotionOut[];
-  /** Dateless campaigns alone in their (carrier, day) bucket. These keep the
-   * plain point marker -- a count chip reading "1" is noise. */
-  singles: PromotionOut[];
-  /** Buckets of two or more. */
-  clusters: CampaignCluster[];
+  /** Campaigns with none. Shown apart, below, muted and collapsed. */
+  undated: PromotionOut[];
 }
 
-/** Split a window's campaigns into the three things the timeline can draw.
+/** Split the feed into the dated campaigns and the undated ones.
  *
- * Why this exists: a dateless campaign is marked at its detection day, and CSS
- * grid has to push same-column items onto new rows. So when Singapore Airlines
- * announced 23 route fares in one day -- every one of them start-less -- the SQ
- * lane became 23 diamonds and 23 identical "Yeni" badges stacked into a column
- * taller than the viewport. The lane was not wrong about the data; one column
- * simply cannot hold 23 marks. Collapsing a (carrier, day) bucket into one
- * marker with a count keeps the lane one row high and moves the 23 titles to
- * where a list belongs.
- *
- * Grouping is by carrier AND day: two carriers announcing on the same day are
- * two different facts, and merging them would invent a joint campaign. An
- * unreadable `detected_at` buckets under the campaign's own id, so a row we
- * cannot date stays a single mark rather than silently merging with every
- * other undateable row. */
-export function groupDatelessCampaigns(
-  promos: readonly PromotionOut[],
-): DatelessGrouping {
+ * The owner's call, and the measurement behind it: of 83 publishable
+ * campaigns on 2026-09-03, 70 are UNKNOWN -- news-derived detections nobody
+ * published a date for. Interleaved, they bury the 13 campaigns with a real,
+ * verified window under five times their number of rows that cannot answer
+ * "can I still buy this". Nothing is dropped: the undated rows keep their own
+ * labelled, counted section below the feed. */
+export function splitUndatedCampaigns(promos: readonly PromotionOut[]): CampaignSplit {
   const dated: PromotionOut[] = [];
-  const buckets = new Map<string, CampaignCluster>();
-
+  const undated: PromotionOut[] = [];
   for (const promo of promos) {
-    if (!isDatelessCampaign(promo)) {
-      dated.push(promo);
-      continue;
-    }
-    const day = campaignDetectedDay(promo);
-    const key = `${promo.airline_code}:${day || promo.id}`;
-    const bucket = buckets.get(key);
-    if (bucket) bucket.items.push(promo);
-    else {
-      buckets.set(key, { key, airlineCode: promo.airline_code, day, items: [promo] });
-    }
+    if (isUndatedCampaign(promo)) undated.push(promo);
+    else dated.push(promo);
   }
+  return { dated, undated };
+}
 
-  const singles: PromotionOut[] = [];
-  const clusters: CampaignCluster[] = [];
-  for (const bucket of buckets.values()) {
-    if (bucket.items.length === 1) singles.push(bucket.items[0]);
-    else clusters.push(bucket);
-  }
-  return { dated, singles, clusters };
+/* --- URL round-trip ------------------------------------------------------ */
+
+/** The query-string name of each filter. Short, because all eleven can be lit
+ * at once and the bar is a thing people paste into chat. */
+const PARAM_NAMES: Record<keyof CampaignFilters, string> = {
+  airline: "airline",
+  campaignKind: "kind",
+  campaignType: "type",
+  status: "status",
+  region: "region",
+  country: "country",
+  routeScope: "scope",
+  salePeriod: "sale",
+  travelPeriod: "travel",
+  band: "band",
+  reviewOnly: "review",
+};
+
+function readPeriod(value: string | null): CampaignPeriod | null {
+  return CAMPAIGN_PERIODS.includes(value as CampaignPeriod)
+    ? (value as CampaignPeriod)
+    : null;
+}
+
+/** Filters out of the address bar.
+ *
+ * Unknown values are dropped rather than kept: a hand-edited `?band=purple`
+ * would otherwise narrow the page to nothing while every chip read "Tümü",
+ * which looks exactly like a broken build. `?status=EXPIRED` is dropped for a
+ * stronger reason -- the API is not asked for expired rows, so the filter
+ * could only ever empty the page. */
+export function parseCampaignFilters(params: URLSearchParams): CampaignFilters {
+  const status = params.get(PARAM_NAMES.status);
+  return {
+    airline: params.get(PARAM_NAMES.airline) || null,
+    campaignKind: params.get(PARAM_NAMES.campaignKind) || null,
+    campaignType: params.get(PARAM_NAMES.campaignType) || null,
+    status:
+      status && SELECTABLE_CAMPAIGN_STATUSES.includes(status as CampaignStatus)
+        ? status
+        : null,
+    region: params.get(PARAM_NAMES.region) || null,
+    country: params.get(PARAM_NAMES.country) || null,
+    routeScope: params.get(PARAM_NAMES.routeScope) || null,
+    salePeriod: readPeriod(params.get(PARAM_NAMES.salePeriod)),
+    travelPeriod: readPeriod(params.get(PARAM_NAMES.travelPeriod)),
+    band: params.get(PARAM_NAMES.band) || null,
+    reviewOnly: params.get(PARAM_NAMES.reviewOnly) === "true",
+  };
+}
+
+/** Filters back into the address bar, onto `base` so unrelated params (a view
+ * toggle, a deep link's anchor) survive. A cleared filter deletes its key
+ * rather than writing an empty one, so an unfiltered page has a clean URL. */
+export function campaignFiltersToSearchParams(
+  filters: CampaignFilters,
+  base?: URLSearchParams,
+): URLSearchParams {
+  const params = new URLSearchParams(base?.toString() ?? "");
+  const set = (name: string, value: string | null) => {
+    if (value) params.set(name, value);
+    else params.delete(name);
+  };
+  set(PARAM_NAMES.airline, filters.airline);
+  set(PARAM_NAMES.campaignKind, filters.campaignKind);
+  set(PARAM_NAMES.campaignType, filters.campaignType);
+  set(PARAM_NAMES.status, filters.status);
+  set(PARAM_NAMES.region, filters.region);
+  set(PARAM_NAMES.country, filters.country);
+  set(PARAM_NAMES.routeScope, filters.routeScope);
+  set(PARAM_NAMES.salePeriod, filters.salePeriod);
+  set(PARAM_NAMES.travelPeriod, filters.travelPeriod);
+  set(PARAM_NAMES.band, filters.band);
+  set(PARAM_NAMES.reviewOnly, filters.reviewOnly ? "true" : null);
+  return params;
 }
 
 /* --- presentation -------------------------------------------------------- */
@@ -249,7 +523,9 @@ export function groupDatelessCampaigns(
  *
  * EXPIRED and UNKNOWN are both muted rather than red -- an ended campaign is
  * not an alarm, it is history; and UNKNOWN is dashed because it is a statement
- * about our data, not about the campaign. */
+ * about our data, not about the campaign. EXPIRED is still defined even though
+ * the API no longer serves it: a row whose dates move under us must render a
+ * word, never a blank badge. */
 export const CAMPAIGN_STATUS_STYLE: Record<
   CampaignStatus,
   { label: string; short: string; className: string }
@@ -276,7 +552,7 @@ export const CAMPAIGN_STATUS_STYLE: Record<
   },
   UNKNOWN: {
     label: CAMPAIGN_STATUS_LABELS_TR.UNKNOWN,
-    short: "Belirsiz",
+    short: "Tarihsiz",
     className: "border-dashed border-border bg-transparent text-muted-foreground",
   },
 };
@@ -302,8 +578,8 @@ export function confidenceBandLabel(band: string | null): string {
 
 const PRICE_FORMAT = new Intl.NumberFormat("tr-TR", { maximumFractionDigits: 0 });
 
-/** The one number a cluster row has room for: the discount rate the source
- * published, and otherwise the starting price out of `attrs_json`.
+/** The one number a row has room for: the discount rate the source published,
+ * and otherwise the starting price out of `attrs_json`.
  *
  * Null when the source stated neither -- the row then shows its title alone,
  * because a "—" in a money column reads as "zero discount" rather than as
@@ -319,13 +595,22 @@ export function campaignAmountLabel(promo: PromotionOut): string | null {
   return currency ? `${amount} ${currency}` : amount;
 }
 
+/** A string out of `attrs_json`, or null. The column is free-form JSON, so
+ * every read of it has to survive a number, an object or a missing key. */
+export function campaignAttr(promo: PromotionOut, key: string): string | null {
+  const value = promo.attrs_json?.[key];
+  if (typeof value === "string" && value.trim()) return value.trim();
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return null;
+}
+
 function regionNames(promo: PromotionOut): string[] {
   return campaignRegions(promo)
     .map((slug) => REGION_LABELS_TR[slug as RegionSlug])
     .filter(Boolean);
 }
 
-/** What the table's "Rota" column says.
+/** What a row's "Rota" says.
  *
  * The OND pair when there is one, and otherwise the *scope* -- never an
  * invented pair. "Türkiye'den Avrupa'ya" is a REGION campaign; rendering it as
@@ -367,12 +652,17 @@ export const CAMPAIGN_FIELD_LABELS_TR: Record<string, string> = {
   sale_ends: "Satış bitişi",
   travel_starts: "Seyahat başlangıcı",
   travel_ends: "Seyahat bitişi",
+  ticketing_start: "Biletleme başlangıcı",
+  ticketing_end: "Biletleme bitişi",
+  campaign_start: "Kampanya başlangıcı",
+  campaign_end: "Kampanya bitişi",
   markets: "Pazarlar",
   markets_json: "Pazarlar",
   region: "Bölge",
   url: "Bağlantı",
   source_name: "Kaynak",
   campaign_type: "Kampanya türü",
+  campaign_kind: "Kampanya sınıfı",
   business_class: "İş sınıfı",
   route_scope: "Rota kapsamı",
   ond: "Rota (OND)",
@@ -415,12 +705,12 @@ export function sourceTierLabel(tier: string | null): string {
   return SOURCE_TIER_LABELS_TR[tier] ?? tier;
 }
 
-/** "3 sa önce". Deliberately coarse: the alert strip is a glance, and a
+/** "3 sa önce". Deliberately coarse: these are glances, and a
  * seconds-accurate clock there would be re-rendered noise.
  *
  * The implementation moved to `formatRelativeTr` in lib/format.ts when Kokpit
- * V2's signal board needed the same string; this stays as the name seven call
- * sites already import, delegating rather than duplicating. */
+ * V2's signal board needed the same string; this stays as the name several
+ * call sites already import, delegating rather than duplicating. */
 export const relativeTimeTr = formatRelativeTr;
 
 /** The query string for `/promotions/export` and `/promotions`, built from the
@@ -428,19 +718,32 @@ export const relativeTimeTr = formatRelativeTr;
  *
  * Single-select on screen, repeatable on the wire: the API takes multi-select
  * lists, so this emits one value per active dimension rather than pretending
- * the shapes differ. */
+ * the shapes differ.
+ *
+ * `include_expired` is never emitted. The export is the page's contents in a
+ * file, and the page has no expired rows in it. */
 export function campaignQueryString(
   filters: CampaignFilters,
-  window?: { from?: string; to?: string },
+  today: string = todayIso(),
 ): string {
   const params = new URLSearchParams();
-  if (window?.from) params.set("date_from", window.from);
-  if (window?.to) params.set("date_to", window.to);
   if (filters.airline) params.append("airline", filters.airline);
+  if (filters.campaignKind) params.append("campaign_kind", filters.campaignKind);
   if (filters.campaignType) params.append("campaign_type", filters.campaignType);
   if (filters.status) params.append("status", filters.status);
   if (filters.region) params.append("region", filters.region);
+  if (filters.country) params.set("country", filters.country);
   if (filters.band) params.append("band", filters.band);
   if (filters.reviewOnly) params.set("review_required", "true");
+  // `route_scope` and the two period filters have no API equivalent, so the
+  // export is deliberately WIDER than the screen rather than silently
+  // different: a file that quietly dropped three of the reader's filters
+  // would be the harder bug to notice. The sale period is the one exception --
+  // it maps exactly onto the endpoint's own date window.
+  if (filters.salePeriod) {
+    const [from, to] = periodRange(filters.salePeriod, today);
+    params.set("date_from", from);
+    params.set("date_to", to);
+  }
   return params.toString();
 }

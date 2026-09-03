@@ -12,8 +12,7 @@ import type { RiskItem } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 /** Popover width, in px. Duplicated as a number because the panel has to be
- * kept inside the viewport by arithmetic, not by a class name -- same reason
- * campaign-cluster-marker.tsx carries one. */
+ * kept inside the viewport by arithmetic, not by a class name. */
 const PANEL_WIDTH = 300;
 /** Roughly what the panel needs below the click before it flips above it. */
 const PANEL_ROOM = 260;
@@ -26,8 +25,8 @@ const TIME = new Intl.DateTimeFormat("tr-TR", {
 });
 
 /** Where the popover opens, in viewport coordinates. A map marker has no DOM
- * node to measure -- it is painted into a canvas -- so unlike the campaign
- * cluster marker this anchor comes from the click event itself. */
+ * node to measure -- it is painted into a canvas -- so unlike an ordinary
+ * anchored popover this one is positioned from the click event itself. */
 export interface MapAnchor {
   x: number;
   below: number;
@@ -38,10 +37,10 @@ export interface MapAnchor {
  *
  * A marker is a (place, type, severity) bucket, so it can stand for four
  * separate wildfires in Greece. The tooltip says how many; this says WHICH, and
- * hands each one to the drawer. A popover rather than a second drawer, for the
- * reason campaign-cluster-marker gives: the drawer is the page's detail
- * surface and opens from any row here, so stacking two of them would put a
- * full-height panel between the reader and the event they were reaching for.
+ * hands each one to the drawer. A popover rather than a second drawer: the
+ * drawer is the page's detail surface and opens from any row here, so stacking
+ * two of them would put a full-height panel between the reader and the event
+ * they were reaching for.
  *
  * Portalled to the body because the map card clips its own overflow and the
  * ECharts canvas is its own stacking context. */

@@ -19,9 +19,19 @@ describe("CampaignStatusPill", () => {
     expect(screen.getByTitle("Satış kapandı, seyahat sürüyor")).toBeInTheDocument();
   });
 
-  it("degrades an unknown status to Belirsiz rather than rendering a slug", () => {
+  it("degrades an unknown status to Tarihsiz rather than rendering a slug", () => {
+    // v2 renamed the UNKNOWN word from "Belirsiz" to "Tarihsiz" so the pill
+    // and the page's "Tarih belirtilmemiş" group say the same thing: the
+    // uncertainty is about the DATES, not about whether the campaign is real.
     render(<CampaignStatusPill status="A_STATUS_FROM_THE_FUTURE" />);
-    expect(screen.getByText("Belirsiz")).toBeInTheDocument();
+    expect(screen.getByText("Tarihsiz")).toBeInTheDocument();
+  });
+
+  it("never renders an expired campaign as an alarm", () => {
+    // EXPIRED does not reach this page in v2, but the word still has to exist:
+    // a row whose dates move under us must render a word, not a blank badge.
+    render(<CampaignStatusPill status="EXPIRED" />);
+    expect(screen.getByText("Sona erdi")).toBeInTheDocument();
   });
 });
 
@@ -74,6 +84,26 @@ describe("CampaignAnalystTable", () => {
     // An empty cell on a table reads as a rendering bug, not as a missing
     // fact: both the unstated discount and the unknown route say so in a glyph.
     expect(screen.getAllByText("—")).toHaveLength(2);
+  });
+
+  it("keeps the sale and travel windows in two separate columns", () => {
+    // §11 again, in the densest view on the site: the two windows never share
+    // a column and never merge into one range.
+    render(<CampaignAnalystTable rows={[row]} onSelect={() => {}} />);
+    expect(screen.getByRole("columnheader", { name: "Satış dönemi" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "Seyahat dönemi" })).toBeInTheDocument();
+    expect(screen.getByText("1 - 30 Eylül 2026")).toBeInTheDocument();
+    expect(screen.getByText("1 Ekim - 31 Aralık 2026")).toBeInTheDocument();
+  });
+
+  it("marks a campaign the carrier itself is on the record for", () => {
+    render(
+      <CampaignAnalystTable
+        rows={[promotion({ official_source_verified: true })]}
+        onSelect={() => {}}
+      />,
+    );
+    expect(screen.getByLabelText("Resmî kaynak doğrulandı")).toBeInTheDocument();
   });
 
   it("flags the two things an analyst must not miss", () => {

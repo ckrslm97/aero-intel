@@ -1,7 +1,8 @@
 "use client";
 
-import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import { motion, useReducedMotion } from "framer-motion";
 import {
+  BadgeCheck,
   CalendarClock,
   ChevronDown,
   ExternalLink,
@@ -11,29 +12,27 @@ import {
   TriangleAlert,
   X,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { AirlineLogo } from "@/components/airline-logo";
 import { CampaignStatusPill, ConfidencePill } from "@/components/campaign-analyst-table";
+import { CampaignWindows } from "@/components/campaign-windows";
 import { apiFetch } from "@/lib/api";
 import {
+  campaignAttr,
   campaignFieldLabel,
   campaignRouteLabel,
   formatChangeValue,
   sourceTierLabel,
 } from "@/lib/campaigns";
-import {
-  drawerPanel,
-  drawerStagger,
-  fadeUpItem,
-  overlayFade,
-  reduceVariants,
-} from "@/lib/motion";
+import { drawerPanel, drawerStagger, fadeUpItem, overlayFade, reduceVariants } from "@/lib/motion";
 import { worldRegions } from "@/lib/nav";
 import {
   CAMPAIGN_BUSINESS_CLASS_LABELS_TR,
+  CAMPAIGN_KIND_LABELS_TR,
   CAMPAIGN_TYPE_LABELS_TR,
   type CampaignBusinessClass,
+  type CampaignKind,
   type CampaignType,
 } from "@/lib/taxonomy.gen";
 import type { PromotionOut, PromotionSource, PromotionVersion } from "@/lib/types";
@@ -43,11 +42,32 @@ const REGION_NAME: Record<string, string> = Object.fromEntries(
 );
 
 const DETECTED_FORMAT = new Intl.DateTimeFormat("tr-TR", {
-  dateStyle: "long",
+  dateStyle: "medium",
   timeStyle: "short",
 });
 
 const DAY_FORMAT = new Intl.DateTimeFormat("tr-TR", { dateStyle: "medium" });
+
+function formatDay(iso: string | null): string | null {
+  if (!iso) return null;
+  const at = new Date(`${iso.slice(0, 10)}T00:00:00Z`);
+  return Number.isNaN(at.getTime()) ? null : DAY_FORMAT.format(at);
+}
+
+/** A window the carrier stated SEPARATELY from the sale and travel ones.
+ *
+ * Almost always empty, and that emptiness is the information: a filled
+ * ticketing or campaign period means the carrier published one, never that we
+ * assumed it from the booking window. So the row is rendered only when at
+ * least one edge exists -- an always-present "Belirtilmedi" here would be two
+ * more lines of nothing in a panel whose job is the four dates above it. */
+function statedRange(start: string | null, end: string | null): string | null {
+  const from = formatDay(start);
+  const to = formatDay(end);
+  if (!from && !to) return null;
+  if (from && to) return `${from} → ${to}`;
+  return from ? `${from} → belirtilmedi` : `belirtilmedi → ${to}`;
+}
 
 /** One campaign, in full.
  *
@@ -55,21 +75,21 @@ const DAY_FORMAT = new Intl.DateTimeFormat("tr-TR", { dateStyle: "medium" });
  * The two panels share a shell -- backdrop, spring aside, Escape, scroll lock,
  * seam light -- and that shell is about sixty lines. Their interiors share
  * nothing at all: one explains a pipeline's verdict on a story, the other
- * states four dates and a discount. Factoring the shell out would put a
- * props-driven layer between every future change and both drawers, to save
- * less code than the layer itself costs.
+ * states four dates and a discount.
  *
  * The rule the interior follows: every field here can be absent, and an absent
  * field says so. There is no cell that renders empty and no badge that renders
  * as a blank -- "Belirtilmedi" is a fact about the source, and hiding it would
  * make a half-known campaign look fully known.
  *
- * PR7 added the provenance half: why the classifier called this a campaign,
- * the sentences each field was read from, what has changed since we first saw
- * it, and which pages told us. All four are fetched or revealed only when the
- * drawer is actually open -- the list endpoint carries the evidence inline, but
- * the version and source histories are one request each, made per campaign the
- * reader opens rather than for every row they scroll past.
+ * v2 compressed it. The dates are now the same two-track drawing the feed row
+ * uses (campaign-windows.tsx) rather than two prose cells, the identity badges
+ * are one wrapping row, and the four provenance sections -- why the classifier
+ * called this a campaign, the sentences each field was read from, what has
+ * changed since we first saw it, and which pages told us -- are all collapsed
+ * by default rather than three of four being open. Nothing was dropped: a
+ * reader auditing a record still gets every quote, every version diff and
+ * every source URL, one click in.
  */
 export function CampaignDrawer({
   promotion,
@@ -82,6 +102,7 @@ export function CampaignDrawer({
 }) {
   const reduceMotion = useReducedMotion();
   const item = reduceMotion ? reduceVariants(fadeUpItem) : fadeUpItem;
+  const closeRef = useRef<HTMLButtonElement>(null);
 
   /** Keyed by campaign id rather than reset on close: clearing it in an effect
    * would be a synchronous setState in an effect body (a cascading render, and
@@ -95,6 +116,7 @@ export function CampaignDrawer({
 
   useEffect(() => {
     if (!promotion) return;
+    closeRef.current?.focus();
     function onKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") onClose();
     }
@@ -131,421 +153,485 @@ export function CampaignDrawer({
     };
   }, [promotionId]);
 
+  // Hooks first, then the early return: `promotion === null` is the closed
+  // state and this component is mounted for the whole page's life.
+  if (!promotion) return null;
+
   const versions = history?.id === promotionId ? history.versions : [];
   const sources = history?.id === promotionId ? history.sources : [];
 
-  const markets = promotion?.markets
+  const markets = promotion.markets
     ? promotion.markets
         .split(",")
         .map((m) => m.trim())
         .filter(Boolean)
     : [];
 
-  const evidence = Object.entries(promotion?.evidence_json ?? {}).filter(
+  const evidence = Object.entries(promotion.evidence_json ?? {}).filter(
     ([, entry]) => entry && typeof entry.source_text === "string" && entry.source_text.trim(),
   );
   const inferredYear = Boolean(
-    promotion?.date_flags_json &&
+    promotion.date_flags_json &&
       (promotion.date_flags_json as { inferred_year?: unknown }).inferred_year,
   );
 
+  const ticketing = statedRange(promotion.ticketing_start, promotion.ticketing_end);
+  const campaignPeriod = statedRange(promotion.campaign_start, promotion.campaign_end);
+  const cabin = campaignAttr(promotion, "cabin");
+  const promoCode = campaignAttr(promotion, "promo_code");
+  const lastChecked = promotion.last_changed_at ?? promotion.detected_at;
+
   return (
-    <AnimatePresence>
-      {promotion && (
-        <>
-          <motion.div
-            key="campaign-drawer-overlay"
-            variants={reduceMotion ? reduceVariants(overlayFade) : overlayFade}
-            initial="hidden"
-            animate="show"
-            exit="exit"
-            onClick={onClose}
-            className="fixed inset-0 z-50 bg-black/50 backdrop-blur-[2px]"
-          />
-          <motion.aside
-            key="campaign-drawer-panel"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Kampanya ayrıntısı"
-            variants={reduceMotion ? reduceVariants(drawerPanel) : drawerPanel}
-            initial="hidden"
-            animate="show"
-            exit="exit"
-            // The carrier's own hex, not a category token: on this page the
-            // airline IS the identity, and the seam light, the border-gradient
-            // panel and the discount's text-glow all read from here.
-            style={{ "--glow-color": brandHex } as React.CSSProperties}
-            className="fixed inset-y-0 right-0 z-50 flex w-full max-w-lg flex-col border-l border-border bg-card shadow-2xl"
-          >
-            <span
-              aria-hidden
-              className="pointer-events-none absolute inset-y-0 left-0 w-0.5 bg-gradient-to-b from-[var(--glow-color)] via-[var(--glow-color)]/40 to-transparent"
+    // Mounted and unmounted outright -- deliberately NOT wrapped in
+    // `AnimatePresence`. Measured in this stack (framer-motion 12 + React 19):
+    // the exit animation runs, then the exit-complete callback never fires, so
+    // the subtree is never unmounted -- the panel ends off-screen but its
+    // `fixed inset-0` backdrop stays over the page and every click after the
+    // first close lands on a black overlay. A modal that cannot be dismissed
+    // is a far worse failure than one that closes without a 200ms slide, so
+    // the entrance is kept and the exit is dropped. See
+    // risk-detail-drawer.tsx, where this was first diagnosed.
+    <>
+      <motion.div
+        key="campaign-drawer-overlay"
+        variants={reduceMotion ? reduceVariants(overlayFade) : overlayFade}
+        initial="hidden"
+        animate="show"
+        onClick={onClose}
+        className="fixed inset-0 z-50 bg-black/50 backdrop-blur-[2px]"
+      />
+      <motion.aside
+        key="campaign-drawer-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Kampanya ayrıntısı"
+        variants={reduceMotion ? reduceVariants(drawerPanel) : drawerPanel}
+        initial="hidden"
+        animate="show"
+        // The carrier's own hex, not a category token: on this page the
+        // airline IS the identity, and the seam light reads from here.
+        style={{ "--glow-color": brandHex } as React.CSSProperties}
+        className="fixed inset-y-0 right-0 z-50 flex w-full max-w-md flex-col border-l border-border bg-card shadow-2xl"
+      >
+        <span
+          aria-hidden
+          className="pointer-events-none absolute inset-y-0 left-0 w-0.5 bg-gradient-to-b from-[var(--glow-color)] via-[var(--glow-color)]/40 to-transparent"
+        />
+
+        <header className="flex items-start justify-between gap-3 border-b border-border px-5 py-3.5">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <AirlineLogo
+              code={promotion.airline_code}
+              name={promotion.airline_name}
+              className="size-7 shrink-0"
             />
+            <div className="flex min-w-0 flex-col">
+              <span className="truncate text-xs font-semibold text-card-foreground">
+                {promotion.airline_name}
+              </span>
+              <span className="truncate text-[10px] font-medium uppercase tracking-wider text-muted-foreground tabular-nums">
+                {promotion.airline_code} · {promotion.source_name}
+              </span>
+            </div>
+          </div>
+          <button
+            ref={closeRef}
+            type="button"
+            onClick={onClose}
+            aria-label="Kampanyayı kapat"
+            className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+          >
+            <X className="size-4" />
+          </button>
+        </header>
 
-            <header className="flex items-start justify-between gap-4 border-b border-border px-6 py-5">
-              <div className="flex items-center gap-3">
-                <AirlineLogo
-                  code={promotion.airline_code}
-                  name={promotion.airline_name}
-                  className="size-8"
-                />
-                <div className="flex flex-col">
-                  <span className="text-sm font-semibold text-card-foreground">
-                    {promotion.airline_name}
-                  </span>
-                  <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground tabular-nums">
-                    {promotion.airline_code} · {promotion.source_name}
-                  </span>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={onClose}
-                aria-label="Kampanyayı kapat"
-                className="shrink-0 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        <motion.div
+          variants={reduceMotion ? reduceVariants(drawerStagger) : drawerStagger}
+          initial="hidden"
+          animate="show"
+          className="flex flex-1 flex-col gap-4 overflow-y-auto px-5 py-4"
+        >
+          <motion.h2
+            variants={item}
+            className="text-lg font-semibold leading-snug tracking-tight text-card-foreground"
+          >
+            {promotion.title_tr}
+          </motion.h2>
+
+          {/* Status, class and the warning badges sit above everything else:
+              they are what tells a reader whether the numbers below are worth
+              reading at all. */}
+          <motion.div variants={item} className="flex flex-wrap items-center gap-1">
+            <CampaignStatusPill status={promotion.status} />
+            {promotion.campaign_kind && (
+              <Tag>{CAMPAIGN_KIND_LABELS_TR[promotion.campaign_kind as CampaignKind]}</Tag>
+            )}
+            {promotion.campaign_type && (
+              <Tag>
+                {CAMPAIGN_TYPE_LABELS_TR[promotion.campaign_type as CampaignType] ??
+                  promotion.campaign_type}
+              </Tag>
+            )}
+            {promotion.business_class && (
+              <Tag>
+                {CAMPAIGN_BUSINESS_CLASS_LABELS_TR[
+                  promotion.business_class as CampaignBusinessClass
+                ] ?? promotion.business_class}
+              </Tag>
+            )}
+            {/* Both states, unlike the feed row: a reader who opened the panel
+                came to ask, and "no official source" is an answer. */}
+            {promotion.official_source_verified ? (
+              <span
+                title="Havayolunun kendi sayfası bu kampanya için kaynak olarak kayıtlı."
+                className="inline-flex items-center gap-1 rounded-full border border-good/40 bg-good/10 px-1.5 py-0.5 text-[10px] font-medium text-good"
               >
-                <X className="size-4" />
-              </button>
-            </header>
-
-            <motion.div
-              variants={reduceMotion ? reduceVariants(drawerStagger) : drawerStagger}
-              initial="hidden"
-              animate="show"
-              className="flex flex-1 flex-col gap-6 overflow-y-auto px-6 py-6"
-            >
-              <motion.h2
-                variants={item}
-                className="text-2xl font-semibold leading-snug tracking-tight text-card-foreground"
+                <BadgeCheck className="size-3" aria-hidden />
+                Resmî kaynak
+              </span>
+            ) : (
+              <span
+                title="Bu kampanya için havayolunun kendi sayfasından bir kaynak kaydedilmedi; bilgi ikincil kaynaklardan geliyor."
+                className="inline-flex items-center gap-1 rounded-full border border-dashed border-border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
               >
-                {promotion.title_tr}
-              </motion.h2>
+                Resmî kaynak yok
+              </span>
+            )}
+            {promotion.conflict_detected === true && (
+              <span
+                title="İki kaynak bir alanda çelişti; daha resmî olan kazandı. Kaybeden değer değişiklik geçmişinde duruyor."
+                className="inline-flex items-center gap-1 rounded-full border border-critical/40 bg-critical/10 px-1.5 py-0.5 text-[10px] font-medium text-critical"
+              >
+                <Split className="size-3" aria-hidden />
+                Kaynak çelişkisi
+              </span>
+            )}
+            {promotion.review_required === true && (
+              <span
+                title="Güven eşiğinin altında kaldı: bir insanın doğrulaması bekleniyor."
+                className="inline-flex items-center gap-1 rounded-full border border-warning/40 bg-warning/10 px-1.5 py-0.5 text-[10px] font-medium text-warning"
+              >
+                <TriangleAlert className="size-3" aria-hidden />
+                İnceleme gerekli
+              </span>
+            )}
+          </motion.div>
 
-              {/* Status, type and the two warning badges sit above everything
-                  else: they are what tells a reader whether the numbers below
-                  are worth reading at all. */}
-              <motion.div variants={item} className="flex flex-wrap items-center gap-1.5">
-                <CampaignStatusPill status={promotion.status} />
-                {promotion.campaign_type && (
-                  <span className="rounded-full border border-border px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
-                    {CAMPAIGN_TYPE_LABELS_TR[promotion.campaign_type as CampaignType] ??
-                      promotion.campaign_type}
-                  </span>
-                )}
-                {promotion.business_class && (
-                  <span className="rounded-full border border-border px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
-                    {CAMPAIGN_BUSINESS_CLASS_LABELS_TR[
-                      promotion.business_class as CampaignBusinessClass
-                    ] ?? promotion.business_class}
-                  </span>
-                )}
-                {promotion.conflict_detected === true && (
-                  <span
-                    title="İki kaynak bir alanda çelişti; daha resmî olan kazandı. Kaybeden değer değişiklik geçmişinde duruyor."
-                    className="inline-flex items-center gap-1 rounded-full border border-critical/40 bg-critical/10 px-2 py-0.5 text-[11px] font-medium text-critical"
-                  >
-                    <Split className="size-3" aria-hidden />
-                    Kaynak çelişkisi
-                  </span>
-                )}
-                {promotion.review_required === true && (
-                  <span
-                    title="Güven eşiğinin altında kaldı: bir insanın doğrulaması bekleniyor."
-                    className="inline-flex items-center gap-1 rounded-full border border-warning/40 bg-warning/10 px-2 py-0.5 text-[11px] font-medium text-warning"
-                  >
-                    <TriangleAlert className="size-3" aria-hidden />
-                    İnceleme gerekli
-                  </span>
-                )}
-              </motion.div>
-
-              <motion.div variants={item} className="flex flex-col gap-1">
-                <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  İndirim
+          <motion.div variants={item} className="flex items-baseline gap-2">
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              İndirim
+            </span>
+            {promotion.discount_pct !== null ? (
+              <span className="text-2xl font-semibold tabular-nums leading-none">
+                %{promotion.discount_pct}
+                <span className="ml-1 text-xs font-normal text-muted-foreground">
+                  &apos;a varan
                 </span>
-                {promotion.discount_pct !== null ? (
-                  <span className="text-3xl font-bold tabular-nums text-glow">
-                    %{promotion.discount_pct}&apos;a varan
-                  </span>
-                ) : (
-                  // A fare campaign ("9 Euro'dan başlayan") genuinely has no
-                  // percentage. Saying so beats an empty hero.
-                  <span className="text-sm text-muted-foreground">Oran belirtilmedi</span>
+              </span>
+            ) : (
+              // A fare campaign ("9 Euro'dan başlayan") genuinely has no
+              // percentage. Saying so beats an empty hero.
+              <span className="text-sm text-muted-foreground">Oran belirtilmedi</span>
+            )}
+          </motion.div>
+
+          {/* The two windows, as the two windows -- not as two sentences. */}
+          <motion.div
+            variants={item}
+            className="flex flex-col gap-2 rounded-lg border border-border bg-background/40 p-3"
+          >
+            <CampaignWindows promo={promotion} />
+            {inferredYear && (
+              <p className="flex items-start gap-1 text-[10px] leading-relaxed text-warning">
+                <TriangleAlert className="mt-px size-3 shrink-0" aria-hidden />
+                Yıl kaynakta yazmıyordu; metinden çıkarıldı.
+              </p>
+            )}
+            {(ticketing || campaignPeriod) && (
+              <dl className="grid grid-cols-[5.5rem_1fr] gap-x-2 gap-y-0.5 border-t border-border pt-2">
+                {ticketing && (
+                  <>
+                    <dt className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                      Biletleme
+                    </dt>
+                    <dd className="text-[11px] tabular-nums">{ticketing}</dd>
+                  </>
                 )}
-              </motion.div>
+                {campaignPeriod && (
+                  <>
+                    <dt className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                      Kampanya
+                    </dt>
+                    <dd className="text-[11px] tabular-nums">{campaignPeriod}</dd>
+                  </>
+                )}
+              </dl>
+            )}
+          </motion.div>
 
-              <motion.div
-                variants={item}
-                style={{ "--gradient-surface": "var(--card)" } as React.CSSProperties}
-                className="border-gradient grid grid-cols-2 gap-4 rounded-xl p-5"
+          <motion.dl
+            variants={item}
+            className="grid grid-cols-2 gap-x-4 gap-y-2.5 rounded-lg border border-border p-3"
+          >
+            <Cell label="Rota" value={campaignRouteLabel(promotion)} />
+            <Cell label="Kabin" value={cabin ?? "Belirtilmedi"} />
+            <Cell label="Promosyon kodu" value={promoCode ?? "Belirtilmedi"} />
+            <Cell
+              label="Kapsam"
+              value={markets.length > 0 ? `${markets.length} pazar` : "Belirtilmedi"}
+            />
+            <Cell
+              label="Son kontrol"
+              value={DETECTED_FORMAT.format(new Date(lastChecked))}
+              hint={
+                promotion.last_changed_at
+                  ? "Kaydın en son değiştiği an"
+                  : "Kampanyayı ilk gördüğümüz an; o gün bu yana değişiklik kaydedilmedi"
+              }
+            />
+            <div className="flex flex-col gap-0.5">
+              <dt className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Güven
+              </dt>
+              <dd>
+                <ConfidencePill
+                  band={promotion.confidence_band}
+                  score={promotion.confidence_score}
+                />
+              </dd>
+            </div>
+          </motion.dl>
+
+          {markets.length > 0 && (
+            <motion.div variants={item} className="flex flex-wrap gap-1">
+              {markets.map((market) => (
+                <span
+                  key={market}
+                  className="rounded-md border border-border px-1.5 py-0.5 text-[11px] text-muted-foreground"
+                >
+                  {/* Region slugs get their Turkish name; a city name is
+                      already in the source's own words, so it stands. */}
+                  {REGION_NAME[market] ?? market}
+                </span>
+              ))}
+            </motion.div>
+          )}
+
+          {promotion.summary_tr && (
+            <motion.div variants={item}>
+              <Collapsible title="Özet" icon={<Quote className="size-3" />}>
+                <p className="whitespace-pre-line text-[13px] leading-relaxed text-muted-foreground">
+                  {promotion.summary_tr}
+                </p>
+              </Collapsible>
+            </motion.div>
+          )}
+
+          {promotion.classification_reason && (
+            <motion.div variants={item}>
+              <Collapsible title="Neden kampanya?" icon={<Quote className="size-3" />}>
+                {/* The classifier's own sentence, quoted rather than
+                    paraphrased: an unexplained verdict is an unfixable one. */}
+                <blockquote className="border-l-2 border-[var(--glow-color)] pl-2.5 text-[13px] leading-relaxed text-muted-foreground">
+                  {promotion.classification_reason}
+                </blockquote>
+              </Collapsible>
+            </motion.div>
+          )}
+
+          {evidence.length > 0 && (
+            <motion.div variants={item}>
+              <Collapsible
+                title="Kanıt alıntıları"
+                count={evidence.length}
+                icon={<Quote className="size-3" />}
               >
-                <Cell
-                  label="Satış dönemi"
-                  value={promotion.sale_range_tr}
-                  warning={
-                    inferredYear
-                      ? "Yıl kaynakta yazmıyordu; metinden çıkarıldı."
-                      : undefined
-                  }
-                />
-                <Cell label="Seyahat dönemi" value={promotion.travel_range_tr} />
-                <Cell label="Rota" value={campaignRouteLabel(promotion)} />
-                <Cell
-                  label="Kapsam"
-                  value={markets.length > 0 ? `${markets.length} pazar` : "Belirtilmedi"}
-                />
-                <Cell
-                  label="Tespit"
-                  value={DETECTED_FORMAT.format(new Date(promotion.detected_at))}
-                />
-                <div className="flex flex-col gap-0.5">
-                  <span className="text-[11px] text-muted-foreground">Güven</span>
-                  <ConfidencePill
-                    band={promotion.confidence_band}
-                    score={promotion.confidence_score}
-                  />
-                </div>
-              </motion.div>
+                <ul className="flex flex-col gap-2">
+                  {evidence.map(([field, entry]) => (
+                    <li key={field} className="flex flex-col gap-0.5">
+                      <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                        {campaignFieldLabel(field)}
+                        {entry.value !== undefined && entry.value !== null && (
+                          <span className="ml-1 font-normal normal-case text-foreground">
+                            {formatChangeValue(entry.value)}
+                          </span>
+                        )}
+                      </span>
+                      {/* The sentence the value was read from. This is the
+                          difference between a number and a citation. */}
+                      <blockquote className="border-l-2 border-border pl-2.5 text-[12px] italic leading-relaxed text-muted-foreground">
+                        “{entry.source_text}”
+                      </blockquote>
+                    </li>
+                  ))}
+                </ul>
+              </Collapsible>
+            </motion.div>
+          )}
 
-              {promotion.classification_reason && (
-                <motion.div variants={item} className="flex flex-col gap-2">
-                  <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                    Neden kampanya?
-                  </h3>
-                  {/* The classifier's own sentence, quoted rather than
-                      paraphrased: an unexplained verdict is an unfixable one. */}
-                  <blockquote className="border-l-2 border-[var(--glow-color)] pl-3 text-sm leading-relaxed text-muted-foreground">
-                    {promotion.classification_reason}
-                  </blockquote>
-                </motion.div>
-              )}
-
-              {evidence.length > 0 && (
-                <motion.div variants={item}>
-                  <Collapsible
-                    title="Kanıt alıntıları"
-                    count={evidence.length}
-                    icon={<Quote className="size-3.5" />}
-                  >
-                    <ul className="flex flex-col gap-3">
-                      {evidence.map(([field, entry]) => (
-                        <li key={field} className="flex flex-col gap-1">
-                          <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                            {campaignFieldLabel(field)}
-                            {entry.value !== undefined && entry.value !== null && (
-                              <span className="ml-1 font-normal normal-case text-foreground">
-                                {formatChangeValue(entry.value)}
+          {versions.length > 0 && (
+            <motion.div variants={item}>
+              <Collapsible
+                title="Değişiklik geçmişi"
+                count={versions.length}
+                icon={<History className="size-3" />}
+              >
+                <ol className="flex flex-col gap-2.5">
+                  {versions.map((version) => (
+                    <li key={version.version_no} className="flex flex-col gap-1">
+                      <span className="flex items-center gap-1.5 text-[10px] font-medium tabular-nums text-muted-foreground">
+                        <CalendarClock className="size-3" aria-hidden />
+                        {DAY_FORMAT.format(new Date(version.created_at))}
+                        <span className="rounded-full bg-muted px-1.5 text-[10px]">
+                          v{version.version_no}
+                        </span>
+                      </span>
+                      <ul className="flex flex-col gap-0.5 border-l-2 border-border pl-2.5">
+                        {Object.entries(version.changed_fields).map(([field, change]) => (
+                          <li key={field} className="text-[12px] leading-snug">
+                            <span className="font-medium">{campaignFieldLabel(field)}: </span>
+                            <span className="text-muted-foreground line-through">
+                              {formatChangeValue(change?.previous)}
+                            </span>
+                            <span className="text-muted-foreground"> → </span>
+                            <span className="font-medium">
+                              {formatChangeValue(change?.new)}
+                            </span>
+                            {change?.conflict && (
+                              <span className="ml-1 text-[10px] text-critical">
+                                (çelişki: resmî kaynak kazandı)
                               </span>
                             )}
-                          </span>
-                          {/* The sentence the value was read from. This is the
-                              difference between a number and a citation. */}
-                          <blockquote className="border-l-2 border-border pl-3 text-[13px] italic leading-relaxed text-muted-foreground">
-                            “{entry.source_text}”
-                          </blockquote>
-                        </li>
-                      ))}
-                    </ul>
-                  </Collapsible>
-                </motion.div>
-              )}
-
-              {versions.length > 0 && (
-                <motion.div variants={item}>
-                  <Collapsible
-                    title="Değişiklik geçmişi"
-                    count={versions.length}
-                    icon={<History className="size-3.5" />}
-                    defaultOpen
-                  >
-                    <ol className="flex flex-col gap-4">
-                      {versions.map((version) => (
-                        <li key={version.version_no} className="flex flex-col gap-1.5">
-                          <span className="flex items-center gap-2 text-[11px] font-medium tabular-nums text-muted-foreground">
-                            <CalendarClock className="size-3" aria-hidden />
-                            {DAY_FORMAT.format(new Date(version.created_at))}
-                            <span className="rounded-full bg-muted px-1.5 text-[10px]">
-                              v{version.version_no}
-                            </span>
-                          </span>
-                          <ul className="flex flex-col gap-1 border-l-2 border-border pl-3">
-                            {Object.entries(version.changed_fields).map(([field, change]) => (
-                              <li key={field} className="text-[13px] leading-snug">
-                                <span className="font-medium">{campaignFieldLabel(field)}: </span>
-                                <span className="text-muted-foreground line-through">
-                                  {formatChangeValue(change?.previous)}
-                                </span>
-                                <span className="text-muted-foreground"> → </span>
-                                <span className="font-medium">
-                                  {formatChangeValue(change?.new)}
-                                </span>
-                                {change?.conflict && (
-                                  <span className="ml-1 text-[11px] text-critical">
-                                    (çelişki: resmî kaynak kazandı)
-                                  </span>
-                                )}
-                              </li>
-                            ))}
-                          </ul>
-                        </li>
-                      ))}
-                    </ol>
-                  </Collapsible>
-                </motion.div>
-              )}
-
-              {sources.length > 0 && (
-                <motion.div variants={item} className="flex flex-col gap-2.5">
-                  <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                    Kaynaklar ({sources.length})
-                  </h3>
-                  <ul className="flex flex-col gap-1.5">
-                    {sources.map((source) => (
-                      <li key={source.url} className="flex items-center gap-2 text-[13px]">
-                        <span
-                          className={
-                            source.source_tier === "official"
-                              ? "rounded-full border border-good/40 bg-good/10 px-1.5 py-px text-[10px] font-semibold text-good"
-                              : source.source_tier === "newsroom"
-                                ? "rounded-full border border-primary/40 bg-primary/10 px-1.5 py-px text-[10px] font-semibold text-primary"
-                                : "rounded-full border border-border px-1.5 py-px text-[10px] font-semibold text-muted-foreground"
-                          }
-                        >
-                          {sourceTierLabel(source.source_tier)}
-                        </span>
-                        <a
-                          href={source.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="min-w-0 flex-1 truncate text-muted-foreground hover:text-primary"
-                        >
-                          {source.source_name ?? source.url}
-                        </a>
-                        <ExternalLink className="size-3 shrink-0 text-muted-foreground" />
-                      </li>
-                    ))}
-                  </ul>
-                </motion.div>
-              )}
-
-              <motion.div variants={item} className="flex flex-col gap-2.5">
-                <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                  Pazarlar
-                </h3>
-                {markets.length > 0 ? (
-                  <div className="flex flex-wrap gap-1.5">
-                    {markets.map((market) => (
-                      <span
-                        key={market}
-                        className="rounded-full border border-border px-2.5 py-1 text-xs"
-                      >
-                        {/* Region slugs get their Turkish name; a city name is
-                            already in the source's own words, so it stands. */}
-                        {REGION_NAME[market] ?? market}
-                      </span>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="text-sm text-muted-foreground">
-                    Kapsam: kaynakta belirtilmemiş.
-                  </p>
-                )}
-              </motion.div>
-
-              {promotion.summary_tr && (
-                <motion.p
-                  variants={item}
-                  className="whitespace-pre-line text-[15px] leading-relaxed text-muted-foreground"
-                >
-                  {promotion.summary_tr}
-                </motion.p>
-              )}
-
-              <motion.p
-                variants={item}
-                className="text-[11px] leading-relaxed text-muted-foreground"
-              >
-                Tarihler kaynağın yayımladığı haliyle alınır; belirtilmeyen bir tarih
-                tahmin edilmez. &quot;Tespit&quot;, kampanyanın yayına girdiği an değil,
-                bizim ilk gördüğümüz andır. Durum, tarihlerden okunarak her istekte
-                yeniden hesaplanır.
-              </motion.p>
+                          </li>
+                        ))}
+                      </ul>
+                    </li>
+                  ))}
+                </ol>
+              </Collapsible>
             </motion.div>
+          )}
 
-            <footer className="border-t border-border px-6 py-4">
-              <a
-                href={promotion.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                style={{ "--glow-color": "var(--primary)" } as React.CSSProperties}
-                className="flex w-full items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-primary to-chart-4 px-4 py-2.5 text-sm font-semibold text-primary-foreground transition-shadow duration-300 hover:glow-soft"
+          {sources.length > 0 && (
+            <motion.div variants={item}>
+              <Collapsible
+                title="Kaynaklar"
+                count={sources.length}
+                icon={<ExternalLink className="size-3" />}
               >
-                Kaynağa git
-                <ExternalLink className="size-4" />
-              </a>
-            </footer>
-          </motion.aside>
-        </>
-      )}
-    </AnimatePresence>
+                <ul className="flex flex-col gap-1">
+                  {sources.map((source) => (
+                    <li key={source.url} className="flex items-center gap-1.5 text-[12px]">
+                      <span
+                        className={
+                          source.source_tier === "official"
+                            ? "shrink-0 rounded-full border border-good/40 bg-good/10 px-1.5 py-px text-[10px] font-semibold text-good"
+                            : source.source_tier === "newsroom"
+                              ? "shrink-0 rounded-full border border-primary/40 bg-primary/10 px-1.5 py-px text-[10px] font-semibold text-primary"
+                              : "shrink-0 rounded-full border border-border px-1.5 py-px text-[10px] font-semibold text-muted-foreground"
+                        }
+                      >
+                        {sourceTierLabel(source.source_tier)}
+                      </span>
+                      <a
+                        href={source.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="min-w-0 flex-1 truncate text-muted-foreground hover:text-primary"
+                      >
+                        {source.source_name ?? source.url}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </Collapsible>
+            </motion.div>
+          )}
+
+          <motion.p
+            variants={item}
+            className="text-[10px] leading-relaxed text-muted-foreground"
+          >
+            Tarihler kaynağın yayımladığı haliyle alınır; belirtilmeyen bir tarih tahmin
+            edilmez. Durum, tarihlerden okunarak her istekte yeniden hesaplanır.
+          </motion.p>
+        </motion.div>
+
+        <footer className="border-t border-border px-5 py-3">
+          <a
+            href={promotion.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex w-full items-center justify-center gap-1.5 rounded-md border border-border bg-background px-3 py-2 text-xs font-semibold transition-colors hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+          >
+            Kaynağı gör
+            <ExternalLink className="size-3.5" aria-hidden />
+          </a>
+        </footer>
+      </motion.aside>
+    </>
+  );
+}
+
+function Tag({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="rounded-full border border-border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+      {children}
+    </span>
   );
 }
 
 function Cell({
   label,
   value,
-  warning,
+  hint,
 }: {
   label: string;
   value: string;
-  warning?: string;
+  hint?: string;
 }) {
   return (
-    <div className="flex flex-col gap-0.5">
-      <span className="text-[11px] text-muted-foreground">{label}</span>
-      <span className="flex items-start gap-1 text-sm font-medium leading-snug">
+    <div className="flex min-w-0 flex-col gap-0.5">
+      <dt className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+        {label}
+      </dt>
+      <dd className="text-[13px] font-medium leading-snug" title={hint}>
         {value || "—"}
-        {warning && (
-          // A guessed year draws the same bar as a stated one, so the guess has
-          // to be visible where the date is, not in a footnote.
-          <TriangleAlert className="mt-0.5 size-3 shrink-0 text-warning" aria-label={warning} />
-        )}
-      </span>
-      {warning && <span className="text-[10px] text-warning">{warning}</span>}
+      </dd>
     </div>
   );
 }
 
-/** A section that opens on click. Used for the two blocks that are reference
- * material rather than headline: nobody reads eleven evidence quotes on the
- * way to the sale window, but the one time they do, they need all of them. */
+/** A section that opens on click. Every reference block in this panel is one:
+ * nobody reads eleven evidence quotes on the way to the sale window, but the
+ * one time they do, they need all of them. */
 function Collapsible({
   title,
   count,
   icon,
-  defaultOpen = false,
   children,
 }: {
   title: string;
-  count: number;
+  count?: number;
   icon: React.ReactNode;
-  defaultOpen?: boolean;
   children: React.ReactNode;
 }) {
-  const [open, setOpen] = useState(defaultOpen);
+  const [open, setOpen] = useState(false);
   return (
-    <div className="flex flex-col gap-2.5">
+    <div className="flex flex-col gap-2">
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
-        className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground"
+        className="flex w-fit items-center gap-1.5 rounded text-[10px] font-semibold uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
       >
         {icon}
         {title}
-        <span className="rounded-full bg-muted px-1.5 text-[10px] tabular-nums">{count}</span>
+        {count !== undefined && (
+          <span className="rounded-full bg-muted px-1.5 text-[10px] tabular-nums">{count}</span>
+        )}
         <ChevronDown
-          className={`size-3.5 transition-transform ${open ? "rotate-180" : ""}`}
+          className={`size-3 transition-transform ${open ? "rotate-180" : ""}`}
           aria-hidden
         />
       </button>
