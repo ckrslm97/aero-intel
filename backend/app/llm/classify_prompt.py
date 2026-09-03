@@ -118,7 +118,16 @@ JSON şeması:
     "aviation_impact_score": 0.0-1.0,
     "country": "ülke adı",
     "city": null | "şehir adı",
-    "aviation_impact_note": "havacılığa etkisi tek cümle"
+    "aviation_impact_note": "havacılığa etkisi tek cümle",
+    "location_confidence": null | 0.0-1.0,
+    "mentioned_locations": [{{"name": "yer", "kind": "country"|"city", "role": "event"|"source"}}],
+    "aviation_impact_evidence": null | "metinden ALINTI, tek cümle",
+    "aviation_impact_status": null | "ACTUAL" | "POTENTIAL",
+    "is_current_event": null | true | false,
+    "is_historical": null | true | false,
+    "is_analysis": null | true | false,
+    "is_opinion": null | true | false,
+    "is_recap": null | true | false
   }},
   "is_campaign": true|false,
   "not_campaign_reason": null | "kısa gerekçe",
@@ -172,6 +181,15 @@ KURALLAR
    airport_disruption/atc_disruption. Hiçbiri uymuyorsa is_risk=false.
 
 7. risk.country: Olayın GERÇEKTEN olduğu ülke. Metinde ilk geçen ülke değil.
+   AÇIKLAMAYI YAPAN yer ile OLAYIN OLDUĞU yer aynı şey değildir:
+   "Washington said an earthquake struck Japan" cümlesinde ülke Japonya'dır;
+   Washington yorum yapan hükümettir. Bir başkent, bakanlık, büyükelçilik veya
+   haber merkezi (dateline) ASLA olay konumu değildir.
+   - mentioned_locations: Haberde adı geçen TÜM yerleri, oynadıkları rolle
+     birlikte yaz. role="event" olayın geçtiği yer, role="source" açıklamayı
+     yapan/haberi veren taraftır.
+   - location_confidence: risk.country'den ne kadar eminsin. Haber yeri açıkça
+     yazıyorsa 0.9; sen çıkardıysan 0.5; tahmin ediyorsan 0.4'ün altı.
    Emin değilsen null bırak.
 
 8. risk.probability: Bu olayın gerçekten olduğuna/olmakta olduğuna ne kadar
@@ -182,6 +200,21 @@ KURALLAR
    etkiliyor (0.0-1.0). Bir havalimanı kapanışı veya hava sahası yasağı yüksek
    (0.8+); bir ülkedeki genel ekonomik haber ama havacılığa özel bir etkisi
    belirtilmemişse düşük (0.2 civarı).
+   HABERDE "havayolu", "havacılık" veya "uçuş" KELİMESİNİN GEÇMESİ bu skoru
+   YÜKSELTMEZ. Skoru yükselten şey somut operasyonel etkidir: hava sahasının
+   kapanması, uçuşların iptali veya yönlendirilmesi, havalimanı/pist kapanışı,
+   NOTAM, ATC grevi, uçuş yasağı. Bunların hiçbiri yoksa skor düşüktür.
+   - aviation_impact_evidence: Skoru okuduğun cümleyi metinden AYNEN alıntıla.
+     Özetleme, kendi cümleni yazma; yoksa null bırak.
+   - aviation_impact_status: Etki gerçekleşmişse "ACTUAL", öngörülüyor veya
+     ihtimal olarak anlatılıyorsa "POTENTIAL".
+
+9b. Güncellik bayrakları: is_current_event yalnızca şu anda veya son birkaç
+   günde olan bir olay için true'dur. Yıldönümü, geriye dönük anma, eski bir
+   olayın davası, analiz yazısı, köşe yazısı veya haftalık derleme false'tur --
+   ve karşılık gelen bayrağı (is_historical / is_analysis / is_opinion /
+   is_recap) da işaretle. Emin değilsen null bırak; null "bakmadım" demektir ve
+   yanlış false'tan iyidir.
 
 10. is_campaign: SADECE bir havayolunun bilet satışına yönelik indirim,
    promosyon veya kampanyası için true.

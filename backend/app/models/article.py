@@ -247,4 +247,55 @@ class ArticleEnrichment(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # is without a full airport/city reference dataset.
     risk_city: Mapped[str | None] = mapped_column(String(80), nullable=True)
 
+    # --- currency flags (spec §15) -------------------------------------------
+    #
+    # NULL IS "NOBODY LOOKED" AND IS NOT False, on all five. The LLM answers
+    # them for risk-classified articles; the heuristic answers only the two
+    # PR #62's retrospective guard has evidence for and leaves the rest null
+    # (app/llm/heuristic.py detect_currency_flags).
+    #
+    # This is why /risks gates on `is_current_event IS NOT FALSE` rather than
+    # `IS TRUE`: LLM coverage of this feed is partial, so "is true" would drop
+    # every article nobody scored -- which today is nearly the whole archive.
+    # Only a row a classifier actually looked at and called stale is removed.
+    is_current_event: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    is_historical: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    is_analysis: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    is_opinion: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    is_recap: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+
+    # --- aviation relevance (spec §4-6, §16-17) ------------------------------
+    #
+    # How directly this event touches flying, 0-1, as opposed to whether the
+    # article says the word "airline". NULL when neither the model nor the
+    # keyword floor produced a reading -- see `aviation_relevance_source`,
+    # which records WHICH of the two answered so a gate can be tightened later
+    # against a known denominator rather than against a guess.
+    aviation_relevance_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    #: "llm" | "heuristic" | "unscored"
+    aviation_relevance_source: Mapped[str | None] = mapped_column(String(12), nullable=True)
+    #: The sentence the score was read off, quoted from the article as written.
+    #: An evidence field the reader cannot check against the source is
+    #: decoration, so this is never a paraphrase.
+    aviation_impact_evidence: Mapped[str | None] = mapped_column(Text, nullable=True)
+    #: "ACTUAL" | "POTENTIAL" -- reported, or forecast. Not a severity: a
+    #: forecast closure and a reported one are equally worth a planner's
+    #: attention and differ only in kind.
+    aviation_impact_status: Mapped[str | None] = mapped_column(String(10), nullable=True)
+
+    # --- location verification (spec §7-13, §25) -----------------------------
+    #
+    # `risk_country`/`risk_city` above stay the EVENT's location. These two say
+    # how much that answer is worth and what else the article named.
+    #
+    # mentioned_locations is every place in the article with the role it
+    # played: [{"name": "United States", "kind": "country", "role": "source"}].
+    # "source" means a government/dateline mention -- "Washington said an
+    # earthquake struck Japan" names Washington and places nothing. Keeping the
+    # rejected mentions is what makes the rejection auditable.
+    mentioned_locations: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    #: 0-1. Below heuristic.LOCATION_MAP_PIN_MIN the map draws no pin: a guess
+    #: rendered as a dot is indistinguishable from a fact rendered as a dot.
+    location_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+
     article: Mapped["Article"] = relationship(back_populates="enrichment")

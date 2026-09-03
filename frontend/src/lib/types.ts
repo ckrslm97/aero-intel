@@ -613,6 +613,45 @@ export interface RiskItem {
    * is showing source-language text, which the page says out loud with the
    * app's "otomatik çeviri yok" tag rather than letting it pass as Turkish. */
   is_translated: boolean;
+
+  // --- verification evidence (backend spec §7-17) --------------------------
+  //
+  // Optional on this interface, not because the API omits them, but because a
+  // cached response served from before they existed does not carry them, and
+  // a page that renders `undefined` as a confident 0 would be asserting a
+  // measurement nobody made. Every consumer must handle null/undefined as
+  // "unscored", never as "scored low" -- which is the same rule the three
+  // backend gates follow.
+
+  /** How much the placement is worth, 0-1. Null when nothing resolved. Below
+   * the backend's threshold `country`/`city` arrive BLANKED and the signal is
+   * filed under "Belirtilmemiş", so the map never pins a guess. */
+  location_confidence?: number | null;
+  /** Whether this signal earned a map pin. False means the list shows it and
+   * the map does not. */
+  is_mappable?: boolean;
+  /** Every place the coverage named, with the role it played: "event" is the
+   * scene, "source" is a dateline or a government quote, "unverified" is a
+   * mention whose role could not be tested. The audit trail behind a blanked
+   * placement. */
+  mentioned_locations?: RiskMentionedLocation[];
+  /** 0-1: how directly this event touches flying, as opposed to how often the
+   * coverage says the word "airline". Null when nothing scored it. */
+  aviation_relevance_score?: number | null;
+  /** "llm" | "heuristic" | "unscored" -- which pass produced the score. */
+  aviation_relevance_source?: string | null;
+  /** The sentence the score was read off, in the article's own words. */
+  aviation_impact_evidence?: string | null;
+  /** "ACTUAL" | "POTENTIAL" -- reported, or forecast. Not a severity. */
+  aviation_impact_status?: string | null;
+}
+
+export interface RiskMentionedLocation {
+  name: string;
+  /** "country" | "city" | "unknown" */
+  kind: string;
+  /** "event" | "source" | "unverified" */
+  role: string;
 }
 
 export interface RiskSeverityCounts {
@@ -635,10 +674,23 @@ export interface RiskCountry {
 export interface RiskRadarOut {
   days: number;
   total: number;
-  /** How many signals the confidence floor removed from this window. Served so
+  /** How many signals the confidence gate removed from this window. Served so
    * the page can state it: a list that quietly drops rows is a list whose
    * counts nobody can reconcile. */
   suppressed_low_confidence: number;
+  /** How many signals were measured and found to have no operational bearing
+   * on flying. Separate from the line above because they are different
+   * rejections and one merged number would hide which rule is doing the work. */
+  suppressed_aviation_irrelevant?: number;
+  /** How many ARTICLES (not signals -- the filter runs before clustering) a
+   * classifier marked as not-current: anniversaries, retrospectives, analysis
+   * pieces. */
+  suppressed_not_current?: number;
+  /** How many PUBLISHED signals the map will not pin because their placement
+   * scored too low. They are in `countries` under "Belirtilmemiş", not
+   * missing -- this is what lets the page explain why the map shows fewer
+   * markers than the list shows rows. */
+  unplaced_low_confidence?: number;
   countries: RiskCountry[];
   type_counts: Record<string, number>;
   family_counts: Record<string, number>;

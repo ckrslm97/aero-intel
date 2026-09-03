@@ -11,15 +11,29 @@ What this data CANNOT say, listed once here because every field below is shaped
 by it and the UI has to keep the same discipline:
 
 * **No event coordinates.** Placement is a country or city centroid, never the
-  event's own point -- the classifier resolves a name, not a location.
+  event's own point -- the classifier resolves a name, not a location. What is
+  now checked is whether the NAME is the event's at all: see the location gate
+  below, which refuses a pin rather than drawing one on a dateline.
 * **No event-occurrence time.** Every timestamp here is a PUBLICATION time.
   `first_reported_at`/`last_reported_at` bracket the coverage, not the event.
 * **No lifecycle.** Nothing in the feed says an event is active, contained or
   over. `is_fresh`/`is_updated` are statements about the coverage flow, and
-  they are named that way so they cannot be mistaken for a status.
-* **No operational impact.** There is no schedule, OTP or route data behind
-  this product, so an airport named in an article is exactly that -- named.
-  See AirportRefOut and aviation_link_for().
+  they are named that way so they cannot be mistaken for a status. This is also
+  why the currency flags stop at is_current_event/is_historical/is_analysis/
+  is_opinion/is_recap and do not attempt is_developing or is_resolved.
+* **No operational impact DATA.** There is no schedule, OTP or route feed
+  behind this product, so an airport named in an article is exactly that --
+  named (see AirportRefOut and aviation_link_for()).
+  `aviation_relevance_score` does not change that: it reads what the ARTICLE
+  says happened to flying ("the airspace was closed"), which is reporting, not
+  measurement. It is a filter on relevance, never a claim about operations.
+
+Three gates run before anything reaches this page, and each one publishes its
+own count so the reader can reconcile what is shown with what was found:
+currency (§15), aviation relevance (§16), confidence (§17). All three treat an
+UNSCORED row as publishable -- "nobody measured this" is not evidence of
+failure, and a gate that reads it as one deletes the archive instead of
+filtering it. Each gate's block below says how that applies to it.
 """
 from datetime import datetime, time, timedelta, timezone
 
@@ -31,6 +45,7 @@ from sqlalchemy.orm import selectinload
 
 from app.api.cache_headers import AGGREGATES, public_cache
 from app.core.db import get_db
+from app.llm.heuristic import AVIATION_RELEVANCE_GATE, LOCATION_MAP_PIN_MIN
 from app.models.article import Article, ArticleEnrichment
 from app.models.entity import ArticleEntity
 from app.pipeline.clustering import EventCandidate, cluster, entity_codes, pick_primary, tier_for_source
@@ -150,6 +165,39 @@ class RiskItemOut(BaseModel):
     #: with the app's existing "otomatik çeviri yok" tag rather than silently.
     is_translated: bool = False
 
+    # --- the verification evidence --------------------------------------
+    #
+    # Every gate below publishes a number as well as applying it. A row that
+    # was let through because nobody measured it must be distinguishable from
+    # one that was measured and passed -- otherwise the page is asserting a
+    # confidence the pipeline never earned, which is the failure this whole
+    # revision exists to fix.
+
+    #: How much the placement is worth, 0-1, or None when nothing resolved.
+    #: Below LOCATION_MAP_PIN_MIN, `country`/`city` are BLANKED and the signal
+    #: is filed under UNKNOWN_COUNTRY -- see place_for() on why a weak
+    #: placement is worse than none.
+    location_confidence: float | None = None
+    #: True when this signal earned a map pin. False means the list shows it
+    #: and the map does not.
+    is_mappable: bool = True
+    #: Every place the article named with the role it played:
+    #: [{"name": "United States", "kind": "country", "role": "source"}].
+    #: "source" is a dateline or a government quote -- named, not the scene.
+    #: Served rather than kept internal because it is the audit trail for a
+    #: BLANKED placement: without it, "konum belirsiz" is unanswerable.
+    mentioned_locations: list[dict] = []
+
+    #: 0-1, or None when neither the model nor the keyword floor scored this.
+    #: None is not a low score, and the gate treats it accordingly.
+    aviation_relevance_score: float | None = None
+    #: "llm" | "heuristic" | "unscored" -- which pass produced the score.
+    aviation_relevance_source: str | None = None
+    #: The sentence the score was read off, in the article's own words.
+    aviation_impact_evidence: str | None = None
+    #: "ACTUAL" | "POTENTIAL" -- reported, or forecast.
+    aviation_impact_status: str | None = None
+
 
 class SeverityCountsOut(BaseModel):
     high: int
@@ -171,11 +219,27 @@ class RiskCountryOut(BaseModel):
 class RiskRadarOut(BaseModel):
     days: int
     total: int
-    #: How many clusters the confidence floor removed from this window. Served
+    #: How many clusters the confidence gate removed from this window. Served
     #: rather than swallowed: a page that quietly drops rows is a page whose
     #: counts nobody can reconcile, and "3 sinyal eşiğin altında kaldı" is a
-    #: fact the reader is entitled to. See CONFIDENCE_FLOOR.
+    #: fact the reader is entitled to. See CONFIDENCE_VERIFIED_MIN.
     suppressed_low_confidence: int = 0
+    #: How many clusters the aviation-relevance gate removed -- events that
+    #: were measured and found to have no operational bearing on flying.
+    #: Separate from the line above because they are different rejections and
+    #: a single "N suppressed" number would hide which rule is doing the work.
+    suppressed_aviation_irrelevant: int = 0
+    #: How many articles the currency gate removed BEFORE clustering -- rows a
+    #: classifier explicitly marked as not-current (an anniversary, a
+    #: retrospective, an analysis piece). Counted in articles rather than
+    #: clusters because the filter runs in SQL, before anything is grouped.
+    suppressed_not_current: int = 0
+    #: How many published clusters the map will not pin, because their
+    #: placement scored below LOCATION_MAP_PIN_MIN. They are in `countries`
+    #: under UNKNOWN_COUNTRY, not missing -- this number is what lets the page
+    #: say "N sinyalin konumu doğrulanamadı" instead of the map and the list
+    #: silently disagreeing about how many events there are.
+    unplaced_low_confidence: int = 0
     countries: list[RiskCountryOut]
     # Feed-wide totals per type/family, so the filter chips can show counts
     # without the client flattening every group to count them.
@@ -216,6 +280,19 @@ class RiskTrendOut(BaseModel):
 UNKNOWN_COUNTRY = "Belirtilmemiş"
 
 FRESH_WINDOW = timedelta(hours=24)
+
+#: The default window, in days. Five, down from fourteen.
+#:
+#: A risk radar's job is to say what is happening now, and a fortnight is not
+#: now: at 14 days the page's own top row was routinely a story whose newest
+#: telling was a week old, sitting beside one from this morning at the same
+#: visual weight. The window is what makes "still being written about"
+#: (is_updated) mean something -- over 14 days almost everything qualifies.
+#:
+#: The upper bound is untouched and 7/14/30 remain selectable: the shorter
+#: default is a statement about what the page opens on, not a claim that the
+#: older window is useless.
+DEFAULT_WINDOW_DAYS = 5
 
 #: How many airports a card will name. Six is what a card and a drawer chip row
 #: can carry without wrapping into a wall of codes; a story naming more than
@@ -299,11 +376,58 @@ AVIATION_OPERATIONAL_TYPES = frozenset(
 # signal than the arithmetic -- built from the primary's row alone -- can see.
 # ---------------------------------------------------------------------------
 
-#: Below this, a single-source cluster is not published at all.
-CONFIDENCE_FLOOR = 0.58
+# ---------------------------------------------------------------------------
+# THE 0.60 GATE, AND WHAT IT ACTUALLY SELECTS FOR
+#
+# Re-measured on the local corpus (18 risk-classified articles, 18 clusters --
+# nothing in it co-clusters) while writing this:
+#
+#   window     clusters   conf > 0.60   has official/regulator source
+#   14 days       18          12                     0
+#    5 days       10           6                     0
+#
+#   confidence values present: 0.58 (x4), 0.595 (x2), 0.61 (x12)
+#   corroborating_source_count: 1 on every row
+#
+# ONE PREMISE HAD TO BE CORRECTED. A 0.60 gate is often described as meaning
+# "two independent sources", on the reasoning that a single-source story cannot
+# reach it. That is NOT true of this formula. pipeline/verify.py computes
+#
+#     0.4 + 0.15 * (sources - 1) + 0.3 * avg_trust
+#
+# so a single source with trust_weight 0.70 -- the catalogue's default
+# trade-press weight -- scores exactly 0.61 and clears a 0.60 gate on its own.
+# The measurement above is that fact: 12 of 18 clusters pass, and every one of
+# them is single-source. The single-source range on the seeded catalogue is
+# 0.535-0.685 (trust 0.45-0.95), not a 0.54 ceiling.
+#
+# So this gate does not select for corroboration. It selects for
+# `trust_weight > 0.667` -- i.e. it removes the outlets we weight below the
+# default trade press. That is a defensible rule and it is the one being
+# applied, but it has to be named accurately, because a threshold believed to
+# mean "two newsrooms agreed" would be read as far stronger evidence than it is.
+#
+# THE OFFICIAL-SOURCE EXEMPTION is implemented even though the measurement says
+# it changes nothing today: 0 of the 18 risk rows come from an official or
+# regulator source (every one is trade tier, trust 0.6-0.7). It is here because
+# the rule is right independently of the sample -- a NOTAM or a civil-aviation
+# authority notice is verified BY BEING the authority's own statement, and a
+# gate that hid one for want of a second outlet would be hiding the primary
+# source in favour of the people quoting it. It costs nothing now and is
+# correct the first time such a source appears.
+# ---------------------------------------------------------------------------
 
-#: Below this (and at or above the floor), a single-source cluster is published
-#: as `visibility="low"`: same facts, quieter presentation.
+#: At or below this, a single-source cluster from an ordinary outlet is not
+#: published. Strictly greater than, so 0.60 exactly does not pass -- the
+#: distribution is discrete and the values that matter sit at 0.595 and 0.61.
+CONFIDENCE_VERIFIED_MIN = 0.60
+
+#: Tiers whose own statement IS the verification. See the exemption note above.
+VERIFIED_SOURCE_TIERS = frozenset({"official", "regulator"})
+
+#: Below this (and above the gate), a cluster published on an exemption rather
+#: than on its own score is shown as `visibility="low"`: same facts, quieter
+#: presentation.
 CONFIDENCE_LOW_BAND = 0.61
 
 #: The formula's own arithmetic minimum: 0.4 + 0.15 * 0 + 0.3 * 0. A score
@@ -318,25 +442,132 @@ CONFIDENCE_UNSCORED_BELOW = 0.4
 
 
 def visibility_for(
-    confidence: float | None, distinct_sources: int, corroborating_sources: int | None
+    confidence: float | None,
+    distinct_sources: int,
+    corroborating_sources: int | None,
+    *,
+    has_verified_source: bool = False,
 ) -> str:
     """"normal" | "low" | "hidden" for one cluster.
 
     `distinct_sources` is how many different outlets clustered into this
     signal; `corroborating_sources` is the primary's own duplicate-group size.
     Either one being >1 means a second newsroom told this story, which is the
-    exemption -- they are two different mechanisms (event clustering vs.
-    near-duplicate detection) for detecting the same fact.
+    strongest exemption -- they are two different mechanisms (event clustering
+    vs. near-duplicate detection) for detecting the same fact.
+
+    `has_verified_source` is true when any member came from an official or
+    regulator tier. That publishes the cluster, but quietly: an authority's
+    own notice is verified, and a trade-press paraphrase of one scoring 0.58
+    is still a single weak telling. The exemption says "do not hide this", not
+    "treat it as well-sourced".
     """
     if distinct_sources > 1 or (corroborating_sources or 1) > 1:
         return "normal"
     if confidence is None or confidence < CONFIDENCE_UNSCORED_BELOW:
         return "normal"
-    if confidence < CONFIDENCE_FLOOR:
-        return "hidden"
-    if confidence < CONFIDENCE_LOW_BAND:
-        return "low"
-    return "normal"
+    if confidence > CONFIDENCE_VERIFIED_MIN:
+        return "normal" if confidence >= CONFIDENCE_LOW_BAND else "low"
+    return "low" if has_verified_source else "hidden"
+
+
+def aviation_gate(score: float | None) -> bool:
+    """Whether a cluster clears the aviation-relevance gate (spec §16).
+
+    GRADUATED ON PURPOSE, and the graduation is the whole point:
+
+        score >= AVIATION_RELEVANCE_GATE  publish -- measured and relevant
+        score <  AVIATION_RELEVANCE_GATE  drop    -- measured and irrelevant
+        score is None                     publish -- NOBODY MEASURED IT
+
+    The third line is what stops this from emptying the page in one deploy.
+    Model coverage of this feed is partial and the deterministic floor only
+    fires on an explicit operational phrase, so `None` is the majority state
+    today, and reading it as a low score would delete nearly every signal on
+    the strength of a keyword list's silence. `aviation_relevance_source`
+    records which rows are which, so the gate can be tightened later against a
+    measured denominator rather than a guess -- see the enrichment column.
+    """
+    return score is None or score >= AVIATION_RELEVANCE_GATE
+
+
+def is_mappable(location_confidence: float | None) -> bool:
+    """Whether a placement earned a pin (spec §13).
+
+    Graduated the same way aviation_gate() is, and for the same reason:
+
+        confidence >= LOCATION_MAP_PIN_MIN  pin -- measured and trustworthy
+        confidence <  LOCATION_MAP_PIN_MIN  no  -- measured and weak
+        confidence is None                  pin -- NOBODY MEASURED IT
+
+    The third line is the transition. Every row written before this revision
+    carries NULL here, and reading NULL as "weak" would blank the map on the
+    deploy -- a page that looks broken, in the name of a check that has not run
+    yet. Fresh enrichment always writes the column, so new rows are gated
+    immediately, and `python -m app.cli backfill-risks` fills the archive; the
+    gate tightens as the evidence arrives rather than ahead of it.
+
+    A row with no country at all is separately unplaced regardless: there is no
+    centroid for "unknown", which is the same answer arrived at honestly.
+    """
+    return location_confidence is None or location_confidence >= LOCATION_MAP_PIN_MIN
+
+
+def _best_aviation_reading(members: list):
+    """The cluster's strongest aviation-relevance reading -- the whole reading,
+    not just its number -- or None when no member carries one.
+
+    The best-scoring MEMBER rather than max() over the scores alone, so the
+    score, the quoted evidence, the ACTUAL/POTENTIAL status and the provenance
+    all come from the same article. Taking the score from one member and the
+    evidence from another would produce a card whose quote does not support
+    its own number.
+
+    Best across the cluster rather than the primary's own: one outlet writing
+    "the airspace was closed" is evidence about the EVENT, and the primary is
+    chosen for source tier and earliness, not for how completely it reported
+    the operational detail. None survives only when nothing in the cluster was
+    scored at all -- see aviation_gate() on why that publishes.
+    """
+    scored = [
+        m.enrichment
+        for m in members
+        if m.enrichment is not None and m.enrichment.aviation_relevance_score is not None
+    ]
+    if not scored:
+        return None
+    return max(scored, key=lambda e: e.aviation_relevance_score)
+
+
+#: Strongest-wins order when the same place carries different roles in
+#: different members of a cluster. Lower is stronger.
+_ROLE_RANK = {"event": 0, "source": 1, "unverified": 2}
+
+
+def _mentions_across(members: list) -> list[dict]:
+    """Every place the cluster's articles named, de-duplicated by name+kind.
+
+    An EVENT role anywhere wins over a SOURCE one, which in turn wins over
+    UNVERIFIED: one article's dateline does not disqualify a place another
+    article puts the event in, and a tested role beats an untested one. Same
+    resolution rule heuristic._place_role uses within a single article, applied
+    one level up.
+    """
+    merged: dict[tuple[str, str], dict] = {}
+    for member in members:
+        enrichment = member.enrichment
+        for entry in (enrichment.mentioned_locations if enrichment else None) or []:
+            if not isinstance(entry, dict) or not entry.get("name"):
+                continue
+            key = (str(entry["name"]).lower(), str(entry.get("kind") or "unknown"))
+            existing = merged.get(key)
+            if existing is None:
+                merged[key] = dict(entry)
+            elif _ROLE_RANK.get(str(entry.get("role")), 9) < _ROLE_RANK.get(
+                str(existing.get("role")), 9
+            ):
+                existing["role"] = entry["role"]
+    return sorted(merged.values(), key=lambda e: (e.get("kind") or "", str(e["name"])))
 
 
 def aviation_link_for(risk_type: str, risk_family: str, airport_count: int) -> str:
@@ -358,7 +589,7 @@ def aviation_link_for(risk_type: str, risk_family: str, airport_count: int) -> s
 
 @router.get("", response_model=RiskRadarOut)
 async def list_risks(
-    days: int = Query(14, ge=1, le=90),
+    days: int = Query(DEFAULT_WINDOW_DAYS, ge=1, le=90),
     response: Response = None,  # type: ignore[assignment]
     db: AsyncSession = Depends(get_db),
 ) -> RiskRadarOut:
@@ -371,7 +602,7 @@ async def list_risks(
     return await aggregate_risks(db, days=days)
 
 
-async def aggregate_risks(db: AsyncSession, days: int = 14) -> RiskRadarOut:
+async def aggregate_risks(db: AsyncSession, days: int = DEFAULT_WINDOW_DAYS) -> RiskRadarOut:
     """The rollup itself, split out from the endpoint so a second caller can
     reuse it rather than re-deriving severity counts from a cheaper query.
 
@@ -387,6 +618,30 @@ async def aggregate_risks(db: AsyncSession, days: int = 14) -> RiskRadarOut:
     now = datetime.now(timezone.utc)
     since = now - timedelta(days=days)
 
+    base_filters = (
+        Article.is_duplicate.is_(False),
+        ArticleEnrichment.risk_type.is_not(None),
+        Article.published_at.is_not(None),
+        Article.published_at >= since,
+    )
+
+    # THE CURRENCY GATE (spec §15), and why it is `IS NOT FALSE` rather than
+    # `IS TRUE`.
+    #
+    # `is_current_event` has three states and the third one is the reason this
+    # is written the awkward way round: NULL means no classifier ever answered
+    # the question for that row. Coverage is partial -- the LLM answers it only
+    # for articles it classifies live, and the keyword fallback can only ever
+    # say "this headline reads as retrospective", never "this one is current".
+    # So `IS TRUE` would not filter the archive, it would delete it.
+    #
+    # What is removed is exactly the rows something looked at and called stale:
+    # an anniversary piece, a retrospective, a court case about an old
+    # disaster. That is a small set today and it will grow as coverage does,
+    # which is the intended shape -- the gate tightens as the evidence arrives,
+    # rather than acting on evidence that does not exist yet.
+    current_filter = ArticleEnrichment.is_current_event.is_not(False)
+
     result = await db.execute(
         select(Article)
         .options(
@@ -395,12 +650,7 @@ async def aggregate_risks(db: AsyncSession, days: int = 14) -> RiskRadarOut:
             selectinload(Article.entity_links).selectinload(ArticleEntity.entity),
         )
         .join(ArticleEnrichment, ArticleEnrichment.article_id == Article.id)
-        .where(
-            Article.is_duplicate.is_(False),
-            ArticleEnrichment.risk_type.is_not(None),
-            Article.published_at.is_not(None),
-            Article.published_at >= since,
-        )
+        .where(*base_filters, current_filter)
         .order_by(Article.published_at.desc())
     )
     articles = [
@@ -409,10 +659,25 @@ async def aggregate_risks(db: AsyncSession, days: int = 14) -> RiskRadarOut:
         if a.enrichment is not None and a.enrichment.risk_type is not None
     ]
 
+    # What the currency gate removed, counted rather than inferred. A page that
+    # drops rows silently is a page whose numbers nobody can reconcile; the
+    # count is one aggregate against an index-covered predicate, not a second
+    # pass over the articles.
+    not_current = (
+        await db.execute(
+            select(func.count())
+            .select_from(Article)
+            .join(ArticleEnrichment, ArticleEnrichment.article_id == Article.id)
+            .where(*base_filters, ArticleEnrichment.is_current_event.is_(False))
+        )
+    ).scalar_one()
+
     grouped: dict[str, list[RiskItemOut]] = {}
     type_counts: dict[str, int] = {}
     family_counts: dict[str, int] = {}
     suppressed = 0
+    suppressed_aviation = 0
+    unplaced = 0
 
     # Three outlets covering one eruption used to be three cards, independently
     # classified, and they could disagree on severity and even on which
@@ -459,6 +724,32 @@ async def aggregate_risks(db: AsyncSession, days: int = 14) -> RiskRadarOut:
         )
         risk_country = country_bearer.enrichment.risk_country if country_bearer else None
         risk_city = city_bearer.enrichment.risk_city if city_bearer else None
+        # The winning member's own location score travels with its placement --
+        # taking the max across the cluster would let a well-placed member
+        # launder a badly-placed one's country onto the map.
+        location_confidence = (
+            country_bearer.enrichment.location_confidence if country_bearer else None
+        )
+        mentioned_locations = _mentions_across(by_published)
+
+        # THE MAP GATE (spec §13). Below the threshold the placement is not
+        # merely shown quietly -- `country` and `city` are BLANKED and the
+        # signal is filed under UNKNOWN_COUNTRY.
+        #
+        # Blanking rather than flagging, because the map reads `item.country`
+        # to find a centroid (frontend risk-map.tsx) and a country left in
+        # place would still be drawn as a dot. A dot on a guess is
+        # indistinguishable from a dot on a fact, and the reader has no way to
+        # tell them apart -- which makes a weak placement worse than none.
+        #
+        # Nothing is lost: `location_confidence` says why, and
+        # `mentioned_locations` carries every place the article named with the
+        # role it played, so "konum belirsiz" is answerable rather than blank.
+        placed = is_mappable(location_confidence)
+        if not placed and risk_country is not None:
+            unplaced += 1
+            risk_country = None
+            risk_city = None
         country = risk_country or UNKNOWN_COUNTRY
 
         # Risk type: the most-agreed-on classification; primary's own call
@@ -478,14 +769,31 @@ async def aggregate_risks(db: AsyncSession, days: int = 14) -> RiskRadarOut:
         if family is None:
             continue
 
+        # THE AVIATION-RELEVANCE GATE (spec §16), applied before the
+        # confidence one because it is the cheaper rejection and the more
+        # decisive: a well-corroborated earthquake with no bearing on flying
+        # does not belong on an aviation desk's radar however many outlets
+        # reported it. Best score across the cluster, since one member
+        # spelling out the operational effect is evidence for the event, not
+        # just for that article.
+        aviation = _best_aviation_reading(members)
+        aviation_score = aviation.aviation_relevance_score if aviation else None
+        if not aviation_gate(aviation_score):
+            suppressed_aviation += 1
+            continue
+
         # The publish gate. Distinct SOURCES, not member count: one outlet
         # republishing its own story twice is one telling, and counting it as
         # corroboration would let a weak source exempt itself.
         distinct_sources = len({m.source_id for m in members})
+        has_verified_source = any(
+            tier_for_source(m.source) in VERIFIED_SOURCE_TIERS for m in members
+        )
         visibility = visibility_for(
             primary_enrichment.confidence_score,
             distinct_sources,
             primary_enrichment.corroborating_source_count,
+            has_verified_source=has_verified_source,
         )
         if visibility == "hidden":
             suppressed += 1
@@ -594,6 +902,22 @@ async def aggregate_risks(db: AsyncSession, days: int = 14) -> RiskRadarOut:
             members=member_rows[:MEMBER_CAP],
             members_truncated=len(member_rows) > MEMBER_CAP,
             visibility=visibility,
+            location_confidence=location_confidence,
+            is_mappable=placed,
+            mentioned_locations=mentioned_locations,
+            aviation_relevance_score=aviation_score,
+            # All four from the SAME member -- see _best_aviation_reading. A
+            # score read off one article and a quote read off another is a card
+            # whose evidence does not support its own number.
+            aviation_relevance_source=(
+                aviation.aviation_relevance_source
+                if aviation
+                else primary_enrichment.aviation_relevance_source
+            ),
+            aviation_impact_evidence=(
+                aviation.aviation_impact_evidence if aviation else None
+            ),
+            aviation_impact_status=(aviation.aviation_impact_status if aviation else None),
         )
         grouped.setdefault(country, []).append(item)
         type_counts[risk_type] = type_counts.get(risk_type, 0) + 1
@@ -646,6 +970,9 @@ async def aggregate_risks(db: AsyncSession, days: int = 14) -> RiskRadarOut:
         # actually reach.
         total=sum(len(items) for items in grouped.values()),
         suppressed_low_confidence=suppressed,
+        suppressed_aviation_irrelevant=suppressed_aviation,
+        suppressed_not_current=not_current,
+        unplaced_low_confidence=unplaced,
         countries=countries,
         type_counts=type_counts,
         family_counts=family_counts,
@@ -721,6 +1048,13 @@ async def risk_trend(
             Article.is_duplicate.is_(False),
             ArticleEnrichment.risk_type.is_not(None),
             Article.published_at.is_not(None),
+            # The same currency gate list_risks applies, for the same reason
+            # the published_at filter above is here: this series has to count
+            # the population the page draws from. A retrospective piece that
+            # the list refuses would otherwise still raise the trend line, and
+            # a reader comparing the two would find a spike with no signals
+            # behind it.
+            ArticleEnrichment.is_current_event.is_not(False),
             day_expr >= since,
         )
         .group_by(day_col, ArticleEnrichment.risk_type, ArticleEnrichment.risk_severity)

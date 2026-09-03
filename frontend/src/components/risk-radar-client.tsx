@@ -46,17 +46,25 @@ const RiskMap = dynamic(
 
 /** The windows the days chips offer.
  *
- * 7 days is the floor, deliberately. Ingest runs every two hours and the
- * classifier only ever sees what the feeds published, so a 6h or 24h window
- * would routinely be one or two articles -- a radar that looks empty because
- * the clock is short, not because the world is quiet, and that is the single
- * most misleading thing this page could do. A week is the shortest window whose
- * emptiness actually means something.
+ * 5 days is the floor and the default, down from a 7-day floor and a 14-day
+ * default. A risk radar's subject is what is happening now, and a fortnight is
+ * not now: at 14 days the page routinely opened on a story whose newest telling
+ * was a week old, drawn at the same weight as one from this morning.
+ *
+ * The old floor's reasoning -- that a short window looks empty because the
+ * clock is short rather than because the world is quiet -- still stands, and is
+ * why the floor is five days rather than 24 hours. Five is the shortest window
+ * that spans a full ingest weekend.
+ *
+ * The longer windows are all still selectable: the shorter default is a
+ * statement about what the page opens on, not a claim that the older window is
+ * useless. Mirrors DEFAULT_WINDOW_DAYS in backend app/api/v1/risks.py -- the
+ * two are the same decision and must not drift.
  *
  * 30 is what the trend chart draws regardless of the list's window, so the
  * shape below never changes shape just because someone narrowed the list. */
-const DAY_WINDOWS = [7, 14, 30, 90] as const;
-const DEFAULT_DAYS = 14;
+const DAY_WINDOWS = [5, 7, 14, 30, 90] as const;
+const DEFAULT_DAYS = 5;
 const TREND_DAYS = 30;
 
 /** The lit-chip pattern shared with Gazete/İçgörüler/Öneriler. Note there is
