@@ -20,8 +20,8 @@ export default function NotFound() {
           Bu rota <span className="gradient-text">bilinmiyor</span>
         </h1>
         <p className="max-w-sm text-sm leading-relaxed text-muted-foreground">
-          Aradığınız sayfa taşınmış ya da hiç var olmamış olabilir. Menüden altı ana
-          sayfadan birine geçebilir ya da üstteki arama kutusunu kullanabilirsiniz.
+          Aradığınız sayfa taşınmış ya da hiç var olmamış olabilir. Menüden ana
+          sayfalardan birine geçebilir ya da üstteki arama kutusunu kullanabilirsiniz.
         </p>
       </div>
       <Link

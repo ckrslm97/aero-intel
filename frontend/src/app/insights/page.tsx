@@ -4,7 +4,7 @@ import { InsightsTabs } from "@/components/insights-tabs";
 import { Skeleton } from "@/components/ui/skeleton";
 
 export const metadata = {
-  title: "İçgörüler — AeroIntel",
+  title: "İçgörüler",
   description:
     "Haber arşivinden çıkarılan örüntüler ve bu örüntülerden türeyen, kaynağı gösterilen aksiyon önerileri.",
 };

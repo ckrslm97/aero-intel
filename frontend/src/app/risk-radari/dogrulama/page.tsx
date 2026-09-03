@@ -1,7 +1,7 @@
 import { RiskVerificationClient } from "@/components/risk-verification-client";
 
 export const metadata = {
-  title: "Risk Radarı — Veri doğrulama — AeroIntel",
+  title: "Risk Radarı — Veri doğrulama",
   description:
     "Risk Radarı'nın huni sayıları ve reddedilen adaylar: hangi haber hangi kural yüzünden listede yok, hangi değerlerle.",
 };

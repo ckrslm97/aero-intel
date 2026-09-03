@@ -1,7 +1,7 @@
 import { KnowHowClient } from "@/components/knowhow-client";
 
 export const metadata = {
-  title: "Know How — AeroIntel",
+  title: "Know How",
   description:
     "Gelir yönetimi, ağ planlama ve filo terimleri: ne oldukları, neden önemli oldukları ve ilgili haberler.",
 };
