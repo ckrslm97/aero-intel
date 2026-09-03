@@ -58,6 +58,15 @@ assert abs(sum(_WEIGHTS.values()) - 1.0) < 1e-9, "confidence weights must sum to
 HIGH_THRESHOLD = 0.75
 MEDIUM_THRESHOLD = 0.50
 
+#: The ceiling on a campaign no official source has confirmed. One notch under
+#: HIGH_THRESHOLD on purpose: the point is not to punish the record, it is that
+#: `high` means "confirmed by the party that knows", and a report about a sale
+#: is not that however many outlets carried it. 0.74 is the top of the spec's
+#: 0.60-0.74 "trusted source + partial validation" rung, so an unverified
+#: record that would otherwise have scored 0.92 lands at the top of medium
+#: rather than being pushed down among the doubtful ones.
+UNVERIFIED_SCORE_CEILING = 0.74
+
 # --- source tiers -------------------------------------------------------------
 #
 # The owner's ladder, as numbers. An airline announcing its own campaign is the
@@ -95,6 +104,20 @@ class ConfidenceInput:
     signal_agreement: bool | float | None
     #: How many distinct sources reported this event.
     source_count: int
+    #: Whether an *official* source -- the carrier's own page or newsroom -- is
+    #: on the record for this campaign (campaign_sources.source_tier ==
+    #: "official"). None means the question was not asked, which is every
+    #: caller outside the campaign surface and every record written before this
+    #: existed; it applies no ceiling, so nothing that used to score 0.90
+    #: silently drops to 0.74 because a new field defaulted to False.
+    #:
+    #: False is a real answer and it caps the score at
+    #: `UNVERIFIED_SCORE_CEILING`. The reasoning is the spec's "trusted source
+    #: + partial validation" rung: an aggregator's report of a sale, however
+    #: complete and however well corroborated by other aggregators, has not
+    #: been confirmed by the only party that actually knows -- the airline. It
+    #: can be published; it cannot be published as something we are sure of.
+    official_verified: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -102,6 +125,11 @@ class ConfidenceResult:
     score: float
     band: Band
     components: dict[str, float]
+    #: Carried out of `score()` rather than recomputed, so `as_detail()` can
+    #: record that a ceiling was applied. Without it a re-score would quietly
+    #: lift a capped record back over the line the next time a second source
+    #: turned up -- see `rescore_with_corroboration`.
+    official_verified: bool | None = None
 
     def as_detail(self) -> dict:
         """The JSON written to `confidence_detail`, and shown in the UI drawer.
@@ -109,12 +137,15 @@ class ConfidenceResult:
         Stored per record rather than recomputed, so a score can be explained
         months later even after the weights have moved on.
         """
-        return {
+        detail = {
             "score": round(self.score, 4),
             "band": self.band,
             "components": {k: round(v, 4) for k, v in self.components.items()},
             "weights": dict(_WEIGHTS),
         }
+        if self.official_verified is not None:
+            detail["official_verified"] = self.official_verified
+        return detail
 
 
 def _corroboration_score(source_count: int, source_tier: str) -> float:
@@ -160,8 +191,19 @@ def score(data: ConfidenceInput) -> ConfidenceResult:
     }
 
     total = sum(components[name] * weight for name, weight in _WEIGHTS.items())
+    if data.official_verified is False:
+        # A ceiling on the score itself, not only on the band. The stored score
+        # is what the drawer prints and what `rescore_with_corroboration` later
+        # reasons about, and a record reading 0.92 (medium) would look like a
+        # bug rather than like a rule.
+        total = min(total, UNVERIFIED_SCORE_CEILING)
     band = _apply_cap(band_for(total), _cap_for(completeness))
-    return ConfidenceResult(score=total, band=band, components=components)
+    return ConfidenceResult(
+        score=total,
+        band=band,
+        components=components,
+        official_verified=data.official_verified,
+    )
 
 
 def band_for(value: float) -> Band:
@@ -214,7 +256,7 @@ _TIER_BY_SCORE = {value: name for name, value in SOURCE_TIER_SCORES.items()}
 
 
 def rescore_with_corroboration(
-    detail: dict | None, *, source_count: int
+    detail: dict | None, *, source_count: int, official_verified: bool | None = None
 ) -> ConfidenceResult | None:
     """Re-run `score()` for a stored record whose source count has changed.
 
@@ -224,6 +266,13 @@ def rescore_with_corroboration(
     would make the `corroboration` weight decorative. Everything else is
     reconstructed from `confidence_detail` exactly as it was scored -- this is
     a re-score of one input, not a re-judgement of the record.
+
+    `official_verified` is the one other input a caller may refresh, and only
+    upwards: pass True when an official source has since been filed against the
+    record (a carrier page merged into a news-sourced row), and the ceiling
+    lifts. None keeps whatever was stored. There is deliberately no way to
+    impose a ceiling from here -- demoting a record is a judgement about a
+    reading, and this function only ever re-adds evidence.
 
     None when the stored detail predates component storage or is unreadable,
     which the caller must treat as "leave the score alone".
@@ -243,6 +292,16 @@ def rescore_with_corroboration(
                 required_fields_total=_COMPLETENESS_SCALE,
                 signal_agreement=float(components.get("signal_agreement", 0.5)),
                 source_count=source_count,
+                # Carried through, so corroboration cannot launder a record
+                # past the ceiling: four aggregators agreeing is still four
+                # aggregators. A detail written before this field existed has
+                # no key here and reads as None -- no ceiling, exactly as it
+                # was scored.
+                official_verified=(
+                    True
+                    if official_verified
+                    else (detail or {}).get("official_verified")
+                ),
             )
         )
     except (TypeError, ValueError):

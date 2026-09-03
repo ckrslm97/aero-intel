@@ -32,14 +32,16 @@ on:
           - check-data-quality
           - mark-legacy-campaigns-superseded
           - backfill-campaign-classes
+          - backfill-campaign-kind
+          - campaign-quality-report
           - purge-blacklisted-articles
       dry_run:
-        description: "purge-blacklisted-articles only: count the matching rows and write nothing. Run this first."
+        description: "purge-blacklisted-articles / backfill-campaign-kind: count the matching rows and write nothing. Run this first."
         required: false
         type: boolean
         default: false
       days:
-        description: "re-enrich only: limit to articles fetched in the last N days (blank = all)"
+        description: "re-enrich: limit to articles fetched in the last N days (blank = all). campaign-quality-report: reporting window in days (blank = 7)"
         required: false
         type: string
       limit:
@@ -166,6 +168,28 @@ jobs:
               # open alerts acknowledged. Heuristic-only -- no LLM calls, so
               # it is safe to re-run after any change to the keyword tables.
               python -m app.cli backfill-campaign-classes ;;
+            backfill-campaign-kind)
+              # Fills promotions.campaign_kind from campaign_type using the
+              # LIVE taxonomy table -- the migration that added the column
+              # carries a frozen snapshot, so this is what applies a mapping
+              # change made after that revision. Idempotent, no LLM calls.
+              # Dispatch with dry_run first to see what it would write.
+              alembic upgrade head
+              if [ "${DRY_RUN}" = "true" ]; then
+                python -m app.cli backfill-campaign-kind --dry-run
+              else
+                python -m app.cli backfill-campaign-kind
+              fi ;;
+            campaign-quality-report)
+              # Read-only: what the last window's sweep discovered, extracted,
+              # validated and rejected, with the rejection reasons broken out.
+              # Writes nothing, so it is safe to dispatch at any time -- read
+              # the numbers in the step log.
+              if [ -n "${DAYS}" ]; then
+                python -m app.cli campaign-quality-report --days "${DAYS}"
+              else
+                python -m app.cli campaign-quality-report
+              fi ;;
             purge-blacklisted-articles)
               # Retires archived articles from blacklisted domains (Reddit) by
               # setting status=rejected_blacklist -- kept, never deleted, and

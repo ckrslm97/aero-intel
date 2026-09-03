@@ -968,6 +968,118 @@ def is_valid_campaign_status(slug: str | None) -> bool:
     return slug in CAMPAIGN_STATUSES
 
 
+# ---------------------------------------------------------------------------
+# Kampanya vs Promosyon
+#
+# The owner's fifth question about a row, and the one the other four could not
+# answer: is this a *price* move or a *mechanism*? A revenue desk reacts to the
+# first (a competitor cut fares to London by 40%) and files the second (a
+# competitor is giving students a standing code). Both are worth publishing;
+# reading them off one list as if they were the same kind of event is what
+# makes the campaign page hard to scan.
+#
+# Why this is a derived mapping and not a sixth detected field: `campaign_type`
+# already carries the answer. FLASH_SALE is a price move by definition and
+# STUDENT_PROMOTION is an audience mechanism by definition, so asking a model
+# (or a rulepack) to decide the kind a second time can only introduce a way for
+# the two answers to disagree. The table below is therefore the single source
+# and `campaign_kind_for()` the single reader -- the column on `promotions`
+# exists so the analyst list can filter on it in SQL without re-deriving 27
+# cases per query, and it is written from this table on every write path.
+#
+# The one type that is deliberately unmapped is OTHER. "We could not name this
+# offer" is not evidence that it is a fare move or that it is a mechanism, and
+# guessing either would put a row in a bucket nothing checked. OTHER rows come
+# out with campaign_kind NULL, which the UI renders as "—" exactly like an
+# unclassified legacy row.
+# ---------------------------------------------------------------------------
+
+CAMPAIGN_KINDS: tuple[str, ...] = ("CAMPAIGN", "PROMOTION")
+
+CAMPAIGN_KIND_LABELS_TR: dict[str, str] = {
+    "CAMPAIGN": "Kampanya (fiyat)",
+    "PROMOTION": "Promosyon (mekanizma)",
+}
+
+#: campaign_type -> kind. Every value of CAMPAIGN_TYPES except OTHER appears
+#: exactly once; the test suite asserts that exhaustiveness, so adding a type
+#: without deciding its kind fails there rather than silently defaulting.
+CAMPAIGN_TYPE_TO_KIND: dict[str, str] = {
+    # --- CAMPAIGN: the offer is a price. -----------------------------------
+    # The saving is expressed as money off a fare, so the thing that changed is
+    # the fare itself.
+    "FARE_DISCOUNT": "CAMPAIGN",
+    "PERCENT_DISCOUNT": "CAMPAIGN",
+    "FIXED_FARE": "CAMPAIGN",
+    # Urgency and booking horizon: still a price, sold against a clock.
+    "FLASH_SALE": "CAMPAIGN",
+    "EARLY_BOOKING": "CAMPAIGN",
+    "LAST_MINUTE": "CAMPAIGN",
+    # Itinerary shape: a round-trip promotion is a round-trip *fare*.
+    "ROUND_TRIP_PROMOTION": "CAMPAIGN",
+    "ONE_WAY_PROMOTION": "CAMPAIGN",
+    # Calendar pegs. A seasonal or holiday sale is a price move with a date on
+    # it -- the peg says when, not what. SEASONAL_PROMOTION sits here for the
+    # same reason SUMMER_SALE does, and splitting them would put two spellings
+    # of one thing in two buckets.
+    "SEASONAL_PROMOTION": "CAMPAIGN",
+    "BLACK_FRIDAY": "CAMPAIGN",
+    "CYBER_MONDAY": "CAMPAIGN",
+    "SUMMER_SALE": "CAMPAIGN",
+    "WINTER_SALE": "CAMPAIGN",
+    "RAMADAN_PROMOTION": "CAMPAIGN",
+    "EID_PROMOTION": "CAMPAIGN",
+    "NATIONAL_HOLIDAY": "CAMPAIGN",
+    # --- PROMOTION: the offer is a mechanism, a channel or an audience. -----
+    # Who may take it up, rather than what it costs.
+    "STUDENT_PROMOTION": "PROMOTION",
+    "FAMILY_PROMOTION": "PROMOTION",
+    "CORPORATE_PROMOTION": "PROMOTION",
+    # Whose programme or partner it runs through.
+    "PARTNER_PROMOTION": "PROMOTION",
+    "LOYALTY_PROMOTION": "PROMOTION",
+    "MILES_PROMOTION": "PROMOTION",
+    # What is being given away alongside the seat.
+    "ANCILLARY_PROMOTION": "PROMOTION",
+    "BAGGAGE_PROMOTION": "PROMOTION",
+    # Where it points. A destination or new-route push is a marketing
+    # mechanism aimed at a market -- it may or may not carry a fare cut, and
+    # when it does the extractor types it as a discount instead.
+    "DESTINATION_PROMOTION": "PROMOTION",
+    "NEW_ROUTE_PROMOTION": "PROMOTION",
+}
+
+# A code you have to enter and a channel you have to buy through are also
+# mechanisms, and the owner's rule names both. Neither is a `campaign_type` --
+# they live in `attrs_json` -- so they cannot sit in the table above. They are
+# read as a fallback only, where the type said nothing (OTHER or null): a
+# FLASH_SALE with a promo code is still a price move, while a nameless offer
+# that exists only because you typed a code is not.
+def campaign_kind_for(
+    campaign_type: str | None,
+    *,
+    promo_code: str | None = None,
+    sales_channel: str | None = None,
+) -> str | None:
+    """CAMPAIGN | PROMOTION | None, from the type and (only as a fallback) the
+    mechanism.
+
+    None means "not decidable", which is the honest answer for an unclassified
+    legacy row and for OTHER. Callers write it through unchanged rather than
+    substituting a default -- see the column docstring on models/promotion.py.
+    """
+    kind = CAMPAIGN_TYPE_TO_KIND.get(campaign_type or "")
+    if kind is not None:
+        return kind
+    if promo_code or sales_channel:
+        return "PROMOTION"
+    return None
+
+
+def is_valid_campaign_kind(slug: str | None) -> bool:
+    return slug in CAMPAIGN_KINDS
+
+
 # --- Source tiers ---------------------------------------------------------
 #
 # The owner's source-priority ladder, most authoritative first. Declared per

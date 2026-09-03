@@ -33,6 +33,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.taxonomy import (  # noqa: E402
     CAMPAIGN_BUSINESS_CLASS_LABELS_TR,
     CAMPAIGN_BUSINESS_CLASSES,
+    CAMPAIGN_KIND_LABELS_TR,
+    CAMPAIGN_KINDS,
     CAMPAIGN_STATUS_LABELS_TR,
     CAMPAIGN_STATUSES,
     CAMPAIGN_TYPE_LABELS_TR,
@@ -186,6 +188,18 @@ def render() -> str:
     )
     for slug in CAMPAIGN_BUSINESS_CLASSES:
         parts.append(f'  "{slug}": "{CAMPAIGN_BUSINESS_CLASS_LABELS_TR[slug]}",')
+    parts.append("};\n")
+
+    # Kampanya (fiyat) vs Promosyon (mekanizma). Stored on the row rather than
+    # derived at read time, so unlike CampaignStatus the frontend may filter on
+    # it -- see the column docstring in backend/app/models/promotion.py.
+    parts.append(_ts_string_union("CampaignKind", list(CAMPAIGN_KINDS)))
+    parts.append(_ts_const_array("CAMPAIGN_KINDS", "CampaignKind", list(CAMPAIGN_KINDS)))
+    parts.append("")
+
+    parts.append("export const CAMPAIGN_KIND_LABELS_TR: Record<CampaignKind, string> = {")
+    for slug in CAMPAIGN_KINDS:
+        parts.append(f'  "{slug}": "{CAMPAIGN_KIND_LABELS_TR[slug]}",')
     parts.append("};\n")
 
     parts.append(_ts_string_union("RouteScope", list(ROUTE_SCOPES)))

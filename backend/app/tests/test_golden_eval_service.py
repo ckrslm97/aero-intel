@@ -39,14 +39,14 @@ def _record(idx=1, title="t", system_label="", verdict="ok", reason="", url=None
 
 
 def test_golden_set_loads_the_expected_counts():
-    """The campaign count moved 131 -> 173 (PR8) -> 187: the 131 observed rows
-    are untouched (see the split assertion below), 42 authored records cover
-    the dimensions the 2025 snapshot has no examples of, and 14 more pin the
-    award/cargo/service-announcement leaks that were still live after the
-    backfill."""
+    """The campaign count moved 131 -> 173 (PR8) -> 187 -> 191: the 131
+    observed rows are untouched (see the split assertion below), 42 authored
+    records cover the dimensions the 2025 snapshot has no examples of, 14 pin
+    the award/cargo/service-announcement leaks that were still live after the
+    backfill, and 4 pin both directions of the ancillary rule."""
     assert len(risk_records()) == 24
     assert len(news_records()) == 100
-    assert len(campaign_records()) == 187
+    assert len(campaign_records()) == 191
 
 
 def test_the_observed_campaign_snapshot_is_still_exactly_the_original_131():
@@ -83,7 +83,7 @@ def test_golden_records_are_well_formed():
 
 def test_synthetic_campaign_records_are_labelled_and_in_taxonomy():
     records = synthetic_campaign_records()
-    assert len(records) == 56
+    assert len(records) == 60
     for record in records:
         # Marked as authored on the row itself, and never live-fetchable --
         # `evaluate_full_pipeline` must skip them rather than hit the network.
@@ -341,7 +341,8 @@ def test_expired_records_are_graded_against_the_status_engine_not_the_class():
 def test_the_real_golden_set_produces_a_computable_false_positive_rate():
     report = evaluate_campaign_extraction()
     assert report.today == EVALUATION_TODAY
-    assert report.graded == 156
+    # 156 + the 4 ancillary records, all of them ok/bad and so all graded.
+    assert report.graded == 160
     assert report.false_positive_rate is not None
     assert 0.0 <= report.false_positive_rate <= 1.0
     assert report.precision is not None and report.recall is not None

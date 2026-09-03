@@ -238,10 +238,16 @@ def apply_campaign_intelligence(
     nothing here is new evidence about how sure we are.
     """
     from app.pipeline.campaign_extract import resolve_route
+    from app.taxonomy import campaign_kind_for
 
     route = resolve_route(campaign.origin, campaign.destination, text=text)
 
-    promotion.campaign_type = campaign.campaign_type
+    # The rule layer may suggest a type, and only where the model gave none:
+    # today that is the ancillary-tied offer ("bilet alana ücretsiz bagaj"),
+    # which the PRODUCT rule used to reject outright. A carrier that named its
+    # own offer keeps its name.
+    promotion.campaign_type = campaign.campaign_type or details.get("campaign_type_override")
+    promotion.campaign_kind = campaign_kind_for(promotion.campaign_type)
     # The rule layer's verdict outranks the model's hint: `details` is
     # validate_campaign's answer, which has already looked at the rulepacks.
     promotion.business_class = details.get("business_class") or campaign.business_class_hint

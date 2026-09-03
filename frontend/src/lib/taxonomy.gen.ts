@@ -283,6 +283,18 @@ export const CAMPAIGN_BUSINESS_CLASS_LABELS_TR: Record<CampaignBusinessClass, st
   "LOYALTY_PROMOTION": "Sadakat Kampanyası",
 };
 
+export type CampaignKind =
+  | "CAMPAIGN"
+  | "PROMOTION";
+
+export const CAMPAIGN_KINDS: readonly CampaignKind[] = ["CAMPAIGN", "PROMOTION"] as const;
+
+
+export const CAMPAIGN_KIND_LABELS_TR: Record<CampaignKind, string> = {
+  "CAMPAIGN": "Kampanya (fiyat)",
+  "PROMOTION": "Promosyon (mekanizma)",
+};
+
 export type RouteScope =
   | "OND"
   | "CITY_PAIR"

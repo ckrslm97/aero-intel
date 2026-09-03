@@ -40,6 +40,15 @@ The booking/travel split is spelled out in full because conflating the two is
 the failure the whole four-column schema exists to prevent: booking is when a
 ticket can be BOUGHT, travel is when it can be FLOWN, and "Book by 31 December
 for travel until 31 March" is two windows, not one fifteen-month window.
+
+**The ticketing and campaign windows are opt-in, not defaults.** Some copy
+distinguishes a third and fourth window -- a ticketing deadline on a fare you
+can hold and pay for later, an announced "kampanya dönemi" wider than the sale
+itself. Rule 2b asks for those only when the page states them *separately and
+explicitly*, and says outright that a page giving one window is giving the
+booking window. The reason is the same one behind the year rule: a model that
+is allowed to fill a field "because it is probably the same" produces a
+deadline nobody wrote, and a deadline is drawn as the end of a bar.
 """
 from __future__ import annotations
 
@@ -106,11 +115,19 @@ JSON şeması:
       "booking_end": null | "YYYY-AA-GG",
       "travel_start": null | "YYYY-AA-GG",
       "travel_end": null | "YYYY-AA-GG",
+      "ticketing_start": null | "YYYY-AA-GG",
+      "ticketing_end": null | "YYYY-AA-GG",
+      "campaign_start": null | "YYYY-AA-GG",
+      "campaign_end": null | "YYYY-AA-GG",
       "date_text": {{
         "booking_start": null | "sayfada yazdığı gibi",
         "booking_end": null | "sayfada yazdığı gibi",
         "travel_start": null | "sayfada yazdığı gibi",
-        "travel_end": null | "sayfada yazdığı gibi"
+        "travel_end": null | "sayfada yazdığı gibi",
+        "ticketing_start": null | "sayfada yazdığı gibi",
+        "ticketing_end": null | "sayfada yazdığı gibi",
+        "campaign_start": null | "sayfada yazdığı gibi",
+        "campaign_end": null | "sayfada yazdığı gibi"
       }},
       "discount_pct": null | 1-100,
       "price_floor": null | sayı,
@@ -150,6 +167,21 @@ KURALLAR
    "Book by 31 December for travel until 31 March" iki ayrı penceredir; tek bir
    pencere olarak birleştirme.
 
+2b. BİLETLEME ve KAMPANYA DÖNEMİ: Bu iki alan çifti YALNIZCA sayfa bunları
+   satış döneminden AYRI ve AÇIKÇA yazıyorsa doldurulur. Emin değilsen null.
+   - ticketing_start / ticketing_end: biletin DÜZENLENMESİ / ödemenin
+     tamamlanması gereken dönem. Yalnızca "biletleme dönemi", "biletlemenin
+     ... tarihine kadar tamamlanması", "ticketing deadline", "tickets must be
+     issued by" gibi açık bir ifade varsa yaz.
+   - campaign_start / campaign_end: sayfanın kampanyanın kendi süresi olarak
+     ilan ettiği dönem. Yalnızca "kampanya dönemi", "kampanya ... tarihleri
+     arasında geçerlidir", "campaign period", "offer valid from ... to ..."
+     gibi açık bir ifade varsa yaz.
+   Sayfa tek bir tarih aralığı veriyorsa o aralık SATIŞ dönemidir
+   (booking_start/booking_end) — bu dört alanı DOLDURMA, null bırak.
+   Satış dönemini bu alanlara KOPYALAMA; "aynı olabilir" diye yazma. Bu dört
+   alanın null olması normaldir ve sayfaların büyük çoğunluğunda doğru cevaptır.
+
 3. YIL: Bir tarihi ISO alanına (booking_end vb.) YALNIZCA yılı sayfada
    yazıyorsa yaz. Yıl yazmıyorsa ISO alanını null bırak ve tarihi
    date_text içine sayfada yazdığı gibi kopyala ("30 Kasım'a kadar", "Book by
@@ -177,6 +209,12 @@ KURALLAR
    otel, araç kiralama, mil/puan kampanyaları ve öğrenci/kurumsal/65 yaş gibi
    SÜREKLİ geçerli standart teklifler ücret kampanyası DEĞİLDİR — bunları yine
    de listele, ama is_fare_campaign=false ve uygun business_class_hint ile.
+   TEK İSTİSNA: ek hizmet teklifi açıkça bir UÇUŞ SATIN ALMA koşuluna
+   bağlıysa ("bilet alana ücretsiz ekstra bagaj", "uçuşunuzu satın aldığınızda
+   lounge hediye", "when you book a flight"), bu bir uçuş kampanyasının
+   parçasıdır: campaign_type = "ANCILLARY_PROMOTION" ve is_fare_campaign=true
+   yaz. Uçuş satın alma koşulu YOKSA (bağımsız lounge/otel/araç kampanyası)
+   istisna geçerli değildir.
 
 8. campaign_type: Yalnızca yukarıdaki listeden bir değer. Hiçbiri uymuyorsa
    "OTHER". Liste dışı bir değer uydurma.
