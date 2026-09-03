@@ -116,6 +116,7 @@ from app.llm.heuristic import LOCATION_CONFIDENCE_CONFLICT
 from app.models.article import Article, ArticleEnrichment
 from app.models.entity import ArticleEntity
 from app.pipeline.clustering import EventCandidate, cluster, entity_codes, tier_for_source
+from app.pipeline.verify import measured_confidence
 
 # ---------------------------------------------------------------------------
 # REJECTION REASONS
@@ -540,7 +541,11 @@ def _rejection(article, reason: str, *, also_failed: tuple[str, ...] = ()) -> Ri
         confidence_gate_reason=confidence_reason,
         risk_type=enrichment.risk_type,
         risk_severity=enrichment.risk_severity,
-        confidence_score=enrichment.confidence_score,
+        # The same null-out the drawer applies (app/schemas/article.py). The
+        # raw column is NOT NULL and defaults to 0.0, so forwarding it verbatim
+        # printed a measured-looking "0.00" in the verification table -- one
+        # line above that row's own "ölçülmedi, kapı yargılamadı".
+        confidence_score=measured_confidence(enrichment.confidence_score),
         corroborating_source_count=enrichment.corroborating_source_count,
         aviation_relevance_score=enrichment.aviation_relevance_score,
         aviation_relevance_source=enrichment.aviation_relevance_source,

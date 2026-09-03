@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import type { AnnualPoint, AnnualSeries } from "@/lib/types";
@@ -82,6 +83,32 @@ describe("KpiStrip", () => {
     );
     expect(screen.getByText("Birim marj")).toBeInTheDocument();
     expect(container.querySelector(".xl\\:grid-cols-6")).not.toBeNull();
+  });
+
+  // The unit the IATA revenue rows are actually seeded with is a bare "$"
+  // (backend/app/ingest/historical_seed.py), and the values are in the
+  // hundreds of billions. A precision rule that read the "$" as "money price"
+  // printed all thirteen digits in this 20px-tall cell, while the annual chart
+  // one section down still drew the same figure as "1,1 Tn".
+  it("compacts the revenue cell instead of printing thirteen digits", () => {
+    const revenue = series({
+      metric_key: "total_aviation_revenue_ytd",
+      label_tr: "Sektör geliri",
+      unit: "$",
+      points: [
+        point(2024, 966_000_000_000),
+        point(2025, 1_007_000_000_000),
+        point(2026, 1_050_000_000_000, "forecast"),
+      ],
+    });
+    // The FIRST render (CountUp prints the final value before its animation
+    // touches the node, and that is also what a JS-less reader sees).
+    const html = renderToStaticMarkup(<KpiStrip series={[revenue]} />);
+    expect(html).toContain(">1,1\u00a0Tn<");
+    // What the two-decimal money rule printed into that same 20px cell. (The
+    // year dots' hover titles DO carry the exact figure -- that is the point
+    // of a tooltip, and a different job from the headline number.)
+    expect(html).not.toContain(">1.050.000.000.000,00<");
   });
 
   it("says the series is missing rather than rendering an empty strip", () => {

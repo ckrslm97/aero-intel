@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import { KpiDetailChart } from "@/components/charts/kpi-detail-chart";
 import { Badge } from "@/components/ui/badge";
 import { API_BASE_URL, apiFetch } from "@/lib/api";
-import { formatDeltaPoints, formatMetricValue, formatSignedPct } from "@/lib/format";
+import { formatMetricValue, kpiDeltaLabel } from "@/lib/format";
 import { KPI_ICONS } from "@/lib/kpi-icons";
 import type { KpiDetailOut, KpiPeriod } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -65,16 +65,13 @@ export function KpiDetailClient({ metricKey }: { metricKey: string }) {
   // denominated in points, percent for everything else. See KpiOut in
   // lib/types.ts on why the payload never offers both.
   const delta = detail.delta_pct ?? detail.delta_points;
-  // `formatSignedPct`, which is what every other delta in this app is drawn
-  // with (ui/delta.tsx). This page had its own `formatDelta` printing "+4.2%"
-  // -- an English decimal point, and the percent sign on the wrong side of the
-  // number -- for the same move Kokpit's KUR cell printed as "+%4,2".
-  const deltaLabel =
-    detail.delta_pct !== null
-      ? formatSignedPct(detail.delta_pct)
-      : detail.delta_points !== null
-        ? formatDeltaPoints(detail.delta_points)
-        : null;
+  // `kpiDeltaLabel`, which folds "pick the non-null one" and "draw it the way
+  // every other delta in this app is drawn" (ui/delta.tsx) into the single
+  // helper KpiOut's contract note points at. This page had its own
+  // `formatDelta` printing "+4.2%" -- an English decimal point, and the
+  // percent sign on the wrong side of the number -- for the same move Kokpit's
+  // KUR cell printed as "+%4,2".
+  const deltaLabel = kpiDeltaLabel(detail.delta_pct, detail.delta_points);
   const isFlat = (delta ?? 0) === 0;
   const isPositive = (delta ?? 0) >= 0;
   const isGoodDirection = isPositive === detail.up_is_good;

@@ -3,7 +3,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
 
-from app.pipeline.verify import CONFIDENCE_FORMULA_MIN
+from app.pipeline.verify import measured_confidence
 from app.taxonomy import effective_source_tier
 
 _WORDS_PER_MINUTE = 200
@@ -123,10 +123,12 @@ class ArticleEnrichmentOut(BaseModel):
 
         A genuinely scored low value (0.535 is the seeded catalogue's
         single-source floor) is above the line and travels through untouched.
+
+        The test itself is `measured_confidence` beside the formula, so the
+        risk table, the risk cards and the newsletter apply this exact rule to
+        this exact column rather than each deciding for themselves.
         """
-        if value is None or value < CONFIDENCE_FORMULA_MIN:
-            return None
-        return value
+        return measured_confidence(value)
 
     @computed_field  # type: ignore[prop-decorator]
     @property

@@ -176,7 +176,7 @@ function annualCell(
     ...base,
     badge: `IATA ${latest.year}${ANNUAL_KIND_SUFFIX[latest.kind]}`,
     value: annualValue(latest.value, series.unit, series.metric_key),
-    // A percentage is printed as "%84,0" with nothing after it; the unit row
+    // A percentage is printed as "%84,00" with nothing after it; the unit row
     // still occupies its 12px so the five cells stay the same height.
     unit: series.unit === "%" ? null : series.unit,
     deltas: [annualDelta(series)],
@@ -238,7 +238,8 @@ export function buildPulseCells(
     // Four decimals for a cross where the fourth digit is the one that moves,
     // two for a TRY or JPY rate where it is not. The cut used to be typed here
     // AND in the FX table AND nowhere at all on /kpi/fx_eur_usd, which printed
-    // the same reading as "1,1"; `formatMetricValue` is now the only copy.
+    // the same reading as "1,1". All three now call `formatMetricValue`, which
+    // is the only copy of the rule.
     value: usdTry ? formatMetricValue(usdTry.value, usdTry.unit, "fx_usd_try") : null,
     unit: usdTry?.unit ?? null,
     deltas: [
@@ -356,7 +357,7 @@ function Cell({ cell, seam }: { cell: PulseCell; seam: boolean }) {
         </span>
       </div>
 
-      {/* A fixed 10px even when empty. A percentage prints as "%84,0" with no
+      {/* A fixed 10px even when empty. A percentage prints as "%84,00" with no
           unit after it, and letting that cell's unit row collapse to zero
           would slide its delta and its dots out of line with the four cells
           beside it -- the row is a comparison, so the slots have to agree. */}

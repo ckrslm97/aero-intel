@@ -7,7 +7,7 @@ import { FxForecastChart } from "@/components/kokpit/fx-forecast-chart-lazy";
 import { Card } from "@/components/ui/card";
 import { Delta } from "@/components/ui/delta";
 import { DenseTable, DenseTd, DenseTh } from "@/components/ui/dense-table";
-import { formatRate, formatUtcTime } from "@/lib/format";
+import { formatMetricValue, formatRate, formatUtcTime } from "@/lib/format";
 import type { FxForecastOut, KokpitFxBoardOut } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -109,18 +109,21 @@ export function nearestForecast(
   const others = new Set(sameDate.map((row) => row.institution));
   others.delete(nearest.institution);
 
-  const digits = nearest.value < 10 ? 4 : 2;
+  // The pair's own precision rule, from `formatMetricValue` -- the same call
+  // the spot cell above makes. An institution's 1,0850 target for EUR/USD and
+  // the live 1,0850 beside it must not be quoted to different decimals.
+  const quote = (value: number) => formatMetricValue(value, null, PAIR_METRIC_KEYS[pair]);
   const extra = others.size > 0 ? ` +${others.size} kurum` : "";
   const stale = expired ? " · vadesi geçti" : "";
   return {
-    label: `${formatRate(nearest.value, digits)} · ${nearest.institution} ${nearest.horizon_label}${extra}${stale}`,
+    label: `${quote(nearest.value)} · ${nearest.institution} ${nearest.horizon_label}${extra}${stale}`,
     expired,
     // Every institution on that date, each with its own wording and its own
     // number. Never averaged -- see MEDIAN_MIN_INSTITUTIONS in lib/cockpit.ts.
     title: sameDate
       .map(
         (row) =>
-          `${row.institution} · ${row.horizon_label}: ${formatRate(row.value, digits)} (yayın ${row.publication_date})`,
+          `${row.institution} · ${row.horizon_label}: ${quote(row.value)} (yayın ${row.publication_date})`,
       )
       .concat(expired ? ["Bu paritede ileri tarihli yayımlanmış tahmin kalmadı."] : [])
       .join("\n"),
@@ -153,8 +156,10 @@ export function buildFxRows(
       pair: name,
       metricKey: PAIR_METRIC_KEYS[name] ?? null,
       // Four decimals for a cross where the fourth digit is the one that
-      // moves, two for a TRY or JPY rate where it is not.
-      value: formatRate(pair.value, pair.value < 10 ? 4 : 2),
+      // moves, two for a TRY or JPY rate where it is not -- and read from
+      // `formatMetricValue`, not typed here, so this table, the Market Pulse
+      // cell above it and /kpi/fx_eur_usd quote one rate one way.
+      value: formatMetricValue(pair.value, pair.unit, PAIR_METRIC_KEYS[name]),
       dayPct: pair.day_delta_pct,
       weekPct: pair.week_delta_pct,
       series: pair.sparkline ?? [],
@@ -178,6 +183,11 @@ export function buildFxRows(
   // of dashes because there is genuinely nothing to plot: the rate has not
   // moved since 1986, and the provider's ±%0,12 of noise around it would be
   // fabricated movement if we drew it.
+  //
+  // Four decimals stated outright rather than read from `formatMetricValue`:
+  // the peg is not one of PRIMARY_PAIRS, has no metric key and no history
+  // page, and 3,7500 is how the pegged rate is quoted -- not the output of the
+  // sub-10 rule that happens to agree with it.
   if (board?.peg) {
     rows.push({
       pair: board.peg.currency_pair,

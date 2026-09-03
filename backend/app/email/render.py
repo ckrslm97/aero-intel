@@ -9,6 +9,7 @@ from app.core.config import get_settings
 from app.core.tr_dates import format_long_date
 from app.models.article import Article
 from app.models.edition import Edition
+from app.pipeline.verify import measured_confidence
 from app.taxonomy import CATEGORY_LABELS_TR
 
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -22,6 +23,14 @@ _env = Environment(
 # and stays that way, which retyping the list here did not guarantee.
 # "top_story" is not a category: it is the edition's lead slot.
 SECTION_LABELS: dict[str, str] = {"top_story": "Öne Çıkanlar", **CATEGORY_LABELS_TR}
+
+
+def _confidence_pct(enrichment) -> int | None:
+    """The article's confidence as a whole percent, or None when unscored."""
+    if enrichment is None:
+        return None
+    score = measured_confidence(enrichment.confidence_score)
+    return None if score is None else round(score * 100)
 
 
 def _article_context(article: Article) -> dict:
@@ -43,7 +52,12 @@ def _article_context(article: Article) -> dict:
         "is_translated": is_translated,
         "source_name": article.source.name,
         "url": article.url,
-        "confidence_pct": round((enrichment.confidence_score if enrichment else 0) * 100),
+        # None, not 0, when nobody scored this article: the template then omits
+        # the "%N güven" fragment entirely, exactly as the web drawer does.
+        # The column is NOT NULL and defaults to 0.0, so reading it raw mailed
+        # out "%0 güven" -- a verdict the system never reached -- for the same
+        # article the site now says was never assessed.
+        "confidence_pct": _confidence_pct(enrichment),
         "corroborating_count": enrichment.corroborating_source_count if enrichment else 1,
     }
 

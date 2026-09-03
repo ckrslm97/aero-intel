@@ -20,6 +20,7 @@ async def _make_edition(
     section: str = "top_story",
     translated: bool = False,
     edition_date: date = date(2026, 7, 12),
+    confidence_score: float = 0.9,
 ) -> Edition:
     source = Source(name="Test Source", url="https://example.com/feed", source_type="rss")
     db_session.add(source)
@@ -49,7 +50,7 @@ async def _make_edition(
             translation_provider="openai_compat" if translated else None,
             category=section,
             importance_score=0.8,
-            confidence_score=0.9,
+            confidence_score=confidence_score,
             corroborating_source_count=2,
         )
     )
@@ -125,6 +126,38 @@ async def test_render_is_turkish_and_lists_the_article(db_session):
     # No English chrome left behind.
     assert "confidence" not in html
     assert "Top Stories" not in html
+
+
+async def test_an_unscored_article_is_mailed_without_a_confidence_figure(db_session):
+    """0.0 is what ArticleEnrichment.confidence_score's NOT NULL default writes
+    for an article the confidence pass never reached -- not a measurement.
+
+    The web drawer already refuses to print a percentage for such a row
+    (app/schemas/article.py). The newsletter read the column directly and
+    mailed "%0 güven" for the same article, so the two surfaces answered the
+    same question differently -- and the email's answer was a verdict nobody
+    ever reached.
+    """
+    edition = await _make_edition(db_session, confidence_score=0.0)
+    html = render_newsletter_html(edition)
+
+    # "güvenilir kaynaklar" in the footer is a different word; the byline's
+    # "%N güven" fragment is the one that must be gone.
+    assert " güven " not in html
+    assert "%0 güven" not in html
+    # The rest of the byline is unaffected: what we DO know is still printed.
+    assert "2 kaynak" in html
+    assert "Test Source" in html
+
+
+async def test_a_genuinely_low_score_is_still_mailed_as_a_number(db_session):
+    """The negative half: 0.535 is the seeded catalogue's single-source floor,
+    a real measurement, and suppressing it would hide evidence rather than
+    refuse to invent it."""
+    edition = await _make_edition(db_session, confidence_score=0.535)
+    html = render_newsletter_html(edition)
+
+    assert "%54 güven" in html
 
 
 async def test_translated_article_shows_turkish_text_and_no_badge(db_session):

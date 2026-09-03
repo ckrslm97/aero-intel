@@ -51,7 +51,7 @@
             {% if lead.summary %}
             <p style="margin:10px 0 0 0;color:#52514e;font-size:14px;line-height:1.6;">{{ lead.summary }}</p>
             {% endif %}
-            <p style="margin:8px 0 0 0;color:#898781;font-size:12px;">{{ lead.source_name }} &middot; %{{ lead.confidence_pct }} güven &middot; {{ lead.corroborating_count }} kaynak{% if not lead.is_translated %} &middot; <span style="color:#8a6d3b;">otomatik çeviri yok</span>{% endif %}</p>
+            <p style="margin:8px 0 0 0;color:#898781;font-size:12px;">{{ lead.source_name }}{% if lead.confidence_pct is not none %} &middot; %{{ lead.confidence_pct }} güven{% endif %} &middot; {{ lead.corroborating_count }} kaynak{% if not lead.is_translated %} &middot; <span style="color:#8a6d3b;">otomatik çeviri yok</span>{% endif %}</p>
           </td>
         </tr>
         {% endif %}

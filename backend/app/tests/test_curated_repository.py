@@ -1,6 +1,7 @@
 from datetime import date, datetime, timedelta, timezone
 
-from app.repositories.curated_repository import CuratedRepository, forecast_target_date
+from app.forecast_horizon import forecast_target_date
+from app.repositories.curated_repository import CuratedRepository
 
 
 async def test_upsert_fx_forecast_inserts_then_updates_the_same_natural_key(db_session):
@@ -211,37 +212,89 @@ async def test_only_upcoming_drops_a_forecast_whose_own_horizon_has_elapsed(db_s
     assert [row.institution for row in upcoming] == ["Ahead Bank"]
 
 
+async def test_only_upcoming_drops_a_label_horizon_the_resolver_can_date(db_session):
+    """A row labelled "end-2024" carries no `horizon_months`, and the
+    repository used to read that NULL as "undatable" and keep the row forever.
+
+    It is not undatable: app/forecast_horizon.py resolves the institution's own
+    wording, and it is the SAME resolver the FX board uses to stamp such a row
+    "· vadesi geçti". Before this, the Kur Riski tile quoted as its
+    forward-looking endpoint a forecast the table beside it drew as expired.
+    """
+    repo = CuratedRepository(db_session)
+    await repo.upsert_fx_forecast(
+        institution="Elapsed Label Bank",
+        currency_pair="USD/TRY",
+        horizon_label="end-2024",
+        horizon_months=None,
+        value=35.0,
+        publication_date=date(2024, 3, 4),
+        source_url="https://elapsed-label.example",
+    )
+    # The other half of the rule: a label-only horizon still AHEAD of us stays.
+    ahead_year = datetime.now(timezone.utc).year + 2
+    await repo.upsert_fx_forecast(
+        institution="Ahead Label Bank",
+        currency_pair="USD/TRY",
+        horizon_label=f"end-{ahead_year}",
+        horizon_months=None,
+        value=70.0,
+        publication_date=datetime.now(timezone.utc).date() - timedelta(days=10),
+        source_url="https://ahead-label.example",
+    )
+    await db_session.commit()
+
+    everything = await repo.fx_forecasts(currency_pair="USD/TRY")
+    upcoming = await repo.fx_forecasts(currency_pair="USD/TRY", only_upcoming=True)
+
+    # The table still records what both banks said.
+    assert {row.institution for row in everything} == {"Elapsed Label Bank", "Ahead Label Bank"}
+    assert [row.institution for row in upcoming] == ["Ahead Label Bank"]
+
+
 async def test_only_upcoming_keeps_a_forecast_whose_horizon_cannot_be_dated(db_session):
-    """A row labelled "end-2026" or "Q4 2026" has no `horizon_months` -- this
-    table refuses to rewrite an institution's own label into a month count, so
-    the target date is genuinely unknown.
+    """A wording the resolver does not recognise ("orta vade") has no target
+    date at all -- neither this filter nor the chart can place it.
 
     Unknown is not elapsed. Dropping it would be acting on an absence of
     evidence, which is the same error as publishing an unmeasured score.
     """
     repo = CuratedRepository(db_session)
     await repo.upsert_fx_forecast(
-        institution="JPMorgan",
+        institution="Belirsiz Vade Bank",
         currency_pair="USD/TRY",
-        horizon_label="end-2026",
+        horizon_label="orta vade",
         horizon_months=None,
         value=51.4,
         # Old enough that any datable horizon would have elapsed.
         publication_date=datetime.now(timezone.utc).date() - timedelta(days=900),
-        source_url="https://jpm.example",
+        source_url="https://belirsiz.example",
     )
     await db_session.commit()
 
     upcoming = await repo.fx_forecasts(currency_pair="USD/TRY", only_upcoming=True)
-    assert [row.institution for row in upcoming] == ["JPMorgan"]
+    assert [row.institution for row in upcoming] == ["Belirsiz Vade Bank"]
 
 
 def test_forecast_target_date_adds_calendar_months_and_clamps_the_day():
+    """The month-count rungs of the shared resolver, which is what
+    `only_upcoming` compares against. The label rungs (end-YYYY, year-end,
+    QN YYYY) are pinned in test_kokpit_api.py against the same function."""
+    def target(publication_date, horizon_months, label="+Nm"):
+        result, _ = forecast_target_date(
+            horizon_months=horizon_months,
+            horizon_label=label,
+            publication_date=publication_date,
+        )
+        return result
+
     # Plain case: 21 August + 3 months.
-    assert forecast_target_date(date(2026, 8, 21), 3) == date(2026, 11, 21)
+    assert target(date(2026, 8, 21), 3) == date(2026, 11, 21)
     # Across a year boundary.
-    assert forecast_target_date(date(2026, 8, 21), 12) == date(2027, 8, 21)
+    assert target(date(2026, 8, 21), 12) == date(2027, 8, 21)
     # 31 August + 6 months lands in a February that has no 31st.
-    assert forecast_target_date(date(2026, 8, 31), 6) == date(2027, 2, 28)
-    # A label that does not map to a month count has no target date at all.
-    assert forecast_target_date(date(2026, 8, 21), None) is None
+    assert target(date(2026, 8, 31), 6) == date(2027, 2, 28)
+    # A wording the resolver does not recognise has no target date at all.
+    assert target(date(2026, 8, 21), None, "orta vade") is None
+    # ... but a NULL month count is no longer the same thing as undatable.
+    assert target(date(2026, 8, 21), None, "end-2026") == date(2026, 12, 31)

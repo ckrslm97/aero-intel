@@ -30,6 +30,7 @@ from app.services.kpi_service import (
     LY_SUFFIX,
     PUBLISHED_ESTIMATE_KEYS,
 )
+from app.taxonomy import PERIOD_KIND_LABELS_TR
 
 logger = get_logger(__name__)
 
@@ -131,13 +132,14 @@ PREVIOUS_COMPARISON_LABEL = "önceki ölçüme göre"
 # publication date, so `as_of.year` is the period in both cases. And the KIND
 # comes from `year_kind`, the seed's own helper -- so a KPI card and the chart
 # beside it can never disagree about whether 2026 is a forecast.
+#
+# Its NAME comes from PERIOD_KIND_LABELS_TR in app/taxonomy.py, for the same
+# reason one step further: this module used to keep its own Turkish words
+# ("ön gerçekleşme") while Kokpit's outlook tile called the identical row
+# "tahmini gerçekleşme". Agreeing on the kind and disagreeing on its name is
+# still two answers to one question. The frontend reads that same map out of
+# taxonomy.gen.ts.
 # ---------------------------------------------------------------------------
-
-PERIOD_KIND_LABELS_TR: dict[str, str] = {
-    "forecast": "tahmin",
-    "estimate": "ön gerçekleşme",
-    "actual": "gerçekleşen",
-}
 
 #: What a live metric's value describes. Not "anlık": flights_today is derived
 #: from an instantaneous count and fuel_price from a published assumption, and

@@ -6,6 +6,7 @@ import {
   formatMetricValue,
   formatRate,
   formatSignedPct,
+  kpiDeltaLabel,
 } from "./format";
 
 describe("formatCompactNumber", () => {
@@ -73,9 +74,24 @@ describe("formatMetricValue", () => {
     expect(formatMetricValue(1.085, "USD", "fx_eur_usd")).toBe("1,0850");
   });
 
-  it("keeps two decimals for percent, cent and price units", () => {
+  it("keeps two decimals for percent, cent and per-something price units", () => {
     expect(formatMetricValue(83.45, "%")).toBe("83,45");
     expect(formatMetricValue(8.632, "¢/RPK")).toBe("8,63");
+    expect(formatMetricValue(68.4, "$/bbl")).toBe("68,40");
+    expect(formatMetricValue(3.214, "$/MMBtu")).toBe("3,21");
+  });
+
+  // The other half of that rule, and the one that got away: a BARE "$" is the
+  // unit the IATA revenue rows are seeded with (historical_seed.py), and their
+  // values are in the hundreds of billions. Treating every "$" as a quoted
+  // price printed thirteen digits in the KPI strip and on /kpi/... while the
+  // annual chart beside them still read "1,1 Tn".
+  it("compacts a bare-dollar magnitude instead of printing every digit", () => {
+    expect(formatMetricValue(1_050_000_000_000, "$", "total_aviation_revenue_ytd")).toBe(
+      "1,1\u00a0Tn",
+    );
+    expect(formatMetricValue(693_000_000_000, "$", "passenger_revenue_ytd")).toBe("693\u00a0Mr");
+    // ... and the price it is NOT to be confused with keeps its cents.
     expect(formatMetricValue(68.4, "$/bbl")).toBe("68,40");
   });
 
@@ -101,5 +117,29 @@ describe("formatDeltaPoints", () => {
     expect(formatDeltaPoints(0.4)).toBe("+0,4 puan");
     expect(formatDeltaPoints(-1.25)).toBe("-1,3 puan");
     expect(formatDeltaPoints(0)).toBe("0,0 puan");
+  });
+});
+
+describe("kpiDeltaLabel", () => {
+  // The backend fills exactly one of the pair (see KpiOut in lib/types.ts),
+  // and its contract note pointed at this helper by name while nothing
+  // implemented it -- the detail page open-coded the choice instead.
+  it("prints a percent move as a percent and a points move in points", () => {
+    expect(kpiDeltaLabel(4.2, null)).toBe("+%4,2");
+    expect(kpiDeltaLabel(null, 0.4)).toBe("+0,4 puan");
+    expect(kpiDeltaLabel(null, -1.2)).toBe("-1,2 puan");
+  });
+
+  it("prefers the percent when a caller somehow has both", () => {
+    // A load factor is the points case; nothing should ever send both, and if
+    // something does, one deterministic answer beats two surfaces guessing.
+    expect(kpiDeltaLabel(0.48, 0.4)).toBe("+%0,5");
+  });
+
+  // Zero IS a measurement ("unchanged"); a missing comparison is not.
+  it("keeps a real zero and refuses to invent one", () => {
+    expect(kpiDeltaLabel(0, null)).toBe("%0,0");
+    expect(kpiDeltaLabel(null, 0)).toBe("0,0 puan");
+    expect(kpiDeltaLabel(null, null)).toBeNull();
   });
 });

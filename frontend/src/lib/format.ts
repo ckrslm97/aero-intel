@@ -62,20 +62,29 @@ const FX_METRIC_PREFIX = "fx_";
  * both already applied exactly this cut inline -- this is that rule, named. */
 const FX_FOUR_DECIMAL_BELOW = 10;
 
-/** Units whose second decimal is meaningful: percents, cents and money prices.
+/** Units whose second decimal is meaningful: percents, cents, and RATES.
  *
  * A predicate over the unit's SHAPE rather than a fixed set, so a unit this
  * app grows later ("¢/ASK-km", "$/gal") is precise by construction instead of
  * silently falling through to compact notation -- which renders 8,63¢ as "8,6"
  * and Brent's 68,40 $/bbl as "68,4".
  *
- * A money price is in the set because cents are part of a quoted price. A
- * COUNT is not, however large its unit word ("USD milyar", "yolcu"): those are
- * read as magnitudes and compact notation is the honest rendering of them.
+ * THE SHAPE IS THE DENOMINATOR, NOT THE CURRENCY GLYPH. "$/bbl" is a price
+ * per barrel and every cent of it is meaningful; a bare "$" is a MAGNITUDE,
+ * and the seeded IATA revenue rows carry exactly that unit with values in the
+ * hundreds of billions (backend/app/ingest/historical_seed.py). Reading the
+ * leading "$" as "money price" printed total_aviation_revenue_ytd as
+ * "1.050.000.000.000,00" in the Kokpit KPI strip and on /kpi/... while the
+ * annual chart one section over drew the same figure as "1,1 Tn" -- the
+ * two-surfaces-two-numbers failure, re-created by the de-duplication itself.
+ *
+ * A COUNT is likewise not in the set, however large its unit word ("USD
+ * milyar", "yolcu"): those are read as magnitudes and compact notation is the
+ * honest rendering of them.
  */
 function isPreciseUnit(unit: string | null | undefined): boolean {
   if (!unit) return false;
-  return unit === "%" || unit.startsWith("¢") || unit.startsWith("$");
+  return unit === "%" || unit.startsWith("¢") || unit.includes("/");
 }
 
 /** THE precision rule for a KPI value -- every surface calls this one.
@@ -89,9 +98,9 @@ function isPreciseUnit(unit: string | null | undefined): boolean {
  * Three cases, in the order they are decided:
  *
  *   * an FX cross      -- four decimals below 10, two at or above it
- *   * a %, ¢ or $ metric -- two decimals, never compacted
- *   * everything else  -- compact ("1,5 Mn"), because a passenger count is
- *                         read as a magnitude and not to the unit
+ *   * a %, ¢ or per-something rate -- two decimals, never compacted
+ *   * everything else  -- compact ("1,5 Mn"), because a passenger count and a
+ *                         revenue total are read as magnitudes, not to the unit
  *
  * The value is returned WITHOUT its unit: "%" sits before the number in
  * Turkish and after it in the detail page's layout, so placement stays with
@@ -107,6 +116,28 @@ export function formatMetricValue(
   }
   if (isPreciseUnit(unit)) return formatRate(value, 2);
   return formatCompactNumber(value);
+}
+
+/** THE delta a KPI surface prints: the percent one or the points one, in the
+ * one vocabulary this app uses for each.
+ *
+ * Exactly one of the pair is ever a number -- the backend fills `delta_points`
+ * for a metric already denominated in points and `delta_pct` for everything
+ * else (see KpiOut in lib/types.ts), so "read whichever is non-null" is the
+ * whole rule and it belongs somewhere it can be read. `KpiOut`'s own contract
+ * note used to promise this helper by name while nothing implemented it, and
+ * the detail page open-coded the selection instead.
+ *
+ * null when neither is set: the comparison could not be made, and a "0" would
+ * claim a flat reading nobody measured.
+ */
+export function kpiDeltaLabel(
+  deltaPct: number | null | undefined,
+  deltaPoints: number | null | undefined,
+): string | null {
+  if (deltaPct !== null && deltaPct !== undefined) return formatSignedPct(deltaPct);
+  if (deltaPoints !== null && deltaPoints !== undefined) return formatDeltaPoints(deltaPoints);
+  return null;
 }
 
 /** A percent with an explicit sign and Turkish separators: "+%2,4" / "-%1,8".

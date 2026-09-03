@@ -1126,3 +1126,29 @@ def effective_source_tier(tier: str | None, trust_weight: float | None) -> str:
         if weight >= floor:
             return name
     return DEFAULT_UNDECLARED_TIER
+
+
+# ---------------------------------------------------------------------------
+# PERIOD KINDS
+#
+# What a yearly figure IS: a measurement, a provisional one, or a projection.
+# The values are `year_kind`'s (app/ingest/historical_seed.py), which reads
+# them off the published IATA report rather than hardcoding a year.
+#
+# The LABELS live here, with the rest of the vocabulary the backend owns and
+# exports to the frontend, because they were written twice: /kpis called an
+# estimate "ön gerçekleşme" while the Kokpit outlook tile beside it called the
+# very same row "tahmini gerçekleşme". The batch that shared `year_kind` made
+# the two surfaces agree on the KIND and left them disagreeing on its NAME.
+# ---------------------------------------------------------------------------
+
+PERIOD_KINDS: tuple[str, ...] = ("actual", "estimate", "forecast")
+
+#: The Turkish word for each kind, in the wording Kokpit's chart legend and
+#: badges already used. Exported into frontend/src/lib/taxonomy.gen.ts, so the
+#: KPI card, the annual chart and the outlook tile cannot drift apart.
+PERIOD_KIND_LABELS_TR: dict[str, str] = {
+    "actual": "gerçekleşme",
+    "estimate": "tahmini gerçekleşme",
+    "forecast": "tahmin",
+}

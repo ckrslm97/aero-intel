@@ -48,7 +48,7 @@ from app.core.db import get_db
 from app.llm.heuristic import AVIATION_RELEVANCE_GATE, LOCATION_MAP_PIN_MIN
 from app.models.article import Article, ArticleEnrichment
 from app.models.entity import ArticleEntity
-from app.pipeline.verify import CONFIDENCE_FORMULA_MIN
+from app.pipeline.verify import CONFIDENCE_FORMULA_MIN, measured_confidence
 from app.pipeline.clustering import EventCandidate, cluster, entity_codes, pick_primary, tier_for_source
 from app.taxonomy import (
     COUNTRY_TO_REGION,
@@ -124,6 +124,10 @@ class RiskItemOut(BaseModel):
     #: Cross-source verification score of the primary article's enrichment,
     #: 0-1, and how many sources corroborated it. Shown as a band plus the
     #: number -- a band with no number behind it is an opinion.
+    #:
+    #: None means the confidence pass never scored this row (see
+    #: `measured_confidence`), which is why the card draws no pill at all
+    #: rather than a "Düşük 0.00" nobody measured.
     confidence_score: float | None = None
     corroborating_source_count: int | None = None
 
@@ -907,7 +911,13 @@ async def aggregate_risks(db: AsyncSession, days: int = DEFAULT_WINDOW_DAYS) -> 
             # The primary's own summary: it is the telling that was picked as
             # most reliable, so it is the one whose words stand for the event.
             summary_tr=(primary_enrichment.summary_tr or primary_enrichment.summary) or None,
-            confidence_score=primary_enrichment.confidence_score,
+            # Null when nobody scored this row (`measured_confidence`), never
+            # 0.0: the card's ConfidencePill draws a score it is given, so the
+            # raw NOT NULL column turned an unmeasured article into a "Düşük
+            # 0.00" verdict the system never reached. The GATE above still
+            # reads the raw value -- visibility_for treats unscored as
+            # publishable, which is the same principle in the other direction.
+            confidence_score=measured_confidence(primary_enrichment.confidence_score),
             corroborating_source_count=primary_enrichment.corroborating_source_count,
             first_reported_at=first_reported,
             last_reported_at=last_reported,

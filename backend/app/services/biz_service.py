@@ -149,9 +149,12 @@ async def competitor_signals(db: AsyncSession, days: int = 30) -> list[dict]:
                 "airline_name": name,
                 "count": total,
                 # The newest RIVAL_EVENT_CAP of `count`, never all of them.
-                # `events_truncated` says so out loud, so a card listing ten
-                # events under a headline reading 40 is explained rather than
-                # merely inconsistent.
+                # `events_truncated` says so on the wire, so that a card
+                # listing ten events under a headline reading 40 CAN be
+                # explained rather than merely inconsistent. No surface reads
+                # it yet -- /biz does not render competitor_signals at all --
+                # so this is a contract the frontend can honour, not a claim
+                # that it already does.
                 "events": [_event_payload(e) for e in rows],
                 "events_truncated": total > len(rows),
             }

@@ -24,6 +24,24 @@ from app.models.article import Article
 CONFIDENCE_FORMULA_MIN = 0.4
 
 
+def measured_confidence(value: float | None) -> float | None:
+    """The stored score if the confidence pass actually produced it, else None.
+
+    THE null-out rule, in one place, because it was applied on one surface and
+    forgotten on the next: the analysis drawer stopped printing "%0 güven" for
+    an article nobody had scored (app/schemas/article.py) while the risk
+    verification table went on rendering "0.00" for that very same article --
+    directly above its own caption reading "ölçülmedi, kapı yargılamadı". Two
+    surfaces, one column, two answers.
+
+    A genuinely scored low value (0.535 is the seeded catalogue's single-source
+    floor) is above the floor and travels through untouched.
+    """
+    if value is None or value < CONFIDENCE_FORMULA_MIN:
+        return None
+    return value
+
+
 async def compute_confidence(db: AsyncSession, article: Article) -> tuple[int, float]:
     """Confidence rises with the number of independent sources corroborating a
     story and their trust weight -- a simple, auditable heuristic (not a

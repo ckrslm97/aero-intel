@@ -43,6 +43,8 @@ from app.taxonomy import (  # noqa: E402
     CATEGORY_LABELS_TR,
     COUNTRY_TO_REGION,
     GENERAL_CATEGORY,
+    PERIOD_KIND_LABELS_TR,
+    PERIOD_KINDS,
     RISK_FAMILIES,
     RISK_SEVERITIES,
     REGION_LABELS_TR,
@@ -220,6 +222,20 @@ def render() -> str:
     parts.append("export const CAMPAIGN_STATUS_LABELS_TR: Record<CampaignStatus, string> = {")
     for slug in CAMPAIGN_STATUSES:
         parts.append(f'  "{slug}": "{CAMPAIGN_STATUS_LABELS_TR[slug]}",')
+    parts.append("};\n")
+
+    # What a yearly figure is -- a measurement, a provisional one, or a
+    # projection. The backend decides the kind (historical_seed.year_kind) AND
+    # names it, because the KPI detail page renders the name server-side while
+    # the Kokpit chart renders it here: two copies is how "ön gerçekleşme" and
+    # "tahmini gerçekleşme" came to be the same fact.
+    parts.append(_ts_string_union("PeriodKind", list(PERIOD_KINDS)))
+    parts.append(_ts_const_array("PERIOD_KINDS", "PeriodKind", list(PERIOD_KINDS)))
+    parts.append("")
+
+    parts.append("export const PERIOD_KIND_LABELS_TR: Record<PeriodKind, string> = {")
+    for slug in PERIOD_KINDS:
+        parts.append(f'  "{slug}": "{PERIOD_KIND_LABELS_TR[slug]}",')
     parts.append("};\n")
 
     return "\n".join(parts).rstrip() + "\n"

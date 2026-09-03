@@ -3,6 +3,7 @@ import type {
   CampaignKind,
   CampaignStatus,
   CampaignType,
+  PeriodKind,
   RouteScope,
 } from "@/lib/taxonomy.gen";
 
@@ -215,7 +216,7 @@ export interface EditionSummaryOut {
  * for a metric already denominated in points (`unit === "%"`) the backend
  * sends `delta_pct: null` and fills `delta_points`; every other unit is the
  * other way round. Read whichever is non-null -- `kpiDeltaLabel` in
- * lib/kpi.ts does that once for every surface. */
+ * lib/format.ts does that once, beside the two formatters it picks between. */
 export interface KpiOut {
   metric_key: string;
   label: string;
@@ -930,7 +931,10 @@ export interface CockpitSignalsOut {
 export interface AnnualPoint {
   year: number;
   value: number;
-  kind: "actual" | "estimate" | "forecast";
+  /** `year_kind`'s own three values (backend/app/ingest/historical_seed.py),
+   * named once in app/taxonomy.py so the label beside the number comes from
+   * the same place as the number's kind. */
+  kind: PeriodKind;
 }
 
 export interface AnnualSeries {
@@ -993,8 +997,14 @@ export interface BizCampaignOut {
 export interface BizCompetitorSignal {
   airline_code: string;
   airline_name: string;
+  /** Every event in the window, not `events.length`. */
   count: number;
   events: BizEventOut[];
+  /** True when `events` is the newest slice of `count` rather than all of it
+   * (backend/app/services/biz_service.py). Declared here so a section that
+   * lists ten rows under a headline reading 40 can say why -- no surface
+   * renders competitor_signals yet. */
+  events_truncated: boolean;
 }
 
 /** The structural no-filler wrapper every Biz section shares: a section is

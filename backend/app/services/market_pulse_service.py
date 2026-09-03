@@ -26,6 +26,7 @@ from app.repositories.curated_repository import CuratedRepository
 from app.repositories.kpi_repository import KpiRepository
 from app.repositories.market_pulse_repository import MarketPulseRepository
 from app.services.kpi_service import FX_PAIR_LABELS, LIVE_FX_PAIRS
+from app.taxonomy import PERIOD_KIND_LABELS_TR
 
 logger = get_logger(__name__)
 
@@ -97,7 +98,12 @@ async def _iata_facts(db: AsyncSession) -> list[GroundingFact]:
         if key in seen:
             continue
         seen.add(key)
-        kind_tr = "gerçekleşme" if row.kind == "actual" else "tahmin"
+        # The same two words the KPI page and Kokpit's tiles use for these two
+        # kinds (app/taxonomy.py). IataIndicator.kind is its own two-value
+        # vocabulary (INDICATOR_KINDS), so an unrecognised value stays verbatim
+        # rather than being rounded to "tahmin" -- a grounding fact must not
+        # tell the model a thing we did not read.
+        kind_tr = PERIOD_KIND_LABELS_TR.get(row.kind, row.kind)
         facts.append(
             GroundingFact(
                 label=f"IATA {row.metric} ({kind_tr}, {row.period_label_tr})",
