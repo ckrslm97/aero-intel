@@ -166,7 +166,8 @@ export interface HubRouteOut {
   article_count: number;
 }
 
-export interface HubOverviewOut {
+export interface HubOverviewOut extends Stamped {
+  window: ResponseWindow;
   days: number;
   hubs: HubOut[];
   routes: HubRouteOut[];
@@ -402,7 +403,15 @@ export interface RouteSignalGroup {
   articles: RouteSignalArticle[];
 }
 
-export interface InsightsOut {
+export interface InsightsOut extends Stamped {
+  /** One window PER aggregate: momentum compares 7-day halves while the other
+   * two run over 30 days, so a single `days` would misdescribe most of this
+   * payload. */
+  windows: {
+    airline_momentum: ResponseWindow;
+    new_route_signals: ResponseWindow;
+    sentiment_by_category: ResponseWindow;
+  };
   airline_momentum: {
     code: string;
     name: string;
@@ -462,6 +471,15 @@ export interface PromotionOut {
   /** When WE first saw it, ISO datetime. Drives the "Yeni" badge and the 48h
    * banner, and is the x position of a start-less campaign's point marker. */
   detected_at: string;
+  /** The publication date of the article this campaign was read out of, when
+   * there was one -- deliberately NOT folded into `detected_at`. `null` for the
+   * airline-page and curated paths, which have no source document, and for a
+   * feed that carried no date. Never a stand-in for the sighting. */
+  source_published_at: string | null;
+  /** The last time a scan CONFIRMED the campaign still on its page. `null` on
+   * rows whose write path never re-checks anything -- render "—", never the
+   * detection or change time, which are different questions. */
+  last_seen_at: string | null;
   /** Pre-formatted Turkish range, already saying which end is unknown. */
   sale_range_tr: string;
   travel_range_tr: string;
@@ -954,11 +972,50 @@ export interface AnnualSeriesBoardOut {
   scope_tr: string;
 }
 
+/* --- Response stamps ------------------------------------------------------ */
+/** The window an aggregate was computed over, stated from both ends so a
+ * client can print "son N gün" without inventing either edge.
+ * Mirrors backend/app/api/window.py. */
+export interface ResponseWindow {
+  days: number;
+  /** ISO datetime -- the window's near edge. `until - days` for a look-back;
+   * equal to `generated_at` for a forward horizon (`horizon_of`). */
+  since: string;
+  /** ISO datetime -- equal to the response's `generated_at` for a look-back,
+   * and `generated_at + days` for a forward horizon. */
+  until: string;
+}
+
+/** Carried by every aggregate endpoint. `generated_at` is when the SERVER cut
+ * the window, which is the only defensible "son güncelleme": the browser's
+ * fetch time says the data is fresh every time the reader reloads, even from
+ * cache.
+ *
+ * One surface was actually printing that fetch time (the Ağ Sinyalleri tab,
+ * hub-network-signals.tsx) and now prints this instead. The rest print no
+ * stamp at all yet -- BizOverviewOut has no caller, and the İçgörüler, Hublar
+ * and Öneriler clients fetch by hand without `useDataSource`. For those this
+ * field is something true to print when they come to print it. */
+export interface Stamped {
+  generated_at: string;
+}
+
 /* --- Hub network signals -------------------------------------------------- */
 /** Same shape as InsightsOut['new_route_signals'], produced from pipeline v2
  * events instead of raw articles -- see
  * backend/app/services/network_signals_service.py. */
 export type NetworkSignalGroup = RouteSignalGroup;
+
+/** GET /hubs/network-signals. An envelope, not a bare list: the tab prints a
+ * "son güncelleme" and needs a real one to print.
+ *
+ * Read it through `regionsOf` (lib/network-signals.ts), never `.regions`
+ * directly -- a stale edge can still serve the pre-envelope array to this
+ * bundle for a cache lifetime after the deploy. */
+export interface NetworkSignalsOut extends Stamped {
+  window: ResponseWindow;
+  regions: NetworkSignalGroup[];
+}
 
 /* --- Biz ------------------------------------------------------------------ */
 /** Mirrors backend/app/services/biz_service.py. */
@@ -1033,7 +1090,13 @@ export interface BizCommercialSignal {
   metric: { label: string; value: number; previous: number | null } | null;
 }
 
-export interface BizOverviewOut {
+export interface BizOverviewOut extends Stamped {
+  /** One window PER section, not one for the payload: three sections are cut
+   * to `days`, while `commercial_signals` widens its review themes fourfold
+   * and carries calendar items from FORWARD of every other window here. Keys
+   * are the section names, plus `commercial_comparison`,
+   * `commercial_tk_review_themes` and `commercial_upcoming_events`. */
+  windows: Record<string, ResponseWindow>;
   days: number;
   competitor_signals: BizSection<BizCompetitorSignal>;
   network_signals: BizSection<NetworkSignalGroup>;

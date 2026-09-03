@@ -10,8 +10,9 @@ import { MotionItem, MotionList } from "@/components/motion/motion-list";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDataSource } from "@/hooks/use-data-source";
 import { apiFetch } from "@/lib/api";
+import { regionsOf } from "@/lib/network-signals";
 import { worldRegions } from "@/lib/nav";
-import type { NetworkSignalGroup, RouteSignalArticle } from "@/lib/types";
+import type { NetworkSignalGroup, NetworkSignalsOut, RouteSignalArticle } from "@/lib/types";
 
 // echarts only needed once the map renders -- Faz 14, same pattern as
 // newspaper-browser.tsx's RegionMap.
@@ -37,12 +38,23 @@ export function HubNetworkSignals() {
   const [carrier, setCarrier] = useState<string | null>(null);
   const [city, setCity] = useState<string | null>(null);
 
+  // The endpoint returns an envelope now: the regions plus the moment the
+  // server cut their window. `useDataSource` stamps the card with that
+  // `generated_at` instead of the time this fetch happened to resolve.
   const fetcher = useCallback(
     (signal: AbortSignal) =>
-      apiFetch<NetworkSignalGroup[]>("/hubs/network-signals?days=30", { cache: "default", signal }),
+      apiFetch<NetworkSignalsOut | NetworkSignalGroup[]>("/hubs/network-signals?days=30", {
+        cache: "default",
+        signal,
+      }),
     [],
   );
-  const { data: groups, error, loaded, lastUpdated, stale, retry } = useDataSource(fetcher, []);
+  const { data, error, loaded, lastUpdated, stale, retry } = useDataSource(fetcher, []);
+  // Not `data.regions` directly: for up to ~30 minutes after a deploy the edge
+  // can still be serving the pre-envelope array body to this new code. See
+  // lib/network-signals.ts -- reading it as an envelope only would draw "sinyal
+  // yok" over a full payload.
+  const groups = regionsOf(data);
 
   const flatSignals: RouteSignalArticle[] = useMemo(
     () => (groups ?? []).flatMap((group) => group.articles),

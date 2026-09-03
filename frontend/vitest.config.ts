@@ -15,6 +15,16 @@ export default defineConfig({
     },
   },
   test: {
+    // TZ IS PINNED BY THE `test` SCRIPTS (package.json), not here: Node resolves
+    // its zone before vitest can set it, so `env: { TZ }` would come too late.
+    //
+    // It is pinned at all because several surfaces deliberately format record
+    // timestamps in UTC -- the campaign drawer's three stamps, BİZ's "Son
+    // toplama", the risk drawer's chronology -- on the rule that a record's
+    // timestamp must not shift with who is looking at it. Under an unpinned
+    // runner those assertions pass for free on a UTC CI box and stop catching
+    // the regression they exist for. Europe/Istanbul is UTC+3, so a stamp that
+    // slipped back to the reader's own zone visibly moves.
     environment: "jsdom",
     setupFiles: ["./vitest.setup.ts"],
     globals: true,

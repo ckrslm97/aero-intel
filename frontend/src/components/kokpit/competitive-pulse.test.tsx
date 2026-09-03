@@ -33,10 +33,14 @@ function routes({
   count,
   insightsOut,
   routeGroups,
+  routesAsBareList = false,
 }: {
   count?: unknown;
   insightsOut?: unknown;
   routeGroups?: unknown;
+  /** Serve the PRE-envelope body -- what a stale edge can still hand this
+   * bundle for up to ~30 minutes after a deploy. */
+  routesAsBareList?: boolean;
 }) {
   apiFetch.mockImplementation((path?: string) => {
     if (path?.startsWith("/promotions/new-count")) {
@@ -50,9 +54,19 @@ function routes({
         : Promise.resolve(insightsOut ?? insights([]));
     }
     if (path?.startsWith("/hubs/network-signals")) {
-      return routeGroups instanceof Error
-        ? Promise.reject(routeGroups)
-        : Promise.resolve(routeGroups ?? []);
+      // An envelope, not a bare list: the endpoint stamps its own window
+      // (backend/app/api/window.py) and the cell reads `regions` out of it.
+      if (routeGroups instanceof Error) return Promise.reject(routeGroups);
+      if (routesAsBareList) return Promise.resolve(routeGroups ?? []);
+      return Promise.resolve({
+        generated_at: "2026-09-01T00:00:00Z",
+        window: {
+          days: 30,
+          since: "2026-08-02T00:00:00Z",
+          until: "2026-09-01T00:00:00Z",
+        },
+        regions: routeGroups ?? [],
+      });
     }
     return Promise.reject(new Error(`unexpected path ${String(path)}`));
   });
@@ -166,5 +180,29 @@ describe("CompetitivePulse", () => {
     expect(total.textContent).not.toContain("Avrupa");
     // The region stays attached to the headline it actually belongs to.
     expect(screen.getByText(/QR DOH–MXP/).textContent).toContain("Avrupa");
+  });
+
+  it("still counts the signals when a stale edge serves the pre-envelope list", async () => {
+    // /hubs/network-signals went from a bare list to an envelope so the tab
+    // could stamp a real "son güncelleme". The switch is not atomic: the
+    // response is edge-cached for 300s and served stale for 1500 more, so this
+    // bundle can be handed the OLD body. Reading `.regions` only, `routeGroups`
+    // would be undefined and this cell would print "0 · sinyal yok" over a
+    // payload that has five -- data present, nothing shown, no error.
+    routes({ routeGroups: [routeGroup()], routesAsBareList: true });
+    render(<CompetitivePulse />);
+
+    expect((await screen.findByText("5")).parentElement!.textContent).toContain(
+      "tüm bölgeler",
+    );
+  });
+
+  it("draws the same thing from the envelope", async () => {
+    routes({ routeGroups: [routeGroup()] });
+    render(<CompetitivePulse />);
+
+    expect((await screen.findByText("5")).parentElement!.textContent).toContain(
+      "tüm bölgeler",
+    );
   });
 });

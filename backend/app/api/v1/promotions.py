@@ -179,7 +179,25 @@ class PromotionOut(BaseModel):
     url: str
     source_name: str
     region: str | None
+    #: When WE first saw this campaign. The "Yeni" badge and the 48h banner are
+    #: computed from it, so it is our clock and only ever our clock.
     detected_at: datetime
+    #: The publication date of the article this campaign was read out of, when
+    #: there was one. Serialised so a reader can tell "found this morning" from
+    #: "found this morning in a three-week-old report" -- two different things
+    #: that `detected_at` alone used to be asked, wrongly, to say at once.
+    #: NULL for the airline-page and curated paths, which have no such document.
+    source_published_at: datetime | None = None
+    #: The last time a scan CONFIRMED this campaign still on its page -- the
+    #: honest answer to "son kontrol", which the drawer was answering with
+    #: `last_changed_at` (when the row last CHANGED) and falling back to
+    #: `detected_at`. A campaign checked hourly and unchanged for a week was
+    #: printed as last checked a week ago.
+    #:
+    #: NULL on rows whose write path never re-checks anything, and NULL is the
+    #: whole point there: "we have not re-checked this" must not render as a
+    #: check that happened.
+    last_seen_at: datetime | None = None
 
     # --- campaign intelligence (PR1-PR5 columns, first exposed here) --------
     #

@@ -13,6 +13,7 @@ from fastapi import Response
 from app.api.v1 import kokpit, risks
 from app.repositories.kpi_repository import KpiRepository
 from app.services import cockpit_signals_service as svc
+from app.services import energy_service
 
 
 # --- The tables themselves ------------------------------------------------
@@ -318,16 +319,6 @@ def test_competitor_signal_adds_the_top_mover_only_when_it_actually_moved():
 # --- Helpers --------------------------------------------------------------
 
 
-def test_percentile_of_places_a_value_inside_its_own_series():
-    assert svc.percentile_of(5.0, [1.0, 2.0, 3.0, 4.0, 5.0]) == 100.0
-    assert svc.percentile_of(3.0, [1.0, 2.0, 3.0, 4.0, 5.0]) == 60.0
-    assert svc.percentile_of(0.5, [1.0, 2.0]) == 0.0
-
-
-def test_percentile_of_is_none_for_an_empty_series_never_a_defaulted_fifty():
-    assert svc.percentile_of(95.0, []) is None
-
-
 def test_turkish_number_formatting_uses_turkish_separators():
     assert svc.tr_number(1234.5, 2) == "1.234,50"
     assert svc.tr_number(41.7231, 2) == "41,72"
@@ -339,7 +330,16 @@ def test_turkish_number_formatting_uses_turkish_separators():
 # --- End to end through the endpoint -------------------------------------
 
 
-async def test_signals_endpoint_returns_all_four_tiles_on_an_empty_database(db_session):
+async def test_signals_endpoint_returns_all_four_tiles_on_an_empty_database(
+    db_session, monkeypatch
+):
+    # No provider on the request path in a test, and none needed: an empty
+    # series is exactly what an empty database should look like to this tile.
+    async def _no_history(*_args, **_kwargs):
+        return []
+
+    monkeypatch.setattr(energy_service, "fetch_history", _no_history)
+
     out = await kokpit.get_cockpit_signals(Response(), db_session)
     assert [signal.key for signal in out.signals] == ["fx", "fuel", "risk", "competitor"]
     # Nothing recorded: the market tiles must say so rather than read green.
@@ -352,12 +352,14 @@ async def test_signals_endpoint_returns_all_four_tiles_on_an_empty_database(db_s
 
 
 async def test_signals_endpoint_bands_a_real_usd_try_move(db_session, monkeypatch):
-    # No Yahoo call on the request path in tests: the fuel percentile degrades
-    # to "30-day move only", which is the outage path build_fuel_signal covers.
+    # No Yahoo call on the request path in tests. The fuel tile now reads its
+    # whole series through energy_service, so that is where the outage is
+    # simulated -- and with no series at all the tile is UNKNOWN, not a
+    # half-filled tile carrying a stored price.
     async def _no_history(*_args, **_kwargs):
         return []
 
-    monkeypatch.setattr(svc, "fetch_history", _no_history)
+    monkeypatch.setattr(energy_service, "fetch_history", _no_history)
 
     repo = KpiRepository(db_session)
     now = datetime.now(timezone.utc)
@@ -370,3 +372,125 @@ async def test_signals_endpoint_bands_a_real_usd_try_move(db_session, monkeypatc
     assert fx.level == svc.CRITICAL  # +10% over 30 days
     assert fx.value_label == "+%10,0"
     assert "44,00" in fx.reason_tr
+
+
+# --- One Brent, one series ------------------------------------------------
+#
+# The fuel tile and the "Yakıt & Enerji" panel print the same contract on the
+# same page. The tile used to band an intraday quote out of our KPI archive
+# against a WEEKLY year of closes (~52 points) while the panel placed the
+# published daily close inside a DAILY one (~250) -- two prices, two 30-day
+# moves and two percentiles for Brent, on one screen, with a module comment
+# claiming they could never disagree because they shared a `percentile_of`.
+#
+# The period is asserted directly, because it is the whole difference: the
+# function was always shared, the series was not.
+
+
+async def test_the_fuel_tile_reads_the_daily_close_series_not_the_weekly_one(
+    db_session, monkeypatch
+):
+    seen: list[tuple[str, str]] = []
+
+    async def spy_history(base_url, symbol, period):
+        seen.append((symbol, period))
+        return [
+            (datetime(2026, 8, 1, tzinfo=timezone.utc) + timedelta(days=i), 80.0 + i)
+            for i in range(31)
+        ]
+
+    monkeypatch.setattr(energy_service, "fetch_history", spy_history)
+
+    out = await kokpit.get_cockpit_signals(Response(), db_session)
+    fuel = next(signal for signal in out.signals if signal.key == "fuel")
+
+    assert ("BZ=F", energy_service.DAILY_CLOSE_PERIOD) in seen
+    assert energy_service.DAILY_CLOSE_PERIOD == "1y_daily"
+    # ...and never the weekly one, which is what the percentile used to use.
+    assert not any(period == "1y" for _, period in seen)
+    # The last CLOSE, not a stored quote.
+    assert fuel.value_label == "110,00 $"
+
+
+async def test_the_tile_and_the_panel_state_the_same_brent(db_session, monkeypatch):
+    """One number, two surfaces. The price, the 30-day move and the percentile
+    are all read off the same closes, so the tile cannot contradict the panel
+    the reader sees three inches below it."""
+    closes = [(datetime(2026, 6, 1, tzinfo=timezone.utc) + timedelta(days=i), 60.0 + i)
+              for i in range(120)]
+
+    async def fake_history(base_url, symbol, period):
+        return closes if symbol == "BZ=F" else []
+
+    monkeypatch.setattr(energy_service, "fetch_history", fake_history)
+
+    out = await kokpit.get_cockpit_signals(Response(), db_session)
+    fuel = next(signal for signal in out.signals if signal.key == "fuel")
+
+    panel = energy_service.indicators_from_history(closes)
+    assert fuel.value_label == f"{svc.tr_number(panel.value, 2)} $"
+    assert fuel.as_of == panel.as_of, "the close's own stamp, not our cron's"
+    assert svc.tr_percent(panel.percentile_1y, 0) in fuel.reason_tr
+    assert svc.tr_signed_percent(panel.month_change_pct) in fuel.reason_tr
+
+
+async def test_the_fuel_tile_does_not_link_to_a_page_fed_by_another_series(
+    db_session, monkeypatch
+):
+    """The cost of moving the tile onto the published closes, paid honestly.
+
+    The tile linked to /kpi/oil_price, and that was right while it read
+    `kpis.latest("oil_price")` -- the very row that page prints. It now reads
+    the daily CLOSE (energy_service.brent_indicators) while /kpi/oil_price
+    still prints the KPI archive, which is the intraday `regularMarketPrice`
+    the cron caught (kpi_service.py -> ingest/markets.fetch_quote). Mid-session
+    those are two prices with two `as_of`s for one contract, under one
+    "Yahoo Finance (BZ=F)" label, at the two ends of one link.
+
+    So there is no link. `source_url` still reaches the contract, and the same
+    close is on the same page in Market Pulse. Restoring an `href` is fine --
+    to a surface fed by THIS series.
+    """
+    closes = [(datetime(2026, 6, 1, tzinfo=timezone.utc) + timedelta(days=i), 60.0 + i)
+              for i in range(120)]
+
+    async def fake_history(base_url, symbol, period):
+        return closes if symbol == "BZ=F" else []
+
+    monkeypatch.setattr(energy_service, "fetch_history", fake_history)
+
+    out = await kokpit.get_cockpit_signals(Response(), db_session)
+    fuel = next(signal for signal in out.signals if signal.key == "fuel")
+
+    assert fuel.href is None
+    # The contract is still reachable -- what is gone is the in-app page that
+    # would have answered with a different number.
+    assert fuel.source_url == "https://finance.yahoo.com/quote/BZ=F"
+    # And the tile is still stating the close, not the archived quote.
+    assert fuel.value_label == f"{svc.tr_number(energy_service.indicators_from_history(closes).value, 2)} $"
+
+
+async def test_a_stored_kpi_quote_no_longer_reaches_the_fuel_tile(
+    db_session, monkeypatch
+):
+    """The negative half. With the published series unavailable the tile says
+    "Veri yok" -- it does not fall back to the KPI archive's intraday quote and
+    print it beside a panel that is showing "—"."""
+
+    async def dead_history(*_args, **_kwargs):
+        return []
+
+    monkeypatch.setattr(energy_service, "fetch_history", dead_history)
+
+    repo = KpiRepository(db_session)
+    now = datetime.now(timezone.utc)
+    repo.record("oil_price", 70.0, "$/bbl", "Yahoo Finance (BZ=F)", False, now - timedelta(days=31))
+    repo.record("oil_price", 88.0, "$/bbl", "Yahoo Finance (BZ=F)", False, now)
+    await db_session.commit()
+
+    out = await kokpit.get_cockpit_signals(Response(), db_session)
+    fuel = next(signal for signal in out.signals if signal.key == "fuel")
+
+    assert fuel.level == svc.UNKNOWN
+    assert fuel.value_label == "—"
+    assert "88" not in fuel.reason_tr

@@ -7,9 +7,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test": "TZ=Europe/Istanbul vitest run",
+    "test:watch": "TZ=Europe/Istanbul vitest",
+    "test:coverage": "TZ=Europe/Istanbul vitest run --coverage"
   },
   "dependencies": {
     "@base-ui/react": "^1.6.0",

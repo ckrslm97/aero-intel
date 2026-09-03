@@ -28,11 +28,20 @@ from app.services.insights_service import destination_airports
 
 
 async def network_signals(
-    db: AsyncSession, days: int = 30, per_region: int = 6, max_events: int = 120
+    db: AsyncSession,
+    days: int = 30,
+    per_region: int = 6,
+    max_events: int = 120,
+    now: datetime | None = None,
 ) -> list[dict]:
     """New-route events grouped by world region, with the primary article
-    behind each one -- the same cited-list contract as the v1 version."""
-    since = datetime.now(timezone.utc) - timedelta(days=days)
+    behind each one -- the same cited-list contract as the v1 version.
+
+    `now` is the window's anchor, passed in by a caller that has to state the
+    window it served (/hubs/network-signals' envelope, and /biz, which cuts
+    four sections to one instant). Defaulted, so nothing else changes.
+    """
+    since = (now or datetime.now(timezone.utc)) - timedelta(days=days)
     events = (
         await db.execute(
             select(NewsEvent)

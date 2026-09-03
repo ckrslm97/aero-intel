@@ -42,6 +42,13 @@ async def fetch_quote(base_url: str, symbol: str) -> float | None:
 # closes to compute a percentile, a year-to-date change and a 30-day
 # volatility from a single fetch. The plain "1y" is weekly, and a 30-day
 # volatility over four weekly points is not a volatility.
+#
+# It is also, since the fuel tile was bound to `brent_indicators()`, the ONLY
+# period any Brent percentile in this app is taken over. Kokpit's signal tile
+# used to place today's Brent in the weekly year while the energy panel placed
+# it in the daily one -- ~52 closes against ~250, two percentiles for one
+# contract on one screen. A caller reaching for the plain "1y" to place a value
+# is almost certainly recreating that split.
 HISTORY_RANGES: dict[str, tuple[str, str]] = {
     "1w": ("5d", "15m"),
     "1m": ("1mo", "1d"),

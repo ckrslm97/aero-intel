@@ -5,11 +5,15 @@ from datetime import datetime, timedelta, timezone
 
 from app.models.article import Article, ArticleEnrichment
 from app.models.entity import ArticleEntity, Entity
+from app.models.insight import InsightDigest
 from app.services.insights_service import (
+    DIGEST_MAX_AGE_DAYS,
     airline_momentum,
     build_daily_digest,
+    latest_digest,
     new_route_signals,
 )
+from app.services.tk_service import latest_tk_digest
 
 NOW = datetime.now(timezone.utc)
 
@@ -122,3 +126,87 @@ async def test_digest_falls_back_to_deterministic_turkish_without_llm(db_session
     again = await build_daily_digest(db_session)
     assert again.id == digest.id
     get_settings.cache_clear()
+
+
+# --- the digest's age -------------------------------------------------------
+#
+# `latest_digest` returned the newest row with no age bound at all, so a
+# stopped job left last week's paragraph on the paper under a heading that says
+# TODAY'S INTELLIGENCE -- beside aggregates recomputed live on every request.
+# Both directions are pinned: a current digest is served, a stale one is not,
+# and the caller whose surface makes no freshness claim keeps its own.
+
+
+async def _digest(db, *, days_ago: int, topic: str = "daily", body: str = "gövde"):
+    row = InsightDigest(
+        # The UTC calendar day, because that is the day both sides of this
+        # boundary use: `build_daily_digest` writes `datetime.now(timezone.utc)
+        # .date()` and `latest_digest` cuts on it. `date.today()` is the LOCAL
+        # day, which after 21:00 in UTC+3 is already tomorrow's -- a row one
+        # day younger than this fixture claims, and a test whose edge moves
+        # with the hour it is run at.
+        digest_date=datetime.now(timezone.utc).date() - timedelta(days=days_ago),
+        topic=topic,
+        body=body,
+        provider="heuristic",
+    )
+    db.add(row)
+    await db.flush()
+    return row
+
+
+async def test_a_digest_from_five_days_ago_is_not_todays_intelligence(db_session):
+    await _digest(db_session, days_ago=5)
+    assert await latest_digest(db_session) is None
+
+
+async def test_the_age_bound_is_exactly_where_it_says_it_is(db_session):
+    """Both sides of the real edge, which no other test in this block touched.
+
+    The cases below use 0, 1 and 5 days, so DIGEST_MAX_AGE_DAYS could be
+    anything from 2 to 4 and every one of them would pass. The boundary is the
+    claim -- "two days" is the number the heading TODAY'S INTELLIGENCE is
+    allowed to stretch to -- so it is asserted from both sides.
+    """
+    row = await _digest(db_session, days_ago=DIGEST_MAX_AGE_DAYS)
+    served = await latest_digest(db_session)
+    assert served is not None and served.id == row.id
+
+
+async def test_one_day_past_the_bound_is_not_todays_intelligence(db_session):
+    await _digest(db_session, days_ago=DIGEST_MAX_AGE_DAYS + 1)
+    assert await latest_digest(db_session) is None
+
+
+async def test_todays_digest_is_served(db_session):
+    row = await _digest(db_session, days_ago=0)
+    served = await latest_digest(db_session)
+    assert served is not None and served.id == row.id
+
+
+async def test_yesterdays_digest_survives_a_job_that_has_not_run_yet(db_session):
+    """The reason the bound is two days and not zero: the job writes in the
+    morning, and a reader before it runs must still get the last paragraph."""
+    row = await _digest(db_session, days_ago=1)
+    served = await latest_digest(db_session)
+    assert served is not None and served.id == row.id
+
+
+async def test_a_stale_digest_does_not_hide_behind_a_fresh_one_of_another_topic(
+    db_session,
+):
+    """The age filter must not become a topic filter by accident: a fresh TK
+    digest is no evidence that the daily one ran."""
+    await _digest(db_session, days_ago=0, topic="tk_reviews")
+    await _digest(db_session, days_ago=9, topic="daily")
+    assert await latest_digest(db_session) is None
+
+
+async def test_the_bound_can_be_lifted_by_a_caller_that_claims_no_freshness(
+    db_session,
+):
+    """`latest_tk_digest`'s case: a manually curated corpus re-collected in
+    explicit passes, rendered with its own date and no "today" over it."""
+    row = await _digest(db_session, days_ago=40, topic="tk_reviews")
+    served = await latest_tk_digest(db_session)
+    assert served is not None and served.id == row.id

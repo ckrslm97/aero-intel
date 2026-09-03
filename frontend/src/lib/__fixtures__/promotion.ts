@@ -25,6 +25,10 @@ export function promotion(overrides: Partial<PromotionOut> = {}): PromotionOut {
     source_name: "Rakip Kampanya Takibi",
     region: null,
     detected_at: "2026-08-20T09:00:00Z",
+    // Both null by default, like the legacy rows: no source document was
+    // recorded, and nothing ever re-checked the row.
+    source_published_at: null,
+    last_seen_at: null,
     sale_range_tr: "Belirtilmedi",
     travel_range_tr: "Belirtilmedi",
     status: "UNKNOWN",

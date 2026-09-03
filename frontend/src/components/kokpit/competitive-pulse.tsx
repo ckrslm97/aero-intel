@@ -9,9 +9,15 @@ import { Delta } from "@/components/ui/delta";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDataSource } from "@/hooks/use-data-source";
 import { apiFetch } from "@/lib/api";
+import { regionsOf } from "@/lib/network-signals";
 import { worldRegions } from "@/lib/nav";
 import { RIVAL_CODES } from "@/lib/taxonomy.gen";
-import type { InsightsOut, NetworkSignalGroup, PromotionNewCountOut } from "@/lib/types";
+import type {
+  InsightsOut,
+  NetworkSignalGroup,
+  NetworkSignalsOut,
+  PromotionNewCountOut,
+} from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const REGION_NAME = new Map<string, string>(
@@ -114,7 +120,7 @@ export function CompetitivePulse() {
   );
   const routesFetcher = useCallback(
     (signal: AbortSignal) =>
-      apiFetch<NetworkSignalGroup[]>("/hubs/network-signals?days=30", {
+      apiFetch<NetworkSignalsOut | NetworkSignalGroup[]>("/hubs/network-signals?days=30", {
         cache: "default",
         signal,
       }),
@@ -131,7 +137,11 @@ export function CompetitivePulse() {
   // nothing" from "it returned rows and no rival moved".
   const rivalMomentum = momentum.filter((mover) => RIVAL_CODE_SET.has(mover.code));
   const movers = rivalMomentum.filter((mover) => mover.delta !== 0).slice(0, 3);
-  const routeGroups = routes.data ?? [];
+  // `regionsOf`, not `.regions`: the edge can still hand this new code the
+  // pre-envelope array for the length of one cache lifetime (lib/network-
+  // signals.ts). `?? []` only after that, and only because the cell below
+  // separately distinguishes "never answered" via `routes.loaded`/`routes.data`.
+  const routeGroups = regionsOf(routes.data) ?? [];
   const routeTotal = routeGroups.reduce((sum, group) => sum + group.count, 0);
   const firstRoute = routeGroups.find((group) => group.articles.length > 0);
 

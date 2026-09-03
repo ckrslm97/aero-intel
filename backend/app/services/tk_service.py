@@ -38,7 +38,16 @@ def _quote_dict(review: TkReview) -> dict:
 
 async def review_stats(db: AsyncSession, quote_limit: int = 12) -> dict:
     """The full BİZ-page aggregate: rating summary, sentiment split, theme
-    breakdown (each with a sample quote), source mix, and recent quotes."""
+    breakdown (each with a sample quote), source mix, recent quotes -- and
+    `collected_through`, the corpus's own age.
+
+    That last one is not decoration. The page's footnote used to read
+    "Toplama tarihi: 19 Temmuz 2026" as a HARD-CODED string, so it said July
+    forever: correct on the day it was typed and a lie on every day since,
+    including after each curation pass added rows. The rows carry the answer
+    (`created_at`, from TimestampMixin), so the page can print the corpus's real
+    edge instead of a sentence nobody remembers to edit.
+    """
     reviews = (
         (
             await db.execute(
@@ -82,8 +91,16 @@ async def review_stats(db: AsyncSession, quote_limit: int = 12) -> dict:
     ]
     themes.sort(key=lambda t: -t["count"])
 
+    # MAX(created_at) over the rows we just read, not a second query and not
+    # now(): "collected through" is a fact about the corpus, so it is read off
+    # the corpus. None on an empty table -- nothing has been collected, which
+    # is not the same claim as "collected up to today" and must not render as
+    # one.
+    collected = [r.created_at for r in reviews if r.created_at is not None]
+
     return {
         "review_count": len(reviews),
+        "collected_through": max(collected).isoformat() if collected else None,
         "rating": {
             "average": round(sum(rated) / len(rated), 1) if rated else None,
             "count": len(rated),
@@ -175,4 +192,17 @@ async def build_tk_digest(db: AsyncSession) -> InsightDigest:
 
 
 async def latest_tk_digest(db: AsyncSession) -> InsightDigest | None:
-    return await latest_digest(db, topic=TK_DIGEST_TOPIC)
+    """Unbounded on purpose -- the one caller that lifts `latest_digest`'s age
+    limit, and it has to say why.
+
+    The daily digest is bounded because it is printed under a heading that says
+    TODAY and narrates a rolling 7-day window. This one is neither: it
+    synthesises a manually curated review corpus that is re-collected in
+    explicit passes (models/tk_review.py: there is no scheduled scraper), and
+    the BİZ page renders it with its own generation date beside it and no
+    freshness claim over it. Expiring it would blank the block for weeks
+    between curation passes -- deleting a paragraph that is still exactly as
+    true as the corpus it describes, whose own age the page now prints as
+    `collected_through`.
+    """
+    return await latest_digest(db, topic=TK_DIGEST_TOPIC, max_age_days=None)

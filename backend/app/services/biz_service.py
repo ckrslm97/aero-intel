@@ -55,8 +55,10 @@ STRATEGIC_CATEGORIES: tuple[str, ...] = ("finance", "fleet", "sustainability", "
 PUBLISHABLE_BANDS = ("high", "medium")
 
 
-def _since(days: int) -> datetime:
-    return datetime.now(timezone.utc) - timedelta(days=days)
+def _since(days: int, now: datetime | None = None) -> datetime:
+    """The window's near edge. `now` is the caller's anchor when the caller
+    has to report the window it served -- see `biz_overview`."""
+    return (now or datetime.now(timezone.utc)) - timedelta(days=days)
 
 
 def _event_payload(event: NewsEvent) -> dict:
@@ -86,7 +88,9 @@ def _section(items: list) -> dict:
 RIVAL_EVENT_CAP = 10
 
 
-async def competitor_signals(db: AsyncSession, days: int = 30) -> list[dict]:
+async def competitor_signals(
+    db: AsyncSession, days: int = 30, now: datetime | None = None
+) -> list[dict]:
     """Published events about each watched rival, most-covered rival first.
     An event with no coverage of any rival in the window contributes nothing
     -- rivals with zero events in the window are simply absent, not shown
@@ -106,7 +110,7 @@ async def competitor_signals(db: AsyncSession, days: int = 30) -> list[dict]:
     from_rival_events) prints this `count` verbatim and inherits the fix
     rather than carrying a second copy of it.
     """
-    since = _since(days)
+    since = _since(days, now)
     out: list[dict] = []
     for code, name in RIVAL_CARRIERS:
         mentions = (
@@ -163,7 +167,9 @@ async def competitor_signals(db: AsyncSession, days: int = 30) -> list[dict]:
     return out
 
 
-async def strategic_developments(db: AsyncSession, days: int = 30) -> list[dict]:
+async def strategic_developments(
+    db: AsyncSession, days: int = 30, now: datetime | None = None
+) -> list[dict]:
     rows = (
         await db.execute(
             select(NewsEvent)
@@ -172,7 +178,7 @@ async def strategic_developments(db: AsyncSession, days: int = 30) -> list[dict]
                 NewsEvent.is_published.is_(True),
                 NewsEvent.confidence_band.in_(PUBLISHABLE_BANDS),
                 NewsEvent.superseded_at.is_(None),
-                NewsEvent.last_seen >= _since(days),
+                NewsEvent.last_seen >= _since(days, now),
             )
             .order_by(NewsEvent.last_seen.desc())
             .limit(30)
@@ -181,13 +187,31 @@ async def strategic_developments(db: AsyncSession, days: int = 30) -> list[dict]
     return [_event_payload(e) for e in rows]
 
 
-async def biz_overview(db: AsyncSession, days: int = 30) -> dict:
-    competitors = await competitor_signals(db, days=days)
-    network = await network_signals(db, days=days)
-    commercial = await build_recommendations(db, days=days)
-    strategic = await strategic_developments(db, days=days)
+async def biz_overview(db: AsyncSession, days: int = 30, now: datetime | None = None) -> dict:
+    """The four BİZ sections, cut to ONE instant.
+
+    `now` is threaded into all four rather than left to each: they are four
+    sequential reads, so without an anchor the last section's window starts
+    later than the first's, and the page's `generated_at` matches none of them.
+    The differences are small and the claim is not.
+
+    ONE INSTANT, NOT ONE WINDOW. Three sections are cut to `days` from this
+    anchor; `commercial_signals` is `build_recommendations`, which runs its
+    review themes four times wider and its event items FORWARD of today. The
+    endpoint therefore publishes `windows` per section rather than a single
+    `window` -- see app/api/v1/biz.py and
+    services/recommendations.recommendation_windows.
+    """
+    anchor = now or datetime.now(timezone.utc)
+    competitors = await competitor_signals(db, days=days, now=anchor)
+    network = await network_signals(db, days=days, now=anchor)
+    commercial = await build_recommendations(db, days=days, now=anchor)
+    strategic = await strategic_developments(db, days=days, now=anchor)
 
     return {
+        # `generated_at`/`window` are added by the endpoint, which owns the
+        # envelope shape -- but from THIS anchor, handed to it by the caller,
+        # so the stamp names the instant these four queries were cut at.
         "days": days,
         "competitor_signals": _section(competitors),
         # network_signals() already groups by region with its own non-empty
