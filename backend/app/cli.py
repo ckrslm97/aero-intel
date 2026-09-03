@@ -470,6 +470,80 @@ async def _backfill_campaign_classes() -> None:
         )
 
 
+async def _backfill_campaign_kind(dry_run: bool) -> None:
+    """Fill `promotions.campaign_kind` from `campaign_type` for every row that
+    has a type but no kind.
+
+    The living half of the migration that introduced the column: that
+    migration carries a frozen snapshot of the mapping (history must not
+    change), while this re-derives from `app/taxonomy.py` as it is today. Run
+    it after adding a campaign type or moving one between kinds. Idempotent --
+    a second run reports zero work rather than doing damage -- and heuristic:
+    no LLM, no network.
+    """
+    from sqlalchemy import select
+
+    from app.models.promotion import Promotion
+    from app.taxonomy import campaign_kind_for
+
+    async with AsyncSessionLocal() as db:
+        rows = (
+            (
+                await db.execute(
+                    select(Promotion).where(Promotion.campaign_type.isnot(None))
+                )
+            )
+            .scalars()
+            .all()
+        )
+        filled: dict[str, int] = {}
+        moved = 0
+        for row in rows:
+            kind = campaign_kind_for(
+                row.campaign_type,
+                promo_code=(row.attrs_json or {}).get("promo_code"),
+                sales_channel=(row.attrs_json or {}).get("sales_channel"),
+            )
+            if kind is None or kind == row.campaign_kind:
+                continue
+            if row.campaign_kind is not None:
+                moved += 1
+            row.campaign_kind = kind
+            filled[kind] = filled.get(kind, 0) + 1
+        if dry_run:
+            await db.rollback()
+        else:
+            await db.commit()
+
+        breakdown = ", ".join(f"{name}: {count}" for name, count in sorted(filled.items()))
+        prefix = "[kuru çalıştırma] " if dry_run else ""
+        print(
+            f"{prefix}Türü olan kampanya satırı: {len(rows)} — "
+            f"yazılan campaign_kind {sum(filled.values())}"
+            + (f" ({breakdown})" if breakdown else "")
+            + (f", türü değiştiği için taşınan {moved}" if moved else "")
+        )
+
+
+async def _campaign_quality_report(days: int | None) -> None:
+    """§45's data-quality report: what the last window's sweep discovered,
+    extracted, validated and rejected, with the rejection reasons broken out.
+
+    Read-only, so it is safe against production while a scan is running.
+    """
+    from app.services.campaign_quality import (
+        DEFAULT_WINDOW_DAYS,
+        campaign_quality_report,
+        render_report_tr,
+    )
+
+    async with AsyncSessionLocal() as db:
+        report = await campaign_quality_report(
+            db, days=days if days is not None else DEFAULT_WINDOW_DAYS
+        )
+    print(render_report_tr(report))
+
+
 async def _purge_blacklisted_articles(dry_run: bool) -> None:
     """Retire archived articles from blacklisted domains (Reddit).
 
@@ -820,13 +894,18 @@ def main() -> None:
             "check-data-quality",
             "mark-legacy-campaigns-superseded",
             "backfill-campaign-classes",
+            "backfill-campaign-kind",
+            "campaign-quality-report",
             "purge-blacklisted-articles",
         ],
     )
     parser.add_argument(
         "--days",
         type=int,
-        help="re-enrich: only articles fetched in the last N days (default: all)",
+        help=(
+            "re-enrich: only articles fetched in the last N days (default: all). "
+            "campaign-quality-report: reporting window in days (default: 7)"
+        ),
     )
     parser.add_argument(
         "--full-surface",
@@ -884,7 +963,8 @@ def main() -> None:
             "changed pages to extraction. The bot-wall go/no-go gate -- the run "
             "log is written either way, which is what makes the gate readable. "
             "purge-blacklisted-articles: count the matching rows and write "
-            "nothing, so the blast radius is knowable before it is applied."
+            "nothing, so the blast radius is knowable before it is applied. "
+            "backfill-campaign-kind: report what it would write and roll back."
         ),
     )
     parser.add_argument(
@@ -981,6 +1061,13 @@ def main() -> None:
         asyncio.run(_mark_legacy_campaigns_superseded())
     elif args.command == "backfill-campaign-classes":
         asyncio.run(_backfill_campaign_classes())
+    elif args.command == "backfill-campaign-kind":
+        asyncio.run(_backfill_campaign_kind(args.dry_run))
+    elif args.command == "campaign-quality-report":
+        # --days reuses the shared window flag; absent means the service's own
+        # 7-day default rather than "everything", because a report over all
+        # time would describe the pipeline's history, not its health.
+        asyncio.run(_campaign_quality_report(args.days))
     elif args.command == "purge-blacklisted-articles":
         asyncio.run(_purge_blacklisted_articles(args.dry_run))
 

@@ -66,6 +66,48 @@ class Promotion(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     travel_starts: Mapped[date | None] = mapped_column(Date, nullable=True)
     travel_ends: Mapped[date | None] = mapped_column(Date, nullable=True)
 
+    # --- the two windows a page states separately, when it states them -------
+    #
+    # Airline copy sometimes distinguishes three things where the two columns
+    # above only have room for two:
+    #
+    #   "Kampanya 1-15 Eylül tarihleri arasındadır. Biletlemenin 20 Eylül'e
+    #    kadar tamamlanması gerekmektedir. 1 Ekim - 31 Aralık arasında
+    #    seyahat edilebilir."
+    #
+    # The campaign runs 1-15 September, ticketing may be completed until 20
+    # September, travel is October-December. Folded into two columns that reads
+    # as one 1-20 September sale window, which is a claim neither sentence
+    # makes.
+    #
+    # **What did NOT change, and why.** `sale_starts`/`sale_ends` remain the
+    # SALE / RESERVATION window -- when a ticket can be bought -- exactly as
+    # they always have. Renaming them to `booking_*` would have been the
+    # tidier schema and was rejected: three writer paths and a four-figure test
+    # suite are written against those names, `campaign_status()` reads them,
+    # the timeline draws them, and the export ships them as `booking_start` /
+    # `booking_end` to analysts' spreadsheets. A rename buys a better name and
+    # costs a migration nobody can review.
+    #
+    # **When these four are written.** ONLY when the source states that window
+    # *separately and explicitly*. A page that gives one window is giving the
+    # sale window: it goes in `sale_*` and all four columns below stay NULL.
+    # There is no inference, no copying `sale_ends` into `ticketing_end`, and
+    # no defaulting -- NULL here means "the source did not state a separate
+    # window", never "same as the sale window". `date_flags_json.explicit_dates`
+    # records which edges were stated outright, so a reader can tell a stated
+    # window from an absent one without re-reading the page.
+
+    #: When the booked ticket has to be ISSUED/paid for. Distinct from the sale
+    #: window on carriers that let you hold a reservation and pay later, which
+    #: is precisely when the two dates differ and the difference is a deadline.
+    ticketing_start: Mapped[date | None] = mapped_column(Date, nullable=True)
+    ticketing_end: Mapped[date | None] = mapped_column(Date, nullable=True)
+    #: The campaign's own announced run, when the page names one on top of the
+    #: sale window -- "kampanya dönemi", "campaign period", "offer valid".
+    campaign_start: Mapped[date | None] = mapped_column(Date, nullable=True)
+    campaign_end: Mapped[date | None] = mapped_column(Date, nullable=True)
+
     # Idempotency key, same convention as aviation_events.url: the campaign
     # page for a scraped row, the article URL for an article-derived one.
     url: Mapped[str] = mapped_column(String(500), unique=True)
@@ -130,6 +172,22 @@ class Promotion(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     #: and growing it should be a code change rather than a migration holding a
     #: lock on the table.
     campaign_type: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+
+    #: CAMPAIGN (the offer is a price) or PROMOTION (the offer is a mechanism,
+    #: a channel or an audience). Derived from `campaign_type` through
+    #: taxonomy.CAMPAIGN_TYPE_TO_KIND, never detected separately -- see that
+    #: table for why a second detector could only introduce disagreement.
+    #:
+    #: Stored rather than computed, which is the opposite call from `status`
+    #: two paragraphs down, and for the opposite reason: a kind is a pure
+    #: function of a *column* and so cannot go stale, while a status is a
+    #: function of the clock and goes stale every midnight. Storing it is what
+    #: lets the analyst list filter on it in SQL instead of re-deriving 27
+    #: cases per row per query.
+    #:
+    #: NULL means undecidable -- an unclassified legacy row, or a row typed
+    #: OTHER, where guessing a bucket would be worse than an empty cell.
+    campaign_kind: Mapped[str | None] = mapped_column(String(12), nullable=True, index=True)
 
     #: The false-positive gate: ACTIVE_CAMPAIGN / EVERGREEN_OFFER / NEWS_ONLY /
     #: PRODUCT_PROMOTION / LOYALTY_PROMOTION. 55% of what this table once

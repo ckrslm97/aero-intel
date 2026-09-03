@@ -80,7 +80,7 @@ from app.schemas.campaign import (
     extract_campaign_json,
     parse_campaign_payload,
 )
-from app.taxonomy import COUNTRY_TO_REGION, REGION_LABELS_TR
+from app.taxonomy import COUNTRY_TO_REGION, REGION_LABELS_TR, campaign_kind_for
 
 logger = get_logger(__name__)
 
@@ -569,7 +569,29 @@ def verify_dates(item: RawCampaignItem, page_text: str, *, default_year: int) ->
         verdict.flags["inferred_year_fields"] = inferred_fields
 
     _drop_reversed_windows(verdict)
+    _flag_explicit_dates(verdict)
     return verdict
+
+
+def _flag_explicit_dates(verdict: DateVerdict) -> None:
+    """Record which edges the source actually stated, in `date_flags_json`.
+
+    The four date columns cannot answer this on their own: a NULL
+    `ticketing_end` and a NULL `campaign_end` look identical whether the page
+    was silent or the value was rejected as uncorroborated, and a populated
+    `sale_ends` looks identical whether the page wrote it or the year had to be
+    completed from the scan date. `explicit_dates` is the positive list -- the
+    edges that survived verification and therefore came from the page -- so a
+    reader (and the quality report) can tell "not stated" from "not believed"
+    without re-reading `evidence_json` entry by entry.
+
+    Deliberately a list of the *present* fields rather than a map of every
+    field to a boolean: the absent ones are absent, and writing `false` eight
+    times per row would make a mostly-empty object look like a measurement.
+    """
+    explicit = [name for name in DATE_FIELDS if verdict.values.get(name) is not None]
+    if explicit:
+        verdict.flags["explicit_dates"] = explicit
 
 
 def _drop_reversed_windows(verdict: DateVerdict) -> None:
@@ -579,7 +601,12 @@ def _drop_reversed_windows(verdict: DateVerdict) -> None:
     model misread, and keeping the "plausible-looking" half would publish a
     date chosen by a coin flip.
     """
-    for start_field, end_field in (("booking_start", "booking_end"), ("travel_start", "travel_end")):
+    for start_field, end_field in (
+        ("booking_start", "booking_end"),
+        ("travel_start", "travel_end"),
+        ("ticketing_start", "ticketing_end"),
+        ("campaign_start", "campaign_end"),
+    ):
         start, end = verdict.values.get(start_field), verdict.values.get(end_field)
         if start and end and end < start:
             for name in (start_field, end_field):
@@ -623,6 +650,27 @@ class ExtractedCampaign:
     content_hash: str | None
     source_name: str
     detected_at: datetime
+
+    # --- added after the fact, hence the defaults -------------------------
+    #
+    # Trailing and defaulted rather than slotted in beside the fields they
+    # belong with: this dataclass is constructed by keyword everywhere, and a
+    # defaulted field in the middle would force a default onto every field
+    # after it.
+
+    #: CAMPAIGN | PROMOTION | None, derived from `campaign_type` through
+    #: taxonomy.campaign_kind_for. Carried here rather than re-derived at each
+    #: write site, so the inserted row, the refreshed row and the dedup
+    #: candidate cannot disagree about one campaign's kind.
+    campaign_kind: str | None = None
+
+    #: The two windows a page states *separately* from the sale window. Null is
+    #: the normal answer; see models/promotion.py for why nothing is ever
+    #: copied into them.
+    ticketing_start: date | None = None
+    ticketing_end: date | None = None
+    campaign_start: date | None = None
+    campaign_end: date | None = None
 
     @property
     def has_sale_window(self) -> bool:
@@ -995,7 +1043,18 @@ async def extract_campaigns_from_page(
                 # said about dates the deterministic parser could confirm.
                 signal_agreement=verdict.agreement,
                 source_count=1,
+                # This page is on the carrier's own domain, so the answer is
+                # the same one `_file_page_source` writes as the source tier --
+                # read from `source_tier` rather than restated, so a demoted
+                # page cannot be official here and secondary there.
+                official_verified=source_tier == "official",
             )
+        )
+        # The model's own type wins; the rule layer only fills a gap. Today
+        # that gap is the ancillary offer tied to a flight purchase, which the
+        # PRODUCT rule used to reject and now publishes under its own type.
+        campaign_type = item.campaign_type or rule_verdict.details.get(
+            "campaign_type_override"
         )
 
         campaigns.append(
@@ -1005,7 +1064,12 @@ async def extract_campaigns_from_page(
                 carrier_code=carrier.code,
                 carrier_name=carrier.display_name,
                 summary_tr=_summary_for(item, verdict.values),
-                campaign_type=item.campaign_type,
+                campaign_type=campaign_type,
+                campaign_kind=campaign_kind_for(
+                    campaign_type,
+                    promo_code=item.promo_code,
+                    sales_channel=item.sales_channel,
+                ),
                 business_class=rule_verdict.details.get("business_class") or "ACTIVE_CAMPAIGN",
                 classification_reason=_reason_with_evidence(
                     rule_verdict.details.get("classification_reason") or "", route, verdict
@@ -1019,6 +1083,13 @@ async def extract_campaigns_from_page(
                 sale_ends=verdict.values.get("booking_end"),
                 travel_starts=verdict.values.get("travel_start"),
                 travel_ends=verdict.values.get("travel_end"),
+                # These four are named the same on both sides because there is
+                # nothing to translate: they exist only when the page states
+                # them, and it states them in these words.
+                ticketing_start=verdict.values.get("ticketing_start"),
+                ticketing_end=verdict.values.get("ticketing_end"),
+                campaign_start=verdict.values.get("campaign_start"),
+                campaign_end=verdict.values.get("campaign_end"),
                 route=route,
                 attrs_json={
                     key: value
@@ -1312,6 +1383,17 @@ def build_structured_campaign(
         flags["inferred_year"] = True
         flags["inferred_year_fields"] = inferred_fields
 
+    # Same positive list the LLM path writes (`_flag_explicit_dates`). A
+    # structured feed states its windows in labelled fields, so everything it
+    # gave us is explicit by construction -- and everything it did not give us
+    # stays absent rather than being inferred from the other window. Note that
+    # a feed calling its one window "TicketingDates" (AJet) is still stating
+    # the *sale* window: it is when a ticket may be bought, which is what that
+    # column has always meant.
+    explicit = [name for name in DATE_FIELDS if values.get(name) is not None]
+    if explicit:
+        flags["explicit_dates"] = explicit
+
     completeness = 0
     if booking_start or booking_end:
         completeness += 1
@@ -1320,14 +1402,16 @@ def build_structured_campaign(
     if entry.discount_pct is not None or entry.price_floor is not None or entry.promo_code:
         completeness += 1
 
+    structured_tier = "official" if source_quality >= 0.9 else "trade"
     confidence = score(
         ConfidenceInput(
-            source_tier="official" if source_quality >= 0.9 else "trade",
+            source_tier=structured_tier,
             classifier_certainty=1.0,
             required_fields_present=completeness,
             required_fields_total=len(REQUIRED_FIELDS),
             signal_agreement=None,
             source_count=1,
+            official_verified=structured_tier == "official",
         )
     )
 
@@ -1363,6 +1447,10 @@ def build_structured_campaign(
                 extra=entry.summary_prefix,
             ),
             campaign_type=entry.campaign_type,
+            campaign_kind=campaign_kind_for(
+                entry.campaign_type,
+                promo_code=entry.promo_code,
+            ),
             business_class=business_class,
             classification_reason=_reason_with_evidence(
                 classification_reason, route, DateVerdict()
@@ -1438,11 +1526,19 @@ def candidate_for(extracted: ExtractedCampaign) -> PromoCandidate:
 #: paragraphs of JSON side by side would not answer that.
 VERSIONED_V2_COLUMNS: tuple[str, ...] = (
     "campaign_type",
+    "campaign_kind",
     "business_class",
     "route_scope",
     "ond",
     "origin_code",
     "dest_code",
+    # A carrier moving its ticketing deadline is exactly the kind of edit a
+    # revenue desk reads this timeline for, so these version like the sale
+    # window does rather than like a blob.
+    "ticketing_start",
+    "ticketing_end",
+    "campaign_start",
+    "campaign_end",
 )
 
 
@@ -1470,6 +1566,11 @@ def _refresh_row(
     changed: dict[str, dict] = {}
     for column, value in (
         ("campaign_type", extracted.campaign_type),
+        ("campaign_kind", extracted.campaign_kind),
+        ("ticketing_start", extracted.ticketing_start),
+        ("ticketing_end", extracted.ticketing_end),
+        ("campaign_start", extracted.campaign_start),
+        ("campaign_end", extracted.campaign_end),
         ("business_class", extracted.business_class),
         ("route_scope", extracted.route.scope),
         ("ond", extracted.route.ond),
@@ -1618,6 +1719,10 @@ def build_promotion_from_page(extracted: ExtractedCampaign) -> Promotion:
         sale_ends=extracted.sale_ends,
         travel_starts=extracted.travel_starts,
         travel_ends=extracted.travel_ends,
+        ticketing_start=extracted.ticketing_start,
+        ticketing_end=extracted.ticketing_end,
+        campaign_start=extracted.campaign_start,
+        campaign_end=extracted.campaign_end,
         url=extracted.url[:500],
         source_name=extracted.source_name,
         region=candidate.region,
@@ -1627,6 +1732,7 @@ def build_promotion_from_page(extracted: ExtractedCampaign) -> Promotion:
         confidence_detail=extracted.confidence_detail,
         detected_at=extracted.detected_at,
         campaign_type=extracted.campaign_type,
+        campaign_kind=extracted.campaign_kind,
         business_class=extracted.business_class,
         route_scope=extracted.route.scope,
         ond=extracted.route.ond,

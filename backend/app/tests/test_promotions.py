@@ -246,23 +246,31 @@ async def _list(db, **kwargs):
         date_from=kwargs.pop("date_from", None),
         date_to=kwargs.pop("date_to", None),
         days=kwargs.pop("days", None),
+        include_expired=kwargs.pop("include_expired", False),
         response=Response(),
         db=db,
     )
 
 
 async def test_dated_window_is_filtered_on_its_real_edges(db_session):
+    # `include_expired` because this campaign's window is a fixed date in the
+    # past, and the default list now hides expired campaigns. What is under
+    # test here is which rows the date_from/date_to *window* selects, so the
+    # expiry layer is switched off rather than dated around -- moving the
+    # fixture into the future would make the same assertions stop testing the
+    # "ends before the window opens" edge at all.
     await _promo(
         db_session,
         slug="spring",
         sale_starts=date(2026, 3, 1),
         sale_ends=date(2026, 3, 31),
     )
-    assert len(await _list(db_session, date_from=date(2026, 3, 15))) == 1
+    rows = await _list(db_session, date_from=date(2026, 3, 15), include_expired=True)
+    assert len(rows) == 1
     # Ends before the window opens.
-    assert await _list(db_session, date_from=date(2026, 4, 1)) == []
+    assert await _list(db_session, date_from=date(2026, 4, 1), include_expired=True) == []
     # Starts after the window closes.
-    assert await _list(db_session, date_to=date(2026, 2, 1)) == []
+    assert await _list(db_session, date_to=date(2026, 2, 1), include_expired=True) == []
 
 
 async def test_an_open_ended_campaign_reaches_any_later_date(db_session):

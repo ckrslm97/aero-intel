@@ -30,6 +30,25 @@ bounded by the SQL filters (the page fetches an eight-week window, ~hundreds of
 rows). Because `limit`/`offset` slice *after* that pass, a page is always a page
 of genuinely matching rows -- slicing in SQL first would have handed back short
 pages with no way to tell a filtered-out row from a missing one.
+
+What changed in v2
+------------------
+**Expired campaigns are gone by default.** `GET /promotions` no longer returns
+a campaign whose sale window has closed and whose travel window is over;
+`include_expired=true` brings back the old behaviour for the analyst and audit
+paths, and asking for `status=EXPIRED` implies it. The layer that does this is
+`_is_visible`, deliberately *outside* `_publishable_promotions()` -- see the
+comment there for the alert type that would otherwise have disappeared.
+
+**One order, everywhere.** `order_promotions` replaces `detected_at DESC` as
+the default for the list, the shortcut endpoints and the export: buyable today
+first, closing soonest first inside that, then upcoming, and newest-first-seen
+as the tiebreaker it always should have been.
+
+**Three shortcut endpoints** -- `/active`, `/upcoming`, `/expiring?days=` --
+so the page's three views are not each one query-string typo away from showing
+the wrong set. `/expiring` is the one with a rule worth reading: it lists only
+campaigns still ON SALE.
 """
 import csv
 import io
@@ -82,6 +101,51 @@ def _publishable_promotions():
     )
 
 
+# --- the expiry layer -------------------------------------------------------
+#
+# The owner's clearest instruction about this page: a campaign whose sale
+# window has closed and whose travel window is over should not be on it. It is
+# not intelligence, it is clutter that makes the live campaigns harder to find,
+# and it was the single most common complaint about the timeline.
+#
+# **Why this is not folded into `_publishable_promotions()`.** That clause has
+# five other callers, and one of them is `services/campaign_alerts.py`'s
+# `_expired_campaigns()`, whose entire job is to announce that a campaign has
+# ended. Adding "and not expired" there would have deleted an alert type
+# without touching the file that defines it -- the failure mode where a change
+# is correct in the file you are reading and wrong two directories over. So
+# publishability (is this row fit to serve at all: superseded, low-confidence)
+# and visibility (should today's reader see it) stay two separate questions,
+# and only the read endpoints ask the second one.
+#
+# **Why Python and not SQL.** Status is computed from four nullable date
+# columns and today's date by one decision table
+# (services/campaign_status.py), and re-expressing "not EXPIRED" in SQL would
+# make two implementations of the rule this whole feature rests on -- with a
+# CASE that has to get the null semantics of four columns right, and that
+# nothing would notice diverging until a campaign silently vanished. This
+# module already applies the `status` filter in Python for exactly that reason
+# (see the module docstring), the set is bounded by the SQL filters before it
+# is walked, and slicing happens after, so a page is still a page of genuinely
+# matching rows.
+
+
+def _is_visible(row: Promotion, today: date, *, include_expired: bool) -> bool:
+    """Should today's reader see this row at all?
+
+    The one place the EXPIRED default lives; `include_expired=True` restores
+    the pre-existing behaviour for the analyst and audit paths.
+    """
+    if include_expired:
+        return True
+    return (
+        campaign_status(
+            row.sale_starts, row.sale_ends, row.travel_starts, row.travel_ends, today
+        )
+        != "EXPIRED"
+    )
+
+
 class PromotionOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -124,11 +188,34 @@ class PromotionOut(BaseModel):
     evidence_json: dict | None = None
     date_flags_json: dict | None = None
 
+    campaign_kind: str | None = None
+    ticketing_start: date | None = None
+    ticketing_end: date | None = None
+    campaign_start: date | None = None
+    campaign_end: date | None = None
+
     #: How many recorded edits this campaign has, and how many pages told us
     #: about it. Filled in by `_serialize` with two grouped queries per page --
     #: never a relationship load, which would be one query per row.
     version_count: int = 0
     source_count: int = 0
+
+    #: Is the carrier itself on the record for this campaign -- i.e. does it
+    #: have a `campaign_sources` row at tier `official`?
+    #:
+    #: **Computed, not stored**, and the precedent is `status` three fields
+    #: down. A stored flag would be a denormalised copy of a child table that
+    #: three write paths insert into (the deep scan, the article merge, the
+    #: dedup pass) plus a backfill, and every one of them would have to
+    #: remember to maintain it; the first one that forgot would publish an
+    #: unverified campaign wearing a verification badge, which is worse than
+    #: having no badge at all. The cost of computing it is one grouped query
+    #: per page -- the same query that already counts sources, widened by a
+    #: FILTER clause, so it is not even an extra round trip.
+    #:
+    #: False on a legacy row is honest rather than pessimistic: nobody ever
+    #: filed a source for it, so nobody ever verified it.
+    official_source_verified: bool = False
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -201,6 +288,7 @@ class _Filters:
     date_to: date | None = None
     days: int | None = None
     campaign_type: Sequence[str] = field(default_factory=tuple)
+    campaign_kind: Sequence[str] = field(default_factory=tuple)
     business_class: Sequence[str] = field(default_factory=tuple)
     status: Sequence[str] = field(default_factory=tuple)
     country: str | None = None
@@ -208,6 +296,72 @@ class _Filters:
     min_discount: int | None = None
     band: Sequence[str] = field(default_factory=tuple)
     review_required: bool | None = None
+    #: False -- the default, and the change this release is really about: a
+    #: campaign whose sale window closed and whose travel window is over does
+    #: not appear on the page unless it is asked for by name.
+    include_expired: bool = False
+
+
+# --- ordering ---------------------------------------------------------------
+#
+# One definition, read by the list, the three shortcut endpoints and the
+# export. Before this they all ordered by `detected_at DESC`, which answers
+# "what did we find most recently" -- a good default for a scraper's log and
+# the wrong one for a page whose reader is asking "what can I still react to".
+#
+# The buckets, in the order the reader cares:
+#
+#   1. ACTIVE_BOOKING -- buyable today, and inside it the ones closing soonest
+#      first, because a deadline is the only thing on this page that expires
+#      while you read it.
+#   2. UPCOMING -- announced but not open, soonest first.
+#   3. BOOKING_CLOSED_TRAVEL_ACTIVE -- nothing to react to commercially, but
+#      the competitor's capacity is still committed.
+#   4. UNKNOWN -- undated. Not last: an undated campaign we found yesterday is
+#      more useful than a finished one.
+#   5. EXPIRED -- only ever present when explicitly asked for.
+#
+# The final tiebreaker everywhere is newest-first-seen, which is the old
+# default surviving as what it always was: a tiebreaker.
+
+_STATUS_RANK: dict[str, int] = {
+    "ACTIVE_BOOKING": 0,
+    "UPCOMING": 1,
+    "BOOKING_CLOSED_TRAVEL_ACTIVE": 2,
+    "UNKNOWN": 3,
+    "EXPIRED": 4,
+}
+
+#: Stands in for a missing date when sorting. A campaign with an open-ended
+#: sale window has not been said to stop, so it sorts behind every campaign
+#: that has a stated deadline rather than ahead of them -- "no deadline" is not
+#: "deadline is today".
+_FAR_FUTURE = date(9999, 12, 31)
+
+
+def _sort_key(row: Promotion, today: date) -> tuple:
+    status = campaign_status(
+        row.sale_starts, row.sale_ends, row.travel_starts, row.travel_ends, today
+    )
+    # Negated timestamp rather than `reverse=`: the whole key has to sort in
+    # one direction, and the ranks above are ascending.
+    seen = row.first_seen_at or row.detected_at
+    return (
+        _STATUS_RANK.get(status, len(_STATUS_RANK)),
+        row.sale_ends or _FAR_FUTURE if status == "ACTIVE_BOOKING" else _FAR_FUTURE,
+        row.sale_starts or _FAR_FUTURE if status == "UPCOMING" else _FAR_FUTURE,
+        -seen.timestamp(),
+        # A stable last resort, so two campaigns detected in the same run come
+        # back in the same order on every request.
+        str(row.id),
+    )
+
+
+def order_promotions(rows: Sequence[Promotion], today: date) -> list[Promotion]:
+    """The default order. Exported because the export uses it too -- a CSV
+    that disagreed with the page it was downloaded from would be a bug report
+    nobody could reproduce."""
+    return sorted(rows, key=lambda row: _sort_key(row, today))
 
 
 def _apply_sql_filters(query, f: _Filters):
@@ -248,6 +402,11 @@ def _apply_sql_filters(query, f: _Filters):
 
     if f.campaign_type:
         query = query.where(Promotion.campaign_type.in_(f.campaign_type))
+    if f.campaign_kind:
+        # A plain column because it is stored, not derived at read time --
+        # see the column's docstring for why that call is the opposite of the
+        # one `status` makes.
+        query = query.where(Promotion.campaign_kind.in_(f.campaign_kind))
     if f.business_class:
         query = query.where(Promotion.business_class.in_(f.business_class))
     if f.min_discount is not None:
@@ -308,6 +467,8 @@ def _regions_of(row: Promotion) -> set[str]:
 
 
 def _passes_python_filters(row: Promotion, f: _Filters, today: date) -> bool:
+    if not _is_visible(row, today, include_expired=f.include_expired):
+        return False
     if f.status:
         computed = campaign_status(
             row.sale_starts, row.sale_ends, row.travel_starts, row.travel_ends, today
@@ -322,22 +483,52 @@ def _passes_python_filters(row: Promotion, f: _Filters, today: date) -> bool:
 
 
 async def _matching_promotions(db: AsyncSession, f: _Filters) -> list[Promotion]:
-    """Every publishable row matching `f`, newest sighting first, unpaginated.
+    """Every publishable, visible row matching `f`, in the default order.
 
     The single definition of "matching" -- list, count and export all call it,
     which is what makes `count` a promise about the list rather than a second
-    opinion.
+    opinion. The ORDER BY below is only a stable input to `order_promotions`,
+    which does the real sorting: the bucket a row lands in depends on today's
+    date, which SQL has no business knowing.
     """
     query = (
         select(Promotion)
         .where(_publishable_promotions())
-        # Newest sighting first: this endpoint's headline job is "what just
-        # launched", and the timeline re-sorts into lanes client-side anyway.
         .order_by(Promotion.detected_at.desc())
     )
     rows = (await db.execute(_apply_sql_filters(query, f))).scalars().all()
     today = _today()
-    return [row for row in rows if _passes_python_filters(row, f, today)]
+    return order_promotions(
+        [row for row in rows if _passes_python_filters(row, f, today)], today
+    )
+
+
+async def _source_counts(
+    db: AsyncSession, ids: Sequence[uuid.UUID]
+) -> dict[uuid.UUID, tuple[int, int]]:
+    """promotion_id -> (how many sources, how many of them official).
+
+    One grouped query for a whole page, and one definition of the
+    official-verification test, shared by the JSON serializer and the CSV
+    export. Two queries would be a second round trip for one boolean and a
+    second chance for the two answers to disagree.
+    """
+    if not ids:
+        return {}
+    return {
+        promotion_id: (total, official)
+        for promotion_id, total, official in (
+            await db.execute(
+                select(
+                    CampaignSource.promotion_id,
+                    func.count(),
+                    func.count().filter(CampaignSource.source_tier == "official"),
+                )
+                .where(CampaignSource.promotion_id.in_(ids))
+                .group_by(CampaignSource.promotion_id)
+            )
+        ).all()
+    }
 
 
 async def _serialize(db: AsyncSession, rows: Sequence[Promotion]) -> list[PromotionOut]:
@@ -348,7 +539,7 @@ async def _serialize(db: AsyncSession, rows: Sequence[Promotion]) -> list[Promot
     """
     ids = [row.id for row in rows]
     versions: dict[uuid.UUID, int] = {}
-    sources: dict[uuid.UUID, int] = {}
+    sources: dict[uuid.UUID, tuple[int, int]] = {}
     if ids:
         versions = dict(
             (
@@ -359,20 +550,13 @@ async def _serialize(db: AsyncSession, rows: Sequence[Promotion]) -> list[Promot
                 )
             ).all()
         )
-        sources = dict(
-            (
-                await db.execute(
-                    select(CampaignSource.promotion_id, func.count())
-                    .where(CampaignSource.promotion_id.in_(ids))
-                    .group_by(CampaignSource.promotion_id)
-                )
-            ).all()
-        )
+        sources = await _source_counts(db, ids)
     return [
         PromotionOut.model_validate(row).model_copy(
             update={
                 "version_count": versions.get(row.id, 0),
-                "source_count": sources.get(row.id, 0),
+                "source_count": sources.get(row.id, (0, 0))[0],
+                "official_source_verified": sources.get(row.id, (0, 0))[1] > 0,
             }
         )
         for row in rows
@@ -414,6 +598,10 @@ DaysParam = Annotated[
 CampaignTypeParam = Annotated[
     list[str] | None, Query(description="app/taxonomy.py CAMPAIGN_TYPES values, repeatable")
 ]
+CampaignKindParam = Annotated[
+    list[str] | None,
+    Query(description="CAMPAIGN (fiyat) | PROMOTION (mekanizma), repeatable"),
+]
 BusinessClassParam = Annotated[
     list[str] | None, Query(description="CAMPAIGN_BUSINESS_CLASSES values, repeatable")
 ]
@@ -432,6 +620,15 @@ BandParam = Annotated[list[str] | None, Query(description="Confidence bands: hig
 ReviewRequiredParam = Annotated[
     bool | None, Query(description="Only the review queue (true) or only clean rows (false)")
 ]
+IncludeExpiredParam = Annotated[
+    bool,
+    Query(
+        description=(
+            "Süresi dolmuş kampanyaları da döndür (varsayılan: hayır). "
+            "Analiz ve denetim için; sayfa bunu göndermez."
+        )
+    ),
+]
 
 
 def _filters(
@@ -447,20 +644,28 @@ def _filters(
     min_discount: int | None,
     band: list[str] | None,
     review_required: bool | None,
+    campaign_kind: list[str] | None = None,
+    include_expired: bool = False,
 ) -> _Filters:
+    status = list(status or ())
     return _Filters(
         airline=tuple(airline or ()),
         date_from=date_from,
         date_to=date_to,
         days=days,
         campaign_type=tuple(campaign_type or ()),
+        campaign_kind=tuple(campaign_kind or ()),
         business_class=tuple(business_class or ()),
-        status=tuple(status or ()),
+        status=tuple(status),
         country=country,
         region=tuple(region or ()),
         min_discount=min_discount,
         band=tuple(band or ()),
         review_required=review_required,
+        # Asking for EXPIRED by name is asking for expired campaigns. Without
+        # this, `?status=EXPIRED` would come back empty -- a filter that
+        # silently contradicts itself is the worst kind of default.
+        include_expired=include_expired or "EXPIRED" in status,
     )
 
 
@@ -471,6 +676,7 @@ async def list_promotions(
     date_to: DateToParam = None,
     days: DaysParam = None,
     campaign_type: CampaignTypeParam = None,
+    campaign_kind: CampaignKindParam = None,
     business_class: BusinessClassParam = None,
     status: StatusParam = None,
     country: CountryParam = None,
@@ -478,6 +684,7 @@ async def list_promotions(
     min_discount: MinDiscountParam = None,
     band: BandParam = None,
     review_required: ReviewRequiredParam = None,
+    include_expired: IncludeExpiredParam = False,
     # Opt-in: no limit means the whole filtered window, which is what the
     # campaign page and the calendar overlay both ask for.
     limit: Annotated[int | None, Query(ge=1, le=EXPORT_ROW_CAP)] = None,
@@ -491,6 +698,7 @@ async def list_promotions(
         _filters(
             airline, date_from, date_to, days, campaign_type, business_class,
             status, country, region, min_discount, band, review_required,
+            campaign_kind=campaign_kind, include_expired=include_expired,
         ),
     )
     page = rows[offset : offset + limit] if limit is not None else rows[offset:]
@@ -504,6 +712,7 @@ async def count_promotions(
     date_to: DateToParam = None,
     days: DaysParam = None,
     campaign_type: CampaignTypeParam = None,
+    campaign_kind: CampaignKindParam = None,
     business_class: BusinessClassParam = None,
     status: StatusParam = None,
     country: CountryParam = None,
@@ -511,6 +720,7 @@ async def count_promotions(
     min_discount: MinDiscountParam = None,
     band: BandParam = None,
     review_required: ReviewRequiredParam = None,
+    include_expired: IncludeExpiredParam = False,
     response: Response = None,  # type: ignore[assignment]
     db: AsyncSession = Depends(get_db),
 ) -> dict:
@@ -527,6 +737,7 @@ async def count_promotions(
         _filters(
             airline, date_from, date_to, days, campaign_type, business_class,
             status, country, region, min_discount, band, review_required,
+            campaign_kind=campaign_kind, include_expired=include_expired,
         ),
     )
     return {"total": len(rows)}
@@ -572,6 +783,92 @@ async def new_promotion_counts(db: AsyncSession) -> dict:
     }
 
 
+# --- the three questions the page actually asks ----------------------------
+#
+# Every one of these is expressible as `GET /promotions?status=...`, and that
+# is exactly why they exist as endpoints: the three views the campaign page
+# renders should not each be one query-string typo away from showing the wrong
+# set. They share `_matching_promotions`, so they are the same list, filtered.
+#
+# The carrier filter rides along on all three because "what is Pegasus running
+# right now" is the same question with a `?airline=PC` on it, and re-fetching
+# the whole list to filter it client-side is how a page ends up slow.
+
+
+async def _by_status(
+    db: AsyncSession, statuses: tuple[str, ...], airline: list[str] | None, limit: int | None
+) -> list[PromotionOut]:
+    rows = await _matching_promotions(
+        db, _Filters(airline=tuple(airline or ()), status=statuses)
+    )
+    return await _serialize(db, rows[:limit] if limit is not None else rows)
+
+
+@router.get("/active", response_model=list[PromotionOut])
+async def list_active_promotions(
+    airline: AirlineParam = None,
+    limit: Annotated[int | None, Query(ge=1, le=EXPORT_ROW_CAP)] = None,
+    response: Response = None,  # type: ignore[assignment]
+    db: AsyncSession = Depends(get_db),
+) -> list[PromotionOut]:
+    """Campaigns you can buy today (ACTIVE_BOOKING), closing soonest first."""
+    public_cache(response, FRESH)
+    return await _by_status(db, ("ACTIVE_BOOKING",), airline, limit)
+
+
+@router.get("/upcoming", response_model=list[PromotionOut])
+async def list_upcoming_promotions(
+    airline: AirlineParam = None,
+    limit: Annotated[int | None, Query(ge=1, le=EXPORT_ROW_CAP)] = None,
+    response: Response = None,  # type: ignore[assignment]
+    db: AsyncSession = Depends(get_db),
+) -> list[PromotionOut]:
+    """Campaigns announced but not yet open for sale (UPCOMING)."""
+    public_cache(response, FRESH)
+    return await _by_status(db, ("UPCOMING",), airline, limit)
+
+
+#: Default horizon for /expiring. A week is the window a revenue desk can still
+#: act inside; the alert service's own EXPIRING threshold is three days, which
+#: is a different job (interrupt me) from this one (what should I look at).
+EXPIRING_DEFAULT_DAYS = 7
+
+
+@router.get("/expiring", response_model=list[PromotionOut])
+async def list_expiring_promotions(
+    days: Annotated[
+        int, Query(ge=1, le=90, description="Kaç gün içinde satışı kapanacaklar")
+    ] = EXPIRING_DEFAULT_DAYS,
+    airline: AirlineParam = None,
+    limit: Annotated[int | None, Query(ge=1, le=EXPORT_ROW_CAP)] = None,
+    response: Response = None,  # type: ignore[assignment]
+    db: AsyncSession = Depends(get_db),
+) -> list[PromotionOut]:
+    """Campaigns still on sale whose booking window closes within `days`.
+
+    **Still on sale is half the definition, not a detail.** A campaign in
+    BOOKING_CLOSED_TRAVEL_ACTIVE also has a `sale_ends` in the recent past and
+    would sail through a naive `sale_ends <= today + days` filter -- and it is
+    the one row that must never appear here, because "bitmek üzere" about a
+    campaign that already finished selling is not a smaller error than showing
+    an expired one, it is the same error with a countdown on it. So the status
+    gate comes first and the date window narrows what survives it.
+
+    Campaigns with no stated `sale_ends` are also excluded: an open-ended sale
+    has not been said to stop, and a deadline nobody set cannot be near.
+    """
+    public_cache(response, FRESH)
+    today = _today()
+    horizon = today + timedelta(days=days)
+    rows = await _matching_promotions(
+        db, _Filters(airline=tuple(airline or ()), status=("ACTIVE_BOOKING",))
+    )
+    closing = [
+        row for row in rows if row.sale_ends is not None and row.sale_ends <= horizon
+    ]
+    return await _serialize(db, closing[:limit] if limit is not None else closing)
+
+
 # --- export ---------------------------------------------------------------
 
 #: English snake_case, deliberately. This file is an analyst's hand-off into
@@ -582,12 +879,20 @@ EXPORT_COLUMNS = (
     "carrier",
     "campaign_name",
     "campaign_type",
+    "campaign_kind",
     "business_class",
     "status",
     "booking_start",
     "booking_end",
     "travel_start",
     "travel_end",
+    # Empty in almost every row, and that is the information: a filled cell
+    # means the carrier stated a separate ticketing deadline or campaign
+    # period, never that one was assumed from the booking window.
+    "ticketing_start",
+    "ticketing_end",
+    "campaign_period_start",
+    "campaign_period_end",
     "origin",
     "destination",
     "ond",
@@ -599,6 +904,7 @@ EXPORT_COLUMNS = (
     "source_url",
     "confidence_score",
     "confidence_band",
+    "official_source_verified",
     "detected_at",
     "first_seen_at",
     "last_changed_at",
@@ -615,11 +921,12 @@ def _iso(value: date | datetime | None) -> str:
     return value.isoformat() if value is not None else ""
 
 
-def _export_row(row: Promotion, today: date) -> list[str]:
+def _export_row(row: Promotion, today: date, *, official: bool = False) -> list[str]:
     return [
         row.airline_code,
         row.title_tr,
         row.campaign_type or "",
+        row.campaign_kind or "",
         row.business_class or "",
         campaign_status(
             row.sale_starts, row.sale_ends, row.travel_starts, row.travel_ends, today
@@ -628,6 +935,10 @@ def _export_row(row: Promotion, today: date) -> list[str]:
         _iso(row.sale_ends),
         _iso(row.travel_starts),
         _iso(row.travel_ends),
+        _iso(row.ticketing_start),
+        _iso(row.ticketing_end),
+        _iso(row.campaign_start),
+        _iso(row.campaign_end),
         row.origin_code or "",
         row.dest_code or "",
         row.ond or "",
@@ -639,13 +950,16 @@ def _export_row(row: Promotion, today: date) -> list[str]:
         row.url,
         "" if row.confidence_score is None else f"{row.confidence_score:.3f}",
         row.confidence_band or "",
+        "true" if official else "false",
         _iso(row.detected_at),
         _iso(row.first_seen_at),
         _iso(row.last_changed_at),
     ]
 
 
-def _csv_lines(rows: Sequence[Promotion], today: date) -> Iterator[str]:
+def _csv_lines(
+    rows: Sequence[Promotion], today: date, official_ids: frozenset[uuid.UUID] = frozenset()
+) -> Iterator[str]:
     """One `csv.writer` over a rewound buffer per row, so the response streams
     instead of being assembled as one string -- the row cap protects the
     30s function limit, this protects the memory ceiling under it."""
@@ -661,7 +975,7 @@ def _csv_lines(rows: Sequence[Promotion], today: date) -> Iterator[str]:
     writer.writerow(EXPORT_COLUMNS)
     yield flush()
     for row in rows:
-        writer.writerow(_export_row(row, today))
+        writer.writerow(_export_row(row, today, official=row.id in official_ids))
         yield flush()
 
 
@@ -673,6 +987,7 @@ async def export_promotions(
     date_to: DateToParam = None,
     days: DaysParam = None,
     campaign_type: CampaignTypeParam = None,
+    campaign_kind: CampaignKindParam = None,
     business_class: BusinessClassParam = None,
     status: StatusParam = None,
     country: CountryParam = None,
@@ -680,6 +995,7 @@ async def export_promotions(
     min_discount: MinDiscountParam = None,
     band: BandParam = None,
     review_required: ReviewRequiredParam = None,
+    include_expired: IncludeExpiredParam = False,
     db: AsyncSession = Depends(get_db),
 ) -> Response:
     """The filtered set as a download: `format=csv` for a spreadsheet,
@@ -694,6 +1010,7 @@ async def export_promotions(
         _filters(
             airline, date_from, date_to, days, campaign_type, business_class,
             status, country, region, min_discount, band, review_required,
+            campaign_kind=campaign_kind, include_expired=include_expired,
         ),
     )
     truncated = len(rows) > EXPORT_ROW_CAP
@@ -708,8 +1025,17 @@ async def export_promotions(
         payload = [item.model_dump(mode="json") for item in await _serialize(db, rows)]
         response: Response = JSONResponse(content=payload, headers=headers)
     else:
+        # Resolved before the generator starts: a StreamingResponse's body is
+        # produced after the request handler returns, and by then the session
+        # this coroutine was handed is closed.
+        counts = await _source_counts(db, [row.id for row in rows])
+        official_ids = frozenset(
+            promotion_id for promotion_id, (_total, official) in counts.items() if official
+        )
         response = StreamingResponse(
-            _csv_lines(rows, _today()), media_type="text/csv; charset=utf-8", headers=headers
+            _csv_lines(rows, _today(), official_ids),
+            media_type="text/csv; charset=utf-8",
+            headers=headers,
         )
     public_cache(response, FRESH)
     return response

@@ -46,6 +46,24 @@ obvious (a mileage sale says "miles", a baggage promo says "bagaj", a student
 page says "öğrenci"), they are the same four kinds every time, and a rulepack
 is auditable in a way a second LLM verdict is not.
 
+The one hole deliberately cut in that layer
+-------------------------------------------
+PRODUCT_PROMOTION rejects baggage, lounge, seat-selection, hotel and car-hire
+copy outright, and it should: a lounge membership sale is not a fare event. But
+"bilet alana 10 kg ekstra bagaj ücretsiz" is one. The offer only exists if you
+buy a flight, its cost lands on the same P&L line as a discount, and a revenue
+desk has to answer it the same way.
+
+So there is exactly one exception, and it is two conditions wide: the copy must
+name a flight-purchase condition (`FLIGHT_PURCHASE_TIE_TERMS`) *and* carry a
+flight/ticket context. A tied offer becomes ACTIVE_CAMPAIGN and is suggested
+the type ANCILLARY_PROMOTION; an untied one -- a standalone lounge, hotel or
+car-rental campaign -- is rejected exactly as before. The exception waives the
+PRODUCT rule and nothing else, so a tied offer about miles is still rejected as
+LOYALTY_PROMOTION. This is the only rule in this module that makes the gate
+looser rather than tighter, which is why it is stated in both directions here
+and tested in both directions in test_campaign_airline.py.
+
 Only the "is this a fare campaign" half of `business_class` is decided here.
 ACTIVE/UPCOMING/EXPIRED_CAMPAIGN is a *date* question, answered by
 services/campaign_status.py from the same four columns the UI reads, and
@@ -152,6 +170,62 @@ PRODUCT_TERMS: tuple[str, ...] = (
     "esim", "otopark", "parking",
 ) + DISTRACTOR_TERMS["hotel"]
 _PRODUCT = _keyword_pattern(PRODUCT_TERMS)
+
+#: The one way an ancillary offer earns its place on a fare timeline: the page
+#: makes it CONDITIONAL ON BUYING A FLIGHT. "Bilet alana ücretsiz 10 kg ekstra
+#: bagaj" is not a baggage product page -- it is a fare campaign whose discount
+#: happens to be paid in kilograms, and a revenue desk has to price against it
+#: exactly as it would against a percentage.
+#:
+#: This is the only place in this module that makes the false-positive gate
+#: *looser*, so it is written as narrowly as the evidence allows:
+#:
+#: * Every phrase names a flight or a ticket. There is no bare "with your
+#:   booking" or "satın alana": a hotel campaign saying "rezervasyon yapana
+#:   ücretsiz kahvaltı" must keep being rejected, and it would match a phrase
+#:   written without the flight noun in it.
+#: * A phrase alone is not enough -- `_FLIGHT_CONTEXT` has to match too (see
+#:   `ancillary_tie`). Redundant today, because every phrase here contains a
+#:   flight word; deliberately redundant, so that a term added carelessly later
+#:   cannot on its own open the gate.
+#: * Nothing here waives any rule but PRODUCT. A tied offer that is also about
+#:   miles is still LOYALTY_PROMOTION, and a tied offer with no dates, no rate
+#:   and no CTA is still NEWS_ONLY -- the tie changes which shelf an ancillary
+#:   offer sits on, never whether the other rulepacks get to speak.
+FLIGHT_PURCHASE_TIE_TERMS: tuple[str, ...] = (
+    # Turkish: the offer is granted to whoever buys the ticket/flight.
+    "bilet alana", "bilet alanlara", "bilet alanlar", "bilet alan yolculara",
+    "bilet satin alana", "bilet satin alanlara", "bilet satin alanlar",
+    "bilet alimlarinda", "bilet alimina ozel", "bilet alimiyla",
+    "bilet aldiginizda", "biletinizi aldiginizda", "biletini alana",
+    "biletinizle birlikte", "ucus biletinizle", "ucus bileti alana",
+    "uctugunuzda", "ucus alimlarinda", "ucus alana",
+    "ucusunuzu satin aldiginizda", "ucus satin aldiginizda",
+    "ucus rezervasyonunuzda", "ucus rezervasyonuyla",
+    "gidis donus bilet alana",
+    # English: same condition, same requirement that a flight is named.
+    "with your flight", "with your flight booking", "with your flight ticket",
+    "when you book a flight", "when you buy a flight", "when you book a ticket",
+    "with any flight purchase", "with every flight booked", "on flight bookings",
+    "book a flight and get", "flight purchase required", "with a flight ticket",
+)
+_FLIGHT_PURCHASE_TIE = _keyword_pattern(FLIGHT_PURCHASE_TIE_TERMS)
+
+#: The second condition on the tie. A flight product, ticket or sector has to
+#: be what is being talked about at all.
+FLIGHT_CONTEXT_STEMS: tuple[str, ...] = ("ucus", "ucak", "bilet", "sefer")
+FLIGHT_CONTEXT_TERMS: tuple[str, ...] = (
+    "flight", "flights", "ticket", "tickets", "fare", "fares", "airfare",
+    "route", "rota", "boarding pass",
+)
+_FLIGHT_CONTEXT = re.compile(
+    "|".join(
+        [
+            _stem_pattern(FLIGHT_CONTEXT_STEMS).pattern,
+            _keyword_pattern(FLIGHT_CONTEXT_TERMS).pattern,
+        ]
+    )
+)
 
 #: A carrier launching or extending a *service*, which is a product
 #: announcement wearing a press release. "KLM, Bölgesel Ekonomi Sınıfında Buy
@@ -305,6 +379,25 @@ def _first_match(pattern, text: str) -> str | None:
     return found.group(0) if found else None
 
 
+def ancillary_tie(folded_text: str) -> str | None:
+    """The phrase binding this ancillary offer to a flight purchase, or None.
+
+    Both conditions or nothing: the tie phrase AND a flight context. Takes
+    already-folded text (fold_text form) because every caller here has it and
+    folding twice is the trap this module's rulepacks document at the top.
+
+    Public because two layers need the same answer -- `_business_class` uses it
+    to waive the PRODUCT rule, and `validate_campaign` quotes it back in the
+    Turkish sentence that explains why an ancillary offer was published.
+    """
+    tie = _first_match(_FLIGHT_PURCHASE_TIE, folded_text)
+    if not tie:
+        return None
+    if not _FLIGHT_CONTEXT.search(folded_text):
+        return None
+    return tie
+
+
 def _business_class(
     text: str,
     *,
@@ -312,6 +405,7 @@ def _business_class(
     has_sale_window: bool,
     has_any_date: bool,
     has_discount: bool,
+    tied_to_flight: str | None = None,
 ) -> tuple[str, str | None] | None:
     """The rule this page trips, or None if it is a fare campaign.
 
@@ -339,9 +433,14 @@ def _business_class(
     needs punctuation to mean anything (`_POINTS_PLUS_CASH`). Optional and
     defaulted, so a caller that only has folded text loses that rule and
     nothing else.
+
+    `tied_to_flight` is `ancillary_tie()`'s answer, passed in rather than
+    recomputed so one call site owns the two-condition test. When it is set the
+    PRODUCT rule is skipped and only the PRODUCT rule: everything below still
+    runs, so a tied offer about miles is still LOYALTY_PROMOTION.
     """
     product = _first_match(_PRODUCT, text)
-    if product:
+    if product and not tied_to_flight:
         return "product", product
 
     service = _first_match(_SERVICE_LAUNCH, text)
@@ -467,8 +566,9 @@ def detect_business_class(
     pipeline on the first term either side added.
     """
     raw = f"{title}\n{text or ''}"
+    folded = fold_text(raw)
     detected = _business_class(
-        fold_text(raw),
+        folded,
         raw_text=raw,
         has_sale_window=sale_starts is not None or sale_ends is not None,
         has_any_date=any(
@@ -476,6 +576,7 @@ def detect_business_class(
             for value in (sale_starts, sale_ends, travel_starts, travel_ends)
         ),
         has_discount=discount_pct is not None,
+        tied_to_flight=ancillary_tie(folded),
     )
     if detected is None:
         return None
@@ -484,8 +585,14 @@ def detect_business_class(
     return business_class, _rejection_reason(rule, evidence)
 
 
-def _acceptance_reason(campaign: CampaignExtraction) -> str:
-    """What this row was accepted on, in the reader's language."""
+def _acceptance_reason(campaign: CampaignExtraction, *, tie: str | None = None) -> str:
+    """What this row was accepted on, in the reader's language.
+
+    `tie` is the flight-purchase phrase that waived the PRODUCT rule, when one
+    did. It is named outright rather than folded into the general sentence,
+    because "we published a baggage offer" is the claim in this module most
+    likely to be challenged and the answer to the challenge is a quote.
+    """
     stated: list[str] = []
     if campaign.sale_starts or campaign.sale_ends:
         stated.append(
@@ -499,12 +606,21 @@ def _acceptance_reason(campaign: CampaignExtraction) -> str:
     if campaign.discount_pct is not None:
         stated.append(f"%{campaign.discount_pct} indirim")
 
+    tie_clause = (
+        f" Ek hizmet teklifi uçuş satın alımına bağlı (\"{tie}\" geçiyor); "
+        "bağımsız bir ürün kampanyası değil."
+        if tie
+        else ""
+    )
     if not stated:
         return (
             "Ücret kampanyası olarak sınıflandırıldı; tarih ve indirim oranı "
-            "kaynakta belirtilmemiş."
+            "kaynakta belirtilmemiş." + tie_clause
         )
-    return f"{' ve '.join(stated).capitalize()} açıkça belirtilmiş; ücret kampanyası."
+    return (
+        f"{' ve '.join(stated).capitalize()} açıkça belirtilmiş; ücret kampanyası."
+        + tie_clause
+    )
 
 
 def validate_campaign(
@@ -590,10 +706,22 @@ def validate_campaign(
             classification_reason=reason,
         )
 
+    # Only asked once the row has survived every rule, and only to *label* it:
+    # an offer that got this far is a campaign either way, and the tie is what
+    # says which kind. Gated on `_PRODUCT` matching, so a plain fare campaign
+    # that happens to say "bilet alana %30" is never relabelled as ancillary --
+    # there has to be an ancillary product in it for the question to arise.
+    folded = fold_text(f"{title}\n{text or ''}")
+    tie = ancillary_tie(folded) if _PRODUCT.search(folded) else None
     return Outcome.classified(
         campaign,
         business_class="ACTIVE_CAMPAIGN",
-        classification_reason=_acceptance_reason(campaign),
+        classification_reason=_acceptance_reason(campaign, tie=tie),
+        # A *suggestion*, not a decision: the extraction chain uses it only
+        # when the source did not type the campaign itself. A carrier that
+        # calls its own offer a FLASH_SALE and throws in free baggage is
+        # running a flash sale.
+        campaign_type_override="ANCILLARY_PROMOTION" if tie else None,
     )
 
 
@@ -622,6 +750,12 @@ def build_promotion(
             required_fields_total=1,
             signal_agreement=None,
             source_count=source_count,
+            # The article path's answer to "did the airline itself say this".
+            # An article is official only when it came off the carrier's own
+            # newsroom; anything else is a report, and a report is capped at
+            # the top of medium however well corroborated -- see
+            # pipeline/confidence.UNVERIFIED_SCORE_CEILING.
+            official_verified=source_tier == "official",
         )
     )
 

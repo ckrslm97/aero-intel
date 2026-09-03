@@ -1,8 +1,9 @@
-"""The golden set: 311 records (24 risk, 100 news, 187 campaign) -- 255
-hand-judged snapshots of live production output plus 56 synthetic
-campaign-surface records: 42 authored for the PR8 quality gate and 14 more
-pinning the award/cargo/service-announcement patterns that were still reaching
-the live timeline after the backfill retired the legacy rows.
+"""The golden set: 315 records (24 risk, 100 news, 191 campaign) -- 255
+hand-judged snapshots of live production output plus 60 synthetic
+campaign-surface records: 42 authored for the PR8 quality gate, 14 pinning the
+award/cargo/service-announcement patterns that were still reaching the live
+timeline after the backfill retired the legacy rows, and 4 pinning both
+directions of the ancillary rule.
 
 `golden_set.json` is a snapshot of the owner-reviewed evaluation page
 (https://claude.ai/code/artifact/fba3334f-3f64-4ac1-bdf0-7be6cff45e83),
@@ -31,6 +32,10 @@ route_scope, English and year-less dates, booking-vs-travel separation,
 near-duplicates) and which the 2025 production snapshot simply does not
 contain -- it is 131 rows from one static-scrapable carrier, 99 of them wrong
 in four repeating ways.
+
+The `synthetic-ancillary` batch is the same idea applied to a widening rather
+than a leak: it exists so that "an ancillary offer tied to a flight purchase is
+publishable" cannot quietly become "ancillary offers are publishable".
 
 The `synthetic-leaks` batch has a narrower job: each of its 12 "bad" records
 is a paraphrase of a row that was *still live on the site* after the backfill
@@ -75,11 +80,23 @@ SYNTHETIC_SOURCE = "synthetic-pr8"
 #: the snapshot lacks.
 SYNTHETIC_LEAK_SOURCE = "synthetic-leaks"
 
+#: The third authored batch, added when PRODUCT_PROMOTION stopped being an
+#: unconditional rejection. Four records, two each way, because the change makes
+#: the false-positive gate *looser* and a rule that only ever gets tested in the
+#: direction it was widened is a rule nobody is guarding: two ancillary offers
+#: explicitly conditional on buying a flight ("bilet alana 10 kg ekstra bagaj",
+#: "complimentary lounge access when you book a flight") that must now be
+#: published, and two standalone ones (a hotel-booking discount, a lounge
+#: membership sale) that must still be rejected.
+SYNTHETIC_ANCILLARY_SOURCE = "synthetic-ancillary"
+
 #: Every marker that means "authored, not observed". `is_synthetic` reads this
 #: rather than one constant, so the observed/authored split -- which is what
 #: keeps the 131-row production snapshot honest -- never depends on remembering
 #: to update two places when a batch is added.
-SYNTHETIC_SOURCES: frozenset[str] = frozenset({SYNTHETIC_SOURCE, SYNTHETIC_LEAK_SOURCE})
+SYNTHETIC_SOURCES: frozenset[str] = frozenset(
+    {SYNTHETIC_SOURCE, SYNTHETIC_LEAK_SOURCE, SYNTHETIC_ANCILLARY_SOURCE}
+)
 
 
 @dataclass(frozen=True, slots=True)

@@ -762,6 +762,28 @@ async def count_sources(db: AsyncSession, promotion: Promotion) -> int:
     )
 
 
+async def has_official_source(db: AsyncSession, promotion: Promotion) -> bool:
+    """Is the carrier itself on the record for this campaign?
+
+    The stored form of the `official_source_verified` question the read layer
+    answers per row (api/v1/promotions.py). Asked here because the confidence
+    ceiling has to move when a carrier's own page merges into a row that until
+    then only had a report about it -- see `rescore_for_corroboration`.
+    """
+    return bool(
+        (
+            await db.execute(
+                select(CampaignSource.id)
+                .where(
+                    CampaignSource.promotion_id == promotion.id,
+                    CampaignSource.source_tier == "official",
+                )
+                .limit(1)
+            )
+        ).scalar()
+    )
+
+
 async def rescore_for_corroboration(db: AsyncSession, promotion: Promotion) -> bool:
     """Re-score a row whose recorded source count changed. True if it moved.
 
@@ -782,7 +804,14 @@ async def rescore_for_corroboration(db: AsyncSession, promotion: Promotion) -> b
     if total < 2:
         return False
 
-    rescored = rescore_with_corroboration(promotion.confidence_detail, source_count=total)
+    rescored = rescore_with_corroboration(
+        promotion.confidence_detail,
+        source_count=total,
+        # Only ever lifts: a row that has since gained the carrier's own page
+        # is no longer "unverified", while a row that never had the question
+        # asked must not acquire a ceiling from a corroboration pass.
+        official_verified=True if await has_official_source(db, promotion) else None,
+    )
     if rescored is None or rescored.score == promotion.confidence_score:
         return False
 

@@ -76,9 +76,28 @@ from pydantic import BaseModel, ConfigDict, model_validator
 
 from app.taxonomy import CAMPAIGN_BUSINESS_CLASSES, CAMPAIGN_TYPES, ROUTE_SCOPES
 
-#: The four date edges, in the order the drawer reads them. Also the allowed
-#: key set for `date_text` and the date half of `source_text`.
-DATE_FIELDS: tuple[str, ...] = ("booking_start", "booking_end", "travel_start", "travel_end")
+#: The date edges the model may answer with, in the order the drawer reads
+#: them. Also the allowed key set for `date_text` and the date half of
+#: `source_text`.
+#:
+#: The first four are the two windows every campaign has: booking (-> the
+#: `sale_*` columns) and travel. The last four are the windows a page states
+#: *separately* when it distinguishes them -- a ticketing deadline on a
+#: hold-and-pay-later fare, an announced campaign period wider than the sale
+#: window. They are extractable but never inferred: a page that gives one
+#: window is giving the booking window, and the ticketing/campaign fields come
+#: back null. See models/promotion.py for the column-side statement of the same
+#: rule, and rule 2b of llm/campaign_prompt.py for how the model is told it.
+DATE_FIELDS: tuple[str, ...] = (
+    "booking_start",
+    "booking_end",
+    "travel_start",
+    "travel_end",
+    "ticketing_start",
+    "ticketing_end",
+    "campaign_start",
+    "campaign_end",
+)
 
 #: Fields the prompt demands a verbatim quote for. Anything else the model
 #: quotes is kept too (it costs nothing and may be useful in the drawer), but
@@ -189,6 +208,14 @@ class RawCampaignItem(BaseModel):
     booking_end: date | None = None
     travel_start: date | None = None
     travel_end: date | None = None
+    #: Only when the page names these windows separately from the booking
+    #: window -- "biletlemenin 20 Eylül'e kadar tamamlanması", "kampanya
+    #: dönemi 1-15 Eylül". Null is the normal answer and the correct one for
+    #: the overwhelming majority of pages.
+    ticketing_start: date | None = None
+    ticketing_end: date | None = None
+    campaign_start: date | None = None
+    campaign_end: date | None = None
     #: Dates the page states without a year, or in a form that is not ISO --
     #: kept verbatim for the regex layer to resolve against the scan year, with
     #: `date_flags_json.inferred_year` recording that it had to.
