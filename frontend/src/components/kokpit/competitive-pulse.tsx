@@ -11,7 +11,7 @@ import { useDataSource } from "@/hooks/use-data-source";
 import { apiFetch } from "@/lib/api";
 import { worldRegions } from "@/lib/nav";
 import { RIVAL_CODES } from "@/lib/taxonomy.gen";
-import type { InsightsOut, NetworkSignalGroup, PromotionNewCountOut } from "@/lib/types";
+import type { InsightsOut, NetworkSignalsOut, PromotionNewCountOut } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const REGION_NAME = new Map<string, string>(
@@ -114,7 +114,7 @@ export function CompetitivePulse() {
   );
   const routesFetcher = useCallback(
     (signal: AbortSignal) =>
-      apiFetch<NetworkSignalGroup[]>("/hubs/network-signals?days=30", {
+      apiFetch<NetworkSignalsOut>("/hubs/network-signals?days=30", {
         cache: "default",
         signal,
       }),
@@ -131,7 +131,7 @@ export function CompetitivePulse() {
   // nothing" from "it returned rows and no rival moved".
   const rivalMomentum = momentum.filter((mover) => RIVAL_CODE_SET.has(mover.code));
   const movers = rivalMomentum.filter((mover) => mover.delta !== 0).slice(0, 3);
-  const routeGroups = routes.data ?? [];
+  const routeGroups = routes.data?.regions ?? [];
   const routeTotal = routeGroups.reduce((sum, group) => sum + group.count, 0);
   const firstRoute = routeGroups.find((group) => group.articles.length > 0);
 

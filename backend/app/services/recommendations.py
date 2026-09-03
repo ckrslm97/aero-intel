@@ -185,10 +185,14 @@ def _article_evidence(article: Article, enrichment: ArticleEnrichment) -> dict:
 
 
 async def _competitor_promotions(
-    db: AsyncSession, *, days: int, region: list[str] | None, airline: list[str] | None
+    db: AsyncSession,
+    *,
+    days: int,
+    region: list[str] | None,
+    airline: list[str] | None,
+    now: datetime,
 ) -> list[dict]:
     """A rival stacking price/campaign announcements inside the window."""
-    now = datetime.now(timezone.utc)
     current_start = now - timedelta(days=days)
     previous_start = now - timedelta(days=2 * days)
 
@@ -256,10 +260,14 @@ async def _competitor_promotions(
 
 
 async def _regional_route_surge(
-    db: AsyncSession, *, days: int, region: list[str] | None, airline: list[str] | None
+    db: AsyncSession,
+    *,
+    days: int,
+    region: list[str] | None,
+    airline: list[str] | None,
+    now: datetime,
 ) -> list[dict]:
     """New-route announcements in a region clearly outpacing the window before."""
-    now = datetime.now(timezone.utc)
     current_start = now - timedelta(days=days)
     previous_start = now - timedelta(days=2 * days)
 
@@ -345,9 +353,8 @@ async def _regional_route_surge(
 COMPARABLE_WINDOW_MIN_RATIO = 0.35
 
 
-async def _windows_are_comparable(db: AsyncSession, days: int) -> bool:
+async def _windows_are_comparable(db: AsyncSession, days: int, now: datetime) -> bool:
     """Did we collect enough in the previous window to compare against it?"""
-    now = datetime.now(timezone.utc)
     current_start = now - timedelta(days=days)
     previous_start = now - timedelta(days=2 * days)
 
@@ -372,7 +379,12 @@ async def _windows_are_comparable(db: AsyncSession, days: int) -> bool:
 
 
 async def _airline_momentum_recs(
-    db: AsyncSession, *, days: int, region: list[str] | None, airline: list[str] | None
+    db: AsyncSession,
+    *,
+    days: int,
+    region: list[str] | None,
+    airline: list[str] | None,
+    now: datetime,
 ) -> list[dict]:
     """Carriers whose coverage volume moved sharply, straight off the existing
     insights aggregate (insights_service.airline_momentum)."""
@@ -381,13 +393,15 @@ async def _airline_momentum_recs(
         # region-filtered momentum claim would be unsupported by the data.
         return []
 
-    if not await _windows_are_comparable(db, days):
+    if not await _windows_are_comparable(db, days, now):
         # Coverage grew because we started collecting more, not because the
         # news did. Saying nothing beats saying something untrue.
         logger.info("momentum_withheld_incomparable_windows", days=days)
         return []
 
-    movers = await airline_momentum(db, window_days=days, limit=MOMENTUM_SCAN_LIMIT)
+    movers = await airline_momentum(
+        db, window_days=days, limit=MOMENTUM_SCAN_LIMIT, now=now
+    )
     selected = [
         m
         for m in movers
@@ -399,7 +413,7 @@ async def _airline_momentum_recs(
         return []
 
     keys = [m["code"] for m in selected]
-    since = datetime.now(timezone.utc) - timedelta(days=2 * days)
+    since = now - timedelta(days=2 * days)
     # Evidence spans both windows on purpose: a carrier that fell out of the
     # news has little or nothing in the current window, and the honest citation
     # for "coverage dropped" is the coverage it used to have.
@@ -467,10 +481,14 @@ async def _airline_momentum_recs(
 
 
 async def _negative_sentiment_clusters(
-    db: AsyncSession, *, days: int, region: list[str] | None, airline: list[str] | None
+    db: AsyncSession,
+    *,
+    days: int,
+    region: list[str] | None,
+    airline: list[str] | None,
+    now: datetime,
 ) -> list[dict]:
     """Categories where the window's coverage skews negative."""
-    now = datetime.now(timezone.utc)
     current_start = now - timedelta(days=days)
     previous_start = now - timedelta(days=2 * days)
     is_current = (Article.published_at >= current_start).label("is_current")
@@ -594,7 +612,12 @@ async def _negative_sentiment_clusters(
 
 
 async def _tk_review_themes(
-    db: AsyncSession, *, days: int, region: list[str] | None, airline: list[str] | None
+    db: AsyncSession,
+    *,
+    days: int,
+    region: list[str] | None,
+    airline: list[str] | None,
+    now: datetime,
 ) -> list[dict]:
     """A theme rising in the curated TK passenger reviews."""
     if region:
@@ -603,7 +626,7 @@ async def _tk_review_themes(
         return []
 
     window = days * TK_REVIEW_WINDOW_MULTIPLIER
-    today = datetime.now(timezone.utc).date()
+    today = now.date()
     current_start = today - timedelta(days=window)
     previous_start = today - timedelta(days=2 * window)
 
@@ -681,7 +704,7 @@ async def _tk_review_themes(
 
 
 async def _upcoming_events(
-    db: AsyncSession, *, region: list[str] | None, airline: list[str] | None
+    db: AsyncSession, *, region: list[str] | None, airline: list[str] | None, now: datetime
 ) -> list[dict]:
     """Demand-moving calendar entries starting inside the planning horizon.
 
@@ -691,7 +714,7 @@ async def _upcoming_events(
     if airline:
         return []  # the calendar has no carrier dimension
 
-    today = datetime.now(timezone.utc).date()
+    today = now.date()
     horizon = today + timedelta(days=EVENT_HORIZON_DAYS)
     query = (
         select(AviationEvent)
@@ -745,6 +768,7 @@ async def build_recommendations(
     category: list[str] | None = None,
     region: list[str] | None = None,
     airline: list[str] | None = None,
+    now: datetime | None = None,
 ) -> list[dict]:
     """Every pattern the data currently supports, most urgent first.
 
@@ -755,13 +779,23 @@ async def build_recommendations(
     actually carries that dimension. A momentum item has no category, so a
     category filter drops it -- claiming otherwise would attach the number to a
     focus it does not have.
+
+    ONE CLOCK. `now` anchors all six detectors, and they need it for more than
+    a tidy timestamp: they run CONCURRENTLY, each comparing a window against
+    the window before it, and each used to read its own clock inside its own
+    task. Two detectors could therefore cut their windows on opposite sides of
+    a midnight and disagree about which day a story fell in -- on one screen,
+    in one response, with no way for the reader to see why. The endpoint passes
+    the instant it stamps the payload with, so the window the page prints is
+    the window every item was actually found in.
     """
+    now = now or datetime.now(timezone.utc)
     # The six detectors are independent reads -- none of them sees another's
     # rows -- so running them one after another only served to stack six round
     # trips' latency on top of each other. They run concurrently now, each on
     # its own session: `db` is a single connection and a single state machine
     # and cannot be shared across gathered tasks (see `run_with_own_session`).
-    windowed = {"days": days, "region": region, "airline": airline}
+    windowed = {"days": days, "region": region, "airline": airline, "now": now}
     (
         promotions,
         route_surges,
@@ -775,7 +809,7 @@ async def build_recommendations(
         run_with_own_session(_airline_momentum_recs, db, **windowed),
         run_with_own_session(_negative_sentiment_clusters, db, **windowed),
         run_with_own_session(_tk_review_themes, db, **windowed),
-        run_with_own_session(_upcoming_events, db, region=region, airline=airline),
+        run_with_own_session(_upcoming_events, db, region=region, airline=airline, now=now),
     )
 
     # Concatenated in the original order: the final sort is not a total order

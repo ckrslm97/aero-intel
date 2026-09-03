@@ -45,6 +45,9 @@ interface Recommendation {
 }
 
 interface RecommendationsOut {
+  /** When the server cut the window -- see backend/app/api/window.py. */
+  generated_at: string;
+  window: { days: number; since: string; until: string };
   days: number;
   count: number;
   items: Recommendation[];

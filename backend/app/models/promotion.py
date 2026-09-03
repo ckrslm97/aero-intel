@@ -144,12 +144,35 @@ class Promotion(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         DateTime(timezone=True), nullable=True
     )
 
-        # When WE first saw it -- not when the airline launched it. This is what
-    # drives the "Yeni" badge and the 48h banner, and it is the only freshness
-    # claim we can actually stand behind: an airline's own page carries no
-    # publication timestamp, and a news report's date is the reporter's, not
-    # the campaign's. Indexed because every list query orders or filters on it.
+    # When WE first saw it -- not when the airline launched it, and not when a
+    # reporter filed the story we read it in. This is what drives the "Yeni"
+    # badge and the 48h banner, and it is the only freshness claim we can
+    # actually stand behind: an airline's own page carries no publication
+    # timestamp, and a news report's date is the reporter's, not the
+    # campaign's. Indexed because every list query orders or filters on it.
+    #
+    # Every write path stamps this with its own clock at the moment of the
+    # sighting (`now(UTC)`), and a merge keeps the EARLIEST of two sightings
+    # (pipeline/promo_dedup.py) -- first sight, never overwritten by a re-read.
     detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+    #: The publication date of the SOURCE DOCUMENT this campaign was read out
+    #: of, when the source carried one -- the news article's `published_at`.
+    #:
+    #: It exists so `detected_at` no longer has to carry two incompatible
+    #: meanings. "We found this at 06:00 today" and "the trade press wrote about
+    #: it three weeks ago" are both worth printing and are not the same fact;
+    #: fused into one column the freshness surfaces read the reporter's clock
+    #: and a campaign found today could never be new.
+    #:
+    #: NULL on every row whose source had no date, and on every row detected by
+    #: a path that has no source document at all (the airline page scraper: a
+    #: campaign page states no publication time -- `page_published_at` /
+    #: `page_updated_at` further down cover what such a page does state). NULL
+    #: means "the source stated no date", never "today".
+    source_published_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     # --- campaign intelligence ----------------------------------------------
     #

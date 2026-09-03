@@ -166,7 +166,8 @@ export interface HubRouteOut {
   article_count: number;
 }
 
-export interface HubOverviewOut {
+export interface HubOverviewOut extends Stamped {
+  window: ResponseWindow;
   days: number;
   hubs: HubOut[];
   routes: HubRouteOut[];
@@ -402,7 +403,15 @@ export interface RouteSignalGroup {
   articles: RouteSignalArticle[];
 }
 
-export interface InsightsOut {
+export interface InsightsOut extends Stamped {
+  /** One window PER aggregate: momentum compares 7-day halves while the other
+   * two run over 30 days, so a single `days` would misdescribe most of this
+   * payload. */
+  windows: {
+    airline_momentum: ResponseWindow;
+    new_route_signals: ResponseWindow;
+    sentiment_by_category: ResponseWindow;
+  };
   airline_momentum: {
     code: string;
     name: string;
@@ -462,6 +471,15 @@ export interface PromotionOut {
   /** When WE first saw it, ISO datetime. Drives the "Yeni" badge and the 48h
    * banner, and is the x position of a start-less campaign's point marker. */
   detected_at: string;
+  /** The publication date of the article this campaign was read out of, when
+   * there was one -- deliberately NOT folded into `detected_at`. `null` for the
+   * airline-page and curated paths, which have no source document, and for a
+   * feed that carried no date. Never a stand-in for the sighting. */
+  source_published_at: string | null;
+  /** The last time a scan CONFIRMED the campaign still on its page. `null` on
+   * rows whose write path never re-checks anything -- render "—", never the
+   * detection or change time, which are different questions. */
+  last_seen_at: string | null;
   /** Pre-formatted Turkish range, already saying which end is unknown. */
   sale_range_tr: string;
   travel_range_tr: string;
@@ -954,11 +972,39 @@ export interface AnnualSeriesBoardOut {
   scope_tr: string;
 }
 
+/* --- Response stamps ------------------------------------------------------ */
+/** The window an aggregate was computed over, stated from both ends so a
+ * client can print "son N gün" without inventing either edge.
+ * Mirrors backend/app/api/window.py. */
+export interface ResponseWindow {
+  days: number;
+  /** ISO datetime -- the window's near edge, exactly `until - days`. */
+  since: string;
+  /** ISO datetime -- equal to the response's `generated_at`. */
+  until: string;
+}
+
+/** Carried by every aggregate endpoint. `generated_at` is when the SERVER cut
+ * the window, which is the only defensible "son güncelleme": the browser's
+ * fetch time (what these pages printed before it existed) says the data is
+ * fresh every time the reader reloads, even from cache, even when the cron
+ * behind it stopped days ago. */
+export interface Stamped {
+  generated_at: string;
+}
+
 /* --- Hub network signals -------------------------------------------------- */
 /** Same shape as InsightsOut['new_route_signals'], produced from pipeline v2
  * events instead of raw articles -- see
  * backend/app/services/network_signals_service.py. */
 export type NetworkSignalGroup = RouteSignalGroup;
+
+/** GET /hubs/network-signals. An envelope, not a bare list: the tab prints a
+ * "son güncelleme" and needs a real one to print. */
+export interface NetworkSignalsOut extends Stamped {
+  window: ResponseWindow;
+  regions: NetworkSignalGroup[];
+}
 
 /* --- Biz ------------------------------------------------------------------ */
 /** Mirrors backend/app/services/biz_service.py. */
@@ -1033,7 +1079,8 @@ export interface BizCommercialSignal {
   metric: { label: string; value: number; previous: number | null } | null;
 }
 
-export interface BizOverviewOut {
+export interface BizOverviewOut extends Stamped {
+  window: ResponseWindow;
   days: number;
   competitor_signals: BizSection<BizCompetitorSignal>;
   network_signals: BizSection<NetworkSignalGroup>;

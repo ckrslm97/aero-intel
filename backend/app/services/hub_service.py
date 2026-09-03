@@ -28,8 +28,12 @@ PUBLISHABLE_BANDS = ("high", "medium")
 MIN_ROUTE_MENTIONS = 2
 
 
-def _since(days: int) -> datetime:
-    return datetime.now(timezone.utc) - timedelta(days=days)
+def _since(days: int, now: datetime | None = None) -> datetime:
+    """The window's near edge. `now` is passed in by a caller that has to
+    REPORT the window it served (hub_overview, for /hubs' envelope), so the
+    stamp on the response and the cut in the SQL are one instant rather than
+    two readings of the clock taken a query apart."""
+    return (now or datetime.now(timezone.utc)) - timedelta(days=days)
 
 
 def _hub_payload(hub: Hub) -> dict:
@@ -46,7 +50,9 @@ def _hub_payload(hub: Hub) -> dict:
     }
 
 
-async def _mention_counts(db: AsyncSession, days: int) -> dict[str, int]:
+async def _mention_counts(
+    db: AsyncSession, days: int, now: datetime | None = None
+) -> dict[str, int]:
     """Articles per airport code. One query, not one per hub."""
     result = await db.execute(
         select(Entity.code, func.count(func.distinct(ArticleEntity.article_id)))
@@ -55,14 +61,14 @@ async def _mention_counts(db: AsyncSession, days: int) -> dict[str, int]:
         .where(
             Entity.entity_type == "airport",
             Article.is_duplicate.is_(False),
-            func.coalesce(Article.published_at, Article.fetched_at) >= _since(days),
+            func.coalesce(Article.published_at, Article.fetched_at) >= _since(days, now),
         )
         .group_by(Entity.code)
     )
     return {code: count for code, count in result.all() if code}
 
 
-async def _routes(db: AsyncSession, days: int) -> list[dict]:
+async def _routes(db: AsyncSession, days: int, now: datetime | None = None) -> list[dict]:
     """Airport pairs that keep turning up in the same story.
 
     This is a co-mention graph, not a schedule. We have no OAG feed on the free
@@ -92,7 +98,7 @@ async def _routes(db: AsyncSession, days: int) -> list[dict]:
             # Ordered pair, so A-B and B-A collapse into one line.
             left.code < right.code,
             Article.is_duplicate.is_(False),
-            func.coalesce(Article.published_at, Article.fetched_at) >= _since(days),
+            func.coalesce(Article.published_at, Article.fetched_at) >= _since(days, now),
         )
         .group_by(left.code, right.code)
         .having(func.count(func.distinct(left_link.article_id)) >= MIN_ROUTE_MENTIONS)
@@ -223,11 +229,21 @@ async def _hub_campaigns(db: AsyncSession, hub: Hub, days: int) -> list[dict]:
     ]
 
 
-async def hub_overview(db: AsyncSession, days: int = 30) -> dict:
-    counts = await _mention_counts(db, days)
+async def hub_overview(
+    db: AsyncSession, days: int = 30, now: datetime | None = None
+) -> dict:
+    """Every watched hub with its coverage count, plus the co-mention lines.
+
+    `now` anchors both reads to the same instant: the counts and the routes are
+    two queries, and without one anchor the map's lines could be cut a
+    round-trip later than the counts beside them -- and neither would match the
+    `generated_at` the endpoint stamps on the payload.
+    """
+    anchor = now or datetime.now(timezone.utc)
+    counts = await _mention_counts(db, days, anchor)
     hubs = [{**_hub_payload(hub), "article_count": counts.get(hub.code, 0)} for hub in HUBS]
     hubs.sort(key=lambda h: (-h["article_count"], h["code"]))
-    return {"days": days, "hubs": hubs, "routes": await _routes(db, days)}
+    return {"days": days, "hubs": hubs, "routes": await _routes(db, days, anchor)}
 
 
 async def hub_detail(db: AsyncSession, code: str, days: int = 90) -> dict | None:

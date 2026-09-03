@@ -943,3 +943,38 @@ async def test_re_seeding_does_not_resurrect_a_campaign_that_was_merged_away(db_
     # The seed's window matches the airline's, and its markets are richer.
     assert (kktc[0].sale_starts, kktc[0].sale_ends) == (date(2026, 8, 21), date(2026, 8, 23))
     assert kktc[0].markets == seeded.markets
+
+
+# --- "Son kontrol" is a check, not a change --------------------------------
+#
+# The drawer's "Son kontrol" cell printed `last_changed_at ?? detected_at`,
+# because the real column was never serialised. A campaign re-checked hourly
+# and unchanged for a week was shown as last checked a week ago; a row nothing
+# has ever re-checked was shown as checked at the moment it was first seen.
+# `last_seen_at` -- the only column that means "a scan confirmed this is still
+# on its page" -- now reaches the client, and stays null where nothing checked.
+
+
+async def test_the_real_last_check_reaches_the_page(db_session):
+    seen = NOW - timedelta(hours=3)
+    await _promo(
+        db_session,
+        slug="checked",
+        detected_at=NOW - timedelta(days=9),
+        last_seen_at=seen,
+        last_changed_at=NOW - timedelta(days=9),
+    )
+    rows = await _list(db_session)
+    assert rows[0].last_seen_at == seen
+    # ...and the other two clocks are still their own answers, not stand-ins.
+    assert rows[0].last_changed_at != seen
+    assert rows[0].detected_at != seen
+
+
+async def test_a_row_nothing_re_checked_says_nothing(db_session):
+    """The negative half. `promo_scrape` re-checks and `promotions.py` does
+    not, so a null here is a real state of the table -- and it must render as
+    "—", not silently borrow the detection time."""
+    await _promo(db_session, slug="unchecked", detected_at=NOW)
+    rows = await _list(db_session)
+    assert rows[0].last_seen_at is None

@@ -12,8 +12,15 @@ interface DataSourceState<T> {
    * `data !== null`, since the very first load has no prior data to be
    * stale relative to. */
   loaded: boolean;
-  /** When `data` was last replaced by a successful fetch, or null before the
-   * first one ever completes. Faz 12: "her kartta son güncelleme". */
+  /** What the card prints as "son güncelleme".
+   *
+   * The SERVER's `generated_at` when the payload carries one -- the instant it
+   * cut the window it answered with. Only when a payload has no stamp does
+   * this fall back to the moment this fetch resolved, which is a fact about
+   * the browser and not about the data: it reads "now" on a response served
+   * from cache, moves on every reload, and keeps climbing over numbers whose
+   * cron stopped days ago. Null before the first request ever completes.
+   * Faz 12: "her kartta son güncelleme". */
   lastUpdated: Date | null;
   /** True when the last fetch attempt failed but an earlier result is still
    * being shown. */
@@ -27,6 +34,24 @@ interface DataSourceState<T> {
  * changes or `retry()` is called; a run superseded by a newer one (deps
  * changed again, or unmount) never applies its result -- the classic
  * fetch-race guard, just centralised instead of hand-rolled per component. */
+/** The response's own stamp, when it has one.
+ *
+ * Aggregate endpoints return `generated_at` (backend/app/api/window.py); older
+ * ones return bare lists. An unparseable or absent stamp falls back to the
+ * fetch time rather than to nothing, because a card with no timestamp at all
+ * is worse than one whose timestamp is honestly the client's -- but the
+ * server's answer wins wherever there is one. */
+function stampOf(result: unknown): Date {
+  if (result && typeof result === "object" && "generated_at" in result) {
+    const raw = (result as { generated_at?: unknown }).generated_at;
+    if (typeof raw === "string") {
+      const at = new Date(raw);
+      if (!Number.isNaN(at.getTime())) return at;
+    }
+  }
+  return new Date();
+}
+
 export function useDataSource<T>(
   fetcher: (signal: AbortSignal) => Promise<T>,
   deps: React.DependencyList,
@@ -60,7 +85,7 @@ export function useDataSource<T>(
         if (cancelled) return;
         setData(result);
         setError(null);
-        setLastUpdated(new Date());
+        setLastUpdated(stampOf(result));
       })
       .catch((err: unknown) => {
         if (cancelled || (err as Error)?.name === "AbortError") return;

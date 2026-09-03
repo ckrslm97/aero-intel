@@ -57,10 +57,21 @@ async def category_volume_by_week(db: AsyncSession, weeks: int = 8) -> dict:
     return {"weeks": week_labels, "series": series}
 
 
-async def airline_momentum(db: AsyncSession, window_days: int = 7, limit: int = 10) -> list[dict]:
+async def airline_momentum(
+    db: AsyncSession,
+    window_days: int = 7,
+    limit: int = 10,
+    now: datetime | None = None,
+) -> list[dict]:
     """Which airlines the news is suddenly about: mention counts in the last
-    `window_days` vs the window before it."""
-    now = datetime.now(timezone.utc)
+    `window_days` vs the window before it.
+
+    `now` is the window's anchor, passed in by a caller that has to STATE the
+    window it served (the /insights envelope) so the stamp on the response and
+    the cut in the SQL are the same instant, not two readings of the clock a
+    few milliseconds apart. Defaulted, so every other caller is unchanged.
+    """
+    now = now or datetime.now(timezone.utc)
     current_start = now - timedelta(days=window_days)
     previous_start = now - timedelta(days=2 * window_days)
 
@@ -134,14 +145,21 @@ def destination_airports(airports: list[dict], airlines: list[str]) -> list[dict
 
 
 async def new_route_signals(
-    db: AsyncSession, days: int = 30, per_region: int = 6, max_articles: int = 120
+    db: AsyncSession,
+    days: int = 30,
+    per_region: int = 6,
+    max_articles: int = 120,
+    now: datetime | None = None,
 ) -> list[dict]:
     """New-route announcements grouped by world region, with the articles
     behind each count. The insights page renders these as a cited list --
     every signal links back to its source -- so this returns article detail,
     not bare counts. `count` is the full regional total even when the article
-    list is capped at `per_region`."""
-    since = datetime.now(timezone.utc) - timedelta(days=days)
+    list is capped at `per_region`.
+
+    `now`: see airline_momentum -- the caller's single anchor for the window it
+    reports."""
+    since = (now or datetime.now(timezone.utc)) - timedelta(days=days)
     rows = (
         await db.execute(
             select(Article, ArticleEnrichment)
@@ -234,8 +252,12 @@ async def new_route_signals(
     ]
 
 
-async def sentiment_by_category(db: AsyncSession, days: int = 30) -> list[dict]:
-    since = datetime.now(timezone.utc) - timedelta(days=days)
+async def sentiment_by_category(
+    db: AsyncSession, days: int = 30, now: datetime | None = None
+) -> list[dict]:
+    """`now`: see airline_momentum -- the caller's single anchor for the
+    window it reports."""
+    since = (now or datetime.now(timezone.utc)) - timedelta(days=days)
     rows = (
         await db.execute(
             select(ArticleEnrichment.category, ArticleEnrichment.sentiment, func.count())
@@ -257,15 +279,59 @@ async def sentiment_by_category(db: AsyncSession, days: int = 30) -> list[dict]:
     ]
 
 
-async def latest_digest(db: AsyncSession, topic: str = "daily") -> InsightDigest | None:
-    return (
-        await db.execute(
-            select(InsightDigest)
-            .where(InsightDigest.topic == topic)
-            .order_by(InsightDigest.digest_date.desc())
-            .limit(1)
-        )
-    ).scalar_one_or_none()
+#: How old the daily digest may be and still be served.
+#:
+#: WHY A BOUND AND NOT A DATED HEADING. The two honest fixes were "print the
+#: digest's date beside it" and "stop serving a stale one". The paper already
+#: prints the date (gazete/today-intelligence.tsx renders it next to the
+#: heading) and it was not enough: the heading over it says TODAY'S
+#: INTELLIGENCE, and a reader who takes in a headline does not audit the small
+#: grey date under it before believing the sentence.
+#:
+#: The deciding argument is what the paragraph SAYS, not how old it is. The
+#: digest narrates a rolling 7-day window -- "Bu hafta gündemi yükselenler",
+#: written from `airline_momentum`'s 7-day comparison -- and it is rendered
+#: beside aggregates recomputed live on every request. At three days old, most
+#: of the week it describes is no longer the week beside it, so the page states
+#: two different windows as one. That is not stale, it is contradictory, and no
+#: date stamp repairs it.
+#:
+#: Two days, not one: the digest is written by a scheduled job, and a reader at
+#: 06:00 on a morning the job has not run yet must still get yesterday's
+#: paragraph. One missed run degrades to the day before that. Beyond it the
+#: block renders nothing at all -- an empty state this page has always handled
+#: (`TodayIntelligence` returns null with no digest, the newsletter omits the
+#: block), and silence is the honest output when the only thing we have to say
+#: is about a week that has moved on.
+DIGEST_MAX_AGE_DAYS = 2
+
+
+async def latest_digest(
+    db: AsyncSession,
+    topic: str = "daily",
+    max_age_days: int | None = DIGEST_MAX_AGE_DAYS,
+) -> InsightDigest | None:
+    """The newest digest for `topic`, or None when the newest one is too old.
+
+    `max_age_days=None` lifts the bound, for a caller whose surface makes no
+    freshness claim at all (see tk_service.latest_tk_digest). Bounded BY
+    DEFAULT, deliberately: an unbounded read is the failure this exists to
+    prevent, and a default that has to be remembered is one that eventually
+    is not.
+    """
+    query = (
+        select(InsightDigest)
+        .where(InsightDigest.topic == topic)
+        .order_by(InsightDigest.digest_date.desc())
+        .limit(1)
+    )
+    if max_age_days is not None:
+        # Compared on the DATE, in UTC, like `build_daily_digest` writes it:
+        # `digest_date` is a calendar day, and an hours-based cutoff would make
+        # a digest expire at a different clock time every day.
+        cutoff = datetime.now(timezone.utc).date() - timedelta(days=max_age_days)
+        query = query.where(InsightDigest.digest_date >= cutoff)
+    return (await db.execute(query)).scalar_one_or_none()
 
 
 def _fallback_digest(movers: list[dict], routes: list[dict]) -> str:

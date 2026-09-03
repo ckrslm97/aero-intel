@@ -50,9 +50,19 @@ function routes({
         : Promise.resolve(insightsOut ?? insights([]));
     }
     if (path?.startsWith("/hubs/network-signals")) {
+      // An envelope, not a bare list: the endpoint stamps its own window
+      // (backend/app/api/window.py) and the cell reads `regions` out of it.
       return routeGroups instanceof Error
         ? Promise.reject(routeGroups)
-        : Promise.resolve(routeGroups ?? []);
+        : Promise.resolve({
+            generated_at: "2026-09-01T00:00:00Z",
+            window: {
+              days: 30,
+              since: "2026-08-02T00:00:00Z",
+              until: "2026-09-01T00:00:00Z",
+            },
+            regions: routeGroups ?? [],
+          });
     }
     return Promise.reject(new Error(`unexpected path ${String(path)}`));
   });

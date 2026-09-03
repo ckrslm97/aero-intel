@@ -13,10 +13,7 @@ So the panel is filled with things that ARE derivable from the series we
 actually have, each one plain arithmetic a reader can re-run:
 
 * week / month / year-to-date change -- the close then versus the close now;
-* the 1-year percentile -- where today sits inside its own last 250 sessions,
-  the same `percentile_of` the fuel signal tile already bands (imported from
-  cockpit_signals_service rather than re-implemented, so the panel and the
-  tile can never disagree about where Brent sits in its year);
+* the 1-year percentile -- where today sits inside its own last 250 sessions;
 * 30-day realised volatility -- the annualised standard deviation of daily log
   returns. Realised, not implied: we have no options data, and an implied
   volatility would be a number from a market we do not read.
@@ -24,6 +21,18 @@ actually have, each one plain arithmetic a reader can re-run:
 Anything that could not be computed comes back as None and prints as "—". A
 missing indicator is never defaulted to zero, and a series too short to
 support one never borrows a longer window to fake it.
+
+THE ONE BRENT
+-------------
+`brent_indicators()` is where Kokpit's "Yakıt Riski" tile now gets its price,
+its 30-day move and its percentile, so the tile and the panel below it read one
+series over one period. They did not: the tile banded an intraday quote from
+our own KPI archive against a WEEKLY year of closes, the panel a published
+daily close against a DAILY one, and this docstring used to claim the two
+"can never disagree" on the grounds that they shared a `percentile_of`.
+Sharing the arithmetic is not sharing the number -- the same function over two
+different series is two different answers, which is exactly what the page
+printed.
 
 JET FUEL
 --------
@@ -43,7 +52,6 @@ from datetime import date, datetime, timedelta
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.ingest.markets import fetch_history
-from app.services.cockpit_signals_service import percentile_of
 from app.services.kpi_service import JET_FUEL_CRACK_SPREAD_USD, LIVE_ENERGY_CONTRACTS
 
 logger = get_logger(__name__)
@@ -90,6 +98,21 @@ class EnergyIndicators:
     percentile_1y: float | None
     volatility_30d_pct: float | None
     sparkline: list[float]
+
+
+def percentile_of(value: float, series: list[float]) -> float | None:
+    """Share of `series` at or below `value`, 0-100. None for an empty series:
+    an honest "could not place it", never a defaulted 50.
+
+    Lives here, with the series it is computed over, rather than in
+    cockpit_signals_service where it was written. Both surfaces that print a
+    Brent percentile now read `brent_indicators()` below, and the function had
+    to sit on the side of that dependency that owns the closes.
+    """
+    if not series:
+        return None
+    at_or_below = sum(1 for point in series if point <= value)
+    return round(at_or_below / len(series) * 100, 1)
 
 
 def pct_change(latest: float, prior: float | None) -> float | None:
@@ -223,6 +246,41 @@ JET_FUEL_NOTE_TR = (
 )
 
 
+#: The one period every Brent reading in this app is taken over: a year of
+#: DAILY closes ("1y" is weekly -- see ingest/markets.HISTORY_RANGES).
+#:
+#: Named because two surfaces depend on it being the same number. Kokpit's
+#: fuel tile used to place today's Brent inside the WEEKLY year (~52 closes)
+#: while this panel placed it inside the DAILY one (~250), so one page printed
+#: two different percentiles for one contract on the same screen -- under a
+#: module comment claiming the two "can never disagree" because they share a
+#: `percentile_of`. Sharing the function was never the thing that mattered;
+#: sharing the series is.
+BRENT_HISTORY_PERIOD = "1y_daily"
+
+
+async def brent_indicators() -> EnergyIndicators:
+    """Every Brent number this app prints, from ONE published daily series.
+
+    The single source the fuel tile and the "Yakıt & Enerji" panel both read.
+    Before it, the tile's price was `kpis.latest("oil_price")` -- an intraday
+    `regularMarketPrice` quote recorded by the KPI cron -- and its 30-day move
+    was computed over OUR archive of those quotes, while the panel three
+    inches below printed the last published CLOSE and the move between two
+    closes. Two Brents, two moves, two percentiles, one page.
+
+    `fetch_history` never raises (it returns [] on any failure), and
+    `indicators_from_history` maps an empty series to all-None, so a provider
+    outage degrades both surfaces to "—" together instead of leaving one of
+    them printing a stale stored number as though it were today's.
+    """
+    settings = get_settings()
+    points = await fetch_history(
+        settings.yahoo_finance_base_url, BRENT_SYMBOL, BRENT_HISTORY_PERIOD
+    )
+    return indicators_from_history(points)
+
+
 async def energy_metrics() -> list[EnergyMetric]:
     """Brent, WTI, Henry Hub gas and the derived jet-fuel row.
 
@@ -237,7 +295,7 @@ async def energy_metrics() -> list[EnergyMetric]:
     # paid three ~1s round trips on every cold cache; gathered it pays one.
     histories = await asyncio.gather(
         *(
-            fetch_history(settings.yahoo_finance_base_url, symbol, "1y_daily")
+            fetch_history(settings.yahoo_finance_base_url, symbol, BRENT_HISTORY_PERIOD)
             for _, symbol, _, _ in _SOURCED_CONTRACTS
         )
     )

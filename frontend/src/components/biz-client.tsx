@@ -50,6 +50,9 @@ interface TkTheme {
 
 interface TkOut {
   review_count: number;
+  /** MAX(created_at) over the corpus -- when the newest curated review landed.
+   * `null` on an empty corpus: nothing collected is not "collected today". */
+  collected_through: string | null;
   rating: { average: number | null; count: number };
   sentiment: { positive: number; neutral: number; negative: number };
   themes: TkTheme[];
@@ -63,6 +66,16 @@ const SENTIMENT_META = {
   neutral: { label: "Nötr", icon: Meh },
   negative: { label: "Olumsuz", icon: Frown },
 } as const;
+
+/** A real timestamp, day precision -- the corpus's own edge, formatted where
+ * it is printed rather than baked into a sentence. */
+function formatTimestamp(iso: string): string {
+  return new Date(iso).toLocaleDateString("tr-TR", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
+}
 
 function formatDate(iso: string | null): string | null {
   if (!iso) return null;
@@ -483,10 +496,16 @@ export function BizClient() {
         )}
       </div>
 
+      {/* The collection date comes from the corpus itself. It used to be the
+          literal string "19 Temmuz 2026", typed once and true for one day:
+          the corpus is re-curated and the sentence never moved. */}
       <p className="text-[11px] leading-relaxed text-muted-foreground">
         Yorumlar halka açık sayfalardan kısa alıntılar hâlinde, kaynağa bağlantı verilerek
         derlenmiştir; dağılım bulunan yorumların gerçek dağılımıdır, seçilmiş bir denge
-        değildir. Toplama tarihi: 19 Temmuz 2026.
+        değildir.
+        {data.collected_through
+          ? ` Son toplama: ${formatTimestamp(data.collected_through)}.`
+          : ""}
       </p>
     </div>
   );

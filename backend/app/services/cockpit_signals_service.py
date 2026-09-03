@@ -25,7 +25,10 @@ are data, so a test asserts every band boundary directly rather than
 re-implementing the comparison.
 
 Nothing here calls an LLM. Every value is arithmetic over rows this app already
-stores, plus Brent's own published history from Yahoo.
+stores, plus Brent's own published history from Yahoo -- and the fuel tile takes
+ALL of its Brent numbers from `energy_service.brent_indicators()`, the same one
+series the "Yakıt & Enerji" panel prints, so the two cannot state different
+prices, moves or percentiles for one contract on one page.
 """
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -43,12 +46,11 @@ from app.api.v1.risks import (
     RiskRadarOut,
     aggregate_risks,
 )
-from app.core.config import get_settings
 from app.core.logging import get_logger
-from app.ingest.markets import fetch_history
 from app.repositories.curated_repository import CuratedRepository
 from app.repositories.kpi_repository import KpiRepository
 from app.schemas.kokpit import CockpitSignalOut
+from app.services.energy_service import BRENT_SYMBOL, brent_indicators
 from app.services.insights_service import airline_momentum
 from app.taxonomy import RIVAL_CODES
 
@@ -198,15 +200,6 @@ def tr_signed_percent(value: float, decimals: int = 1) -> str:
     return f"{sign}%{tr_number(abs(value), decimals)}"
 
 
-def percentile_of(value: float, series: list[float]) -> float | None:
-    """Share of `series` at or below `value`, 0-100. None for an empty series:
-    an honest "could not place it", never a defaulted 50."""
-    if not series:
-        return None
-    at_or_below = sum(1 for point in series if point <= value)
-    return round(at_or_below / len(series) * 100, 1)
-
-
 # --- Tile builders (pure) -------------------------------------------------
 # Each takes already-fetched numbers and returns the finished tile. Free of
 # I/O, so every band boundary is directly unit-testable.
@@ -217,10 +210,12 @@ FX_METHOD_TR = (
 )
 
 FUEL_METHOD_TR = (
-    "Brent'in son 12 aylık kendi aralığındaki yüzdelik dilimi (%50 altı sakin, "
-    "%80 altı dikkat, üstü yüksek) ile 30 günlük ARTIŞI (%2 altı sakin, %8 altı "
-    "dikkat, üstü yüksek) ayrı ayrı bantlanır; kötü olan kazanır. Düşüş maliyet "
-    "riskini artırmadığı için bandı yükseltmez."
+    "Brent'in son 12 aylık GÜNLÜK KAPANIŞLARI içindeki yüzdelik dilimi (%50 altı "
+    "sakin, %80 altı dikkat, üstü yüksek) ile aynı serideki 30 günlük ARTIŞI "
+    "(%2 altı sakin, %8 altı dikkat, üstü yüksek) ayrı ayrı bantlanır; kötü olan "
+    "kazanır. Düşüş maliyet riskini artırmadığı için bandı yükseltmez. Fiyat ve "
+    "yüzdelerin tamamı bu tek yayımlanmış kapanış serisinden gelir — sayfadaki "
+    "\"Yakıt & Enerji\" paneliyle aynı seri."
 )
 
 
@@ -490,7 +485,6 @@ async def cockpit_signals(
     same rollup rather than from two runs that could differ. Production's own
     /kokpit/signals passes nothing and fetches it here, exactly as before.
     """
-    settings = get_settings()
     kpis = KpiRepository(db)
     now = datetime.now(timezone.utc)
     thirty_days_ago = now - timedelta(days=30)
@@ -503,7 +497,6 @@ async def cockpit_signals(
         return latest, round((latest.value - prior.value) / prior.value * 100, 2)
 
     usd_try, fx_move = await move_30d("fx_usd_try")
-    brent, brent_move = await move_30d("oil_price")
     # only_upcoming: a bank's "+3m" published in March says nothing about where
     # the rate goes from here once June has passed, and an elapsed horizon was
     # free to be the endpoint the tile quoted. The rows stay in the table --
@@ -513,14 +506,23 @@ async def cockpit_signals(
         currency_pair="USD/TRY", only_upcoming=True
     )
 
-    # Brent's own published year, from the same Yahoo path the KPI detail page
-    # already uses on the request path. fetch_history never raises -- it
-    # returns [] on any failure -- so a provider outage degrades this tile to
-    # "30-day move only" instead of failing the whole board.
-    percentile = None
-    if brent is not None:
-        history = await fetch_history(settings.yahoo_finance_base_url, "BZ=F", "1y")
-        percentile = percentile_of(brent.value, [value for _, value in history])
+    # EVERY Brent number on this tile comes from one call, and it is the same
+    # call the "Yakıt & Enerji" panel makes three inches down the page
+    # (services/energy_service.brent_indicators).
+    #
+    # It used to be three sources for one contract: the price was
+    # `kpis.latest("oil_price")`, an intraday quote our cron happened to catch;
+    # the 30-day move was computed over our archive of those quotes; and the
+    # percentile placed that quote inside a WEEKLY year (~52 closes) while the
+    # panel below placed the daily close inside a DAILY one (~250). Same
+    # contract, same screen, two prices, two moves and two percentiles -- and
+    # the reader had no way to tell which of them the level was banded from.
+    #
+    # `fetch_history` never raises, so an outage returns an empty series and
+    # every field below is None: the tile degrades to UNKNOWN ("Veri yok")
+    # together with the panel, rather than one of them printing a stored
+    # number as if it were today's.
+    brent = await brent_indicators()
     if radar is None:
         radar = await aggregate_risks(db, days=RISK_WINDOW_DAYS)
     high_count = sum(country.severity_counts.high for country in radar.countries)
@@ -560,12 +562,16 @@ async def cockpit_signals(
             source_url=usd_try.source_url if usd_try else None,
         ),
         build_fuel_signal(
-            brent=brent.value if brent else None,
-            percentile=percentile,
-            move_30d_pct=brent_move,
-            as_of=brent.as_of if brent else None,
-            source=brent.source if brent else None,
-            source_url=brent.source_url if brent else None,
+            brent=brent.value,
+            percentile=brent.percentile_1y,
+            # The published series' own 30-day step, which is what the panel
+            # prints as "1 aylık değişim". Both now move together or not at all.
+            move_30d_pct=brent.month_change_pct,
+            # The CLOSE's own timestamp -- when the number was true -- not when
+            # our cron stored it.
+            as_of=brent.as_of,
+            source=f"Yahoo Finance ({BRENT_SYMBOL})",
+            source_url=f"https://finance.yahoo.com/quote/{BRENT_SYMBOL}",
         ),
         build_risk_signal(
             high_count=high_count,

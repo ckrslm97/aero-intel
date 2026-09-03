@@ -662,7 +662,27 @@ async def extract_promotions(
             fields = heuristic_extract(title, body, default_year=published_year)
         fields = _coherent(fields)
 
-        detected = article.published_at or article.fetched_at or datetime.now(timezone.utc)
+        # WHEN WE FIRST SAW IT -- `run_started_at`, never the article's own date.
+        # `detected_at` is documented in models/promotion.py as our sighting,
+        # and it is what the "Yeni" badge, the 48h banner and
+        # /promotions/new-count all read. Stamping a reporter's publication
+        # date into it meant a campaign extracted today from a three-week-old
+        # article was born three weeks old: invisible to every freshness
+        # surface on the day we actually learned about it, which is the one day
+        # a revenue manager needs to see it.
+        #
+        # The article's own date is not lost -- it goes to `source_published_at`
+        # below, where it answers the question it can actually answer ("how old
+        # is the reporting behind this row?") without pretending to answer ours.
+        #
+        # A deliberate backfill (`rescan`, `limit=None`) therefore does light up
+        # the "Yeni" banner, and that is the honest reading: an archive sweep
+        # genuinely IS the moment this system first saw those campaigns. The
+        # banner says when we found it; `source_published_at` says the article
+        # is five months old, and the two together are true. The previous
+        # arrangement bought a quiet backfill by lying on every normal run.
+        detected = run_started_at
+        source_published = article.published_at
         candidate = PromoCandidate(
             airline_code=code,
             airline_name=name,
@@ -719,10 +739,11 @@ async def extract_promotions(
                     url=article.url[:500],
                     source_name=(article.source.name if article.source else "Haber"),
                     region=enrichment.region if enrichment else None,
-                    # The article's own timestamp, not now(): backfilling five
-                    # months of archive must not light up the "Yeni" banner
-                    # with five months of campaigns at once.
                     detected_at=detected,
+                    # The reporter's clock, kept beside ours rather than inside
+                    # it. NULL when the feed carried no date -- an unknown
+                    # publication date is not "published now".
+                    source_published_at=source_published,
                 )
             )
             await db.flush()
@@ -736,6 +757,12 @@ async def extract_promotions(
             # window with the extractor's blank, turning a dated bar into a
             # dateless point marker.
             merge_candidate(existing, candidate, prefer_candidate=True)
+            # Not through `merge_candidate`: that function merges the campaign's
+            # own facts, and this is a fact about a source document. Filled only
+            # when the row has none, so the FIRST article to carry this campaign
+            # keeps the date -- a later re-read must not age the row forward.
+            if existing.source_published_at is None and source_published is not None:
+                existing.source_published_at = source_published
             stats["updated"] += 1
 
     await db.commit()

@@ -19,6 +19,45 @@ describe("useDataSource", () => {
     expect(result.current.lastUpdated).toBeInstanceOf(Date);
   });
 
+  // --- "son güncelleme" is the server's clock, not the browser's ----------
+  //
+  // The stamp printed on every card used to be `new Date()` at the moment the
+  // fetch resolved. That is a fact about the reader's network: it reads "now"
+  // on a cached response, it moves on every reload, and over a feed whose cron
+  // stopped last week it keeps climbing -- the freshest possible label on the
+  // stalest possible numbers. Aggregate endpoints now stamp themselves.
+
+  it("stamps the card with the server's generated_at when the payload has one", async () => {
+    const fetcher = vi
+      .fn()
+      .mockResolvedValue({ generated_at: "2026-08-30T06:15:00Z", items: [] });
+    const { result } = renderHook(() => useDataSource(fetcher, []));
+
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+
+    expect(result.current.lastUpdated?.toISOString()).toBe("2026-08-30T06:15:00.000Z");
+  });
+
+  it("falls back to the fetch time only when the payload carries no stamp", async () => {
+    // A card with no timestamp at all is worse than one honestly showing the
+    // client's; the server's answer just wins wherever there is one.
+    const fetcher = vi.fn().mockResolvedValue([1, 2, 3]);
+    const { result } = renderHook(() => useDataSource(fetcher, []));
+
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+
+    expect(result.current.lastUpdated).toBeInstanceOf(Date);
+  });
+
+  it("ignores a stamp it cannot parse rather than printing an Invalid Date", async () => {
+    const fetcher = vi.fn().mockResolvedValue({ generated_at: "hiçbir zaman" });
+    const { result } = renderHook(() => useDataSource(fetcher, []));
+
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+
+    expect(Number.isNaN(result.current.lastUpdated!.getTime())).toBe(false);
+  });
+
   it("sets error and leaves data null on a first-ever failure", async () => {
     const fetcher = vi.fn().mockRejectedValue(new Error("network down"));
     const { result } = renderHook(() => useDataSource(fetcher, []));
