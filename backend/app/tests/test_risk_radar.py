@@ -2808,3 +2808,43 @@ def test_a_single_token_airport_alias_has_to_look_like_a_name(title, content, ex
         if entity.entity_type == "airport"
     ]
     assert found == expected
+
+
+@pytest.mark.parametrize(
+    ("title", "content", "expected"),
+    [
+        pytest.param(
+            "Russia airspace warning",
+            "Flights from St Petersburg and Moscow Domodedovo were affected.",
+            ["LED", "DME"],
+            id="st_petersburg_is_not_petersburg_alaska",
+        ),
+        pytest.param(
+            "Germany says Russia was behind the drone incursion",
+            "The decision was taken at a high level in Berlin.",
+            ["BER"],
+            id="a_high_level_decision_is_not_high_level_airport",
+        ),
+        pytest.param(
+            "Cascavel excursion",
+            "The A320 landed at Cascavel Airport (CAC) after departing GRU.",
+            ["CAC", "GRU"],
+            id="named_airports_survive_both_rules",
+        ),
+    ],
+)
+def test_an_airport_alias_needs_capitals_and_loses_to_a_longer_one(title, content, expected):
+    """Two rules, one claim: the radar may only name an airport the article
+    actually named.
+
+    Capitalisation is the evidence that an ordinary word is being used as a
+    name ("a high level" vs "High Level"), and a shorter alias sitting inside a
+    longer one is not a second airport -- "St Petersburg" contains
+    "Petersburg", which is in Alaska, and both were published on one card.
+    """
+    found = [
+        entity.code
+        for entity in extract_entity_mentions(title, content)
+        if entity.entity_type == "airport"
+    ]
+    assert found == expected
