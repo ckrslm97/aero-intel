@@ -34,6 +34,7 @@ on:
           - backfill-campaign-classes
           - backfill-campaign-kind
           - campaign-quality-report
+          - risk-quality-report
           - purge-blacklisted-articles
       dry_run:
         description: "purge-blacklisted-articles / backfill-campaign-kind: count the matching rows and write nothing. Run this first."
@@ -41,7 +42,7 @@ on:
         type: boolean
         default: false
       days:
-        description: "re-enrich: limit to articles fetched in the last N days (blank = all). campaign-quality-report: reporting window in days (blank = 7)"
+        description: "re-enrich: limit to articles fetched in the last N days (blank = all). campaign-quality-report: reporting window in days (blank = 7). risk-quality-report: reporting window in days (blank = the radar's own default)"
         required: false
         type: string
       limit:
@@ -189,6 +190,18 @@ jobs:
                 python -m app.cli campaign-quality-report --days "${DAYS}"
               else
                 python -m app.cli campaign-quality-report
+              fi ;;
+            risk-quality-report)
+              # Read-only: the Risk Radarı funnel -- total articles, current,
+              # risk candidate, confidence passed, aviation relevance passed,
+              # location verified, clustered signal -- with each gate's
+              # rejections and, importantly, how much of each gate is still
+              # passing UNSCORED rows. No LLM and no writes, so it is safe to
+              # dispatch at any time; read the numbers in the step log.
+              if [ -n "${DAYS}" ]; then
+                python -m app.cli risk-quality-report --days "${DAYS}"
+              else
+                python -m app.cli risk-quality-report
               fi ;;
             purge-blacklisted-articles)
               # Retires archived articles from blacklisted domains (Reddit) by

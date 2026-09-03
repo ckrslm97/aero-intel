@@ -581,6 +581,14 @@ RISK_CITY_COUNTRY: dict[str, tuple[str, str]] = {
     "denver": ("Denver", "united states"),
     "atlanta": ("Atlanta", "united states"),
     "new orleans": ("New Orleans", "united states"),
+    # Washington is here for the SOURCE role as much as the event one: it is
+    # the standard metonym for the US government in wire copy ("Washington
+    # said..."), which is exactly the construction heuristic.py's location
+    # roles have to be able to see in order to refuse it as an event location.
+    # Without an entry here the name is invisible to the resolver and the
+    # sentence resolves to whichever country the gazetteer happened to hit
+    # first -- the failure the role test exists to fix.
+    "washington": ("Washington", "united states"),
     "toronto": ("Toronto", "canada"),
     "vancouver": ("Vancouver", "canada"),
     "montreal": ("Montreal", "canada"),

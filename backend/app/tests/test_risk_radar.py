@@ -11,18 +11,28 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.api.v1.risks import UNKNOWN_COUNTRY, list_risks
+from app.api.v1.risks import DEFAULT_WINDOW_DAYS, UNKNOWN_COUNTRY, list_risks
 from app.llm.base import EntityMention
 from app.llm.heuristic import (
+    AVIATION_RELEVANCE_BODY,
+    AVIATION_RELEVANCE_GATE,
+    AVIATION_RELEVANCE_TITLE,
+    LOCATION_CONFIDENCE_AIRPORT_DERIVED,
+    LOCATION_CONFIDENCE_CITY_CONFIRMED,
+    LOCATION_CONFIDENCE_CONFLICT,
+    LOCATION_CONFIDENCE_SOURCE_ONLY,
     _RISK_CONTEXT,
     _RISK_RULES,
     _keyword_pattern,
     classify_risk_heuristic,
+    detect_aviation_relevance,
+    detect_currency_flags,
     detect_risk_place,
     detect_risk_severity,
     detect_risk_type,
     fold_text,
     is_retrospective,
+    resolve_risk_location,
 )
 from app.models.article import Article, ArticleEnrichment
 from app.models.entity import ArticleEntity, Entity
@@ -551,6 +561,18 @@ async def _risk_article(
     confidence_score=0.61,
     corroborating_source_count=1,
     headline_tr=None, translated_at=None,
+    # The verification columns, all defaulting to NULL -- which is what every
+    # row written before this revision carries, and what each gate is required
+    # to publish rather than drop. Tests that are ABOUT a gate pass a value;
+    # every other test here doubles as a check that an unscored row still
+    # reaches the page.
+    is_current_event=None,
+    aviation_relevance_score=None,
+    aviation_relevance_source=None,
+    aviation_impact_evidence=None,
+    aviation_impact_status=None,
+    location_confidence=None,
+    mentioned_locations=None,
 ):
     from app.taxonomy import risk_family_of as family_of
 
@@ -582,6 +604,13 @@ async def _risk_article(
             summary_tr=summary_tr,
             confidence_score=confidence_score,
             corroborating_source_count=corroborating_source_count,
+            is_current_event=is_current_event,
+            aviation_relevance_score=aviation_relevance_score,
+            aviation_relevance_source=aviation_relevance_source,
+            aviation_impact_evidence=aviation_impact_evidence,
+            aviation_impact_status=aviation_impact_status,
+            location_confidence=location_confidence,
+            mentioned_locations=mentioned_locations,
         )
     )
     for entity in entities:
@@ -1133,13 +1162,15 @@ async def test_an_unsummarised_signal_reports_none_not_an_empty_string(db_sessio
 @pytest.mark.parametrize(
     ("score", "expected"),
     [
-        # Below the floor: the weakest single aggregator (trust < 0.60).
-        (0.535, None), (0.565, None), (0.5799, None),
-        # The floor itself is published -- `< FLOOR`, never `<= FLOOR`. 0.58 is
-        # the mode of the whole feed (40% of it), so cutting AT it would empty
-        # the page rather than trim its tail.
-        (0.58, "low"), (0.595, "low"), (0.6099, "low"),
-        # The corpus median and up.
+        # At or below the gate, with no exemption: not published. This is the
+        # calibration this revision moved -- the old floor was 0.58 and let
+        # these through quietly. 0.58 and 0.595 are real values from the
+        # measured corpus (6 of its 18 risk rows), so this is a deliberate
+        # trade of coverage for verification, not a rounding change.
+        (0.535, None), (0.565, None), (0.58, None), (0.595, None), (0.60, None),
+        # Strictly above the gate. The 0.60-0.61 sliver publishes quietly;
+        # from the corpus median up it publishes at full emphasis.
+        (0.6099, "low"),
         (0.61, "normal"), (0.67, "normal"), (0.9, "normal"),
     ],
 )
@@ -1267,7 +1298,7 @@ async def test_low_visibility_signals_sort_last_within_their_country(db_session)
     source = await _source(db_session, "SortVis")
     await _risk_article(
         db_session, source, url="https://v.com/weak-high", risk_type="war",
-        severity="high", country="Italy", city="Rome", confidence_score=0.58,
+        severity="high", country="Italy", city="Rome", confidence_score=0.605,
     )
     await _risk_article(
         db_session, source, url="https://v.com/solid-low", risk_type="flood",
@@ -1449,3 +1480,712 @@ async def test_an_empty_trend_is_an_empty_series_not_zero_filled_days(db_session
 
     out = await risk_trend(days=30, response=Response(), db=db_session)
     assert out.points == []
+
+
+# ==========================================================================
+# VERIFICATION: where the event happened, vs. where somebody talked about it
+#
+# The rule under test, stated once: a place name that is the SUBJECT of a
+# discourse verb ("Washington said"), or that is qualified by government
+# vocabulary ("Japan's foreign ministry"), is the SOURCE of the statement and
+# is never the location of the event. The old resolver took the first country
+# entity in the text and had no way to express the difference.
+# ==========================================================================
+
+
+def _mentions(location):
+    return {(m.name, m.role) for m in location.mentioned}
+
+
+def test_a_discourse_verbs_subject_is_not_the_event_location():
+    """The spec's own example. `Washington said an earthquake struck Japan` has
+    exactly one country in it as far as the earthquake is concerned, and it is
+    not the one that appears first."""
+    location = resolve_risk_location(
+        "Washington said an earthquake struck Japan",
+        "The Japanese government confirmed the quake near Sendai.",
+        [EntityMention("country", "United States", None), EntityMention("country", "Japan", None)],
+    )
+    assert location.country == "Japan"
+    assert ("Washington", "source") in _mentions(location)
+
+
+def test_the_rejected_place_is_recorded_rather_than_discarded():
+    """A rejection nobody can inspect is indistinguishable from a bug. The
+    dateline stays in mentioned_locations with the role that disqualified it."""
+    location = resolve_risk_location(
+        "Ankara condemned the attack in Damascus",
+        "",
+        [EntityMention("country", "Turkey", None), EntityMention("country", "Syria", None)],
+    )
+    assert ("Ankara", "source") in _mentions(location)
+    assert location.country != "Turkey"
+
+
+def test_government_vocabulary_marks_a_place_as_the_speaker():
+    """No discourse verb at all -- the institution words alone are enough.
+    "France's foreign ministry" is a speaker however the sentence ends."""
+    location = resolve_risk_location(
+        "France's foreign ministry on the Chile earthquake",
+        "The ministry issued travel advice. Santiago was badly shaken.",
+        [EntityMention("country", "France", None), EntityMention("country", "Chile", None)],
+    )
+    assert location.country == "Chile"
+    assert ("France", "source") in _mentions(location)
+
+
+def test_a_place_that_both_speaks_and_hosts_the_event_stays_the_event_location():
+    """The asymmetry that keeps the rule from over-firing: "source" removes a
+    candidate, so it has to be unanimous. One dateline does not disqualify a
+    country the same article puts the event in."""
+    location = resolve_risk_location(
+        "Turkey said the tremor was felt widely",
+        "A magnitude 6 earthquake struck southern Turkey overnight.",
+        [EntityMention("country", "Turkey", None)],
+    )
+    assert location.country == "Turkey"
+    assert ("Turkey", "event") in _mentions(location)
+
+
+def test_a_discourse_verb_in_the_next_sentence_cannot_reach_back():
+    """Folding strips punctuation, so a character window over the whole article
+    reads across full stops: "Flooding in Jakarta. Reported from London." would
+    mark Jakarta itself as a dateline. Roles are scoped to one sentence."""
+    location = resolve_risk_location(
+        "Flooding in Jakarta",
+        "Reported from London by our correspondent.",
+        [EntityMention("country", "Indonesia", None)],
+    )
+    assert (location.country, location.city) == ("Indonesia", "Jakarta")
+
+
+def test_several_countries_in_one_article_resolve_to_the_one_hosting_the_event():
+    location = resolve_risk_location(
+        "Earthquake devastates central Chile",
+        "Argentina and Peru sent rescue teams. Santiago reported major damage.",
+        [
+            EntityMention("country", "Chile", None),
+            EntityMention("country", "Argentina", None),
+            EntityMention("country", "Peru", None),
+        ],
+    )
+    assert location.country == "Chile"
+
+
+def test_a_city_that_contradicts_its_country_is_dropped_and_costs_confidence():
+    """§12. The article named a city that is not in the country it also named.
+    That is the article disagreeing with itself, which is information -- the
+    city goes, and the placement stops being pin-worthy."""
+    location = resolve_risk_location(
+        "Earthquake near Tokyo",
+        "France was also affected by the tsunami warning.",
+        [EntityMention("country", "France", None)],
+    )
+    assert location.country == "France"
+    assert location.city is None
+    assert location.confidence == LOCATION_CONFIDENCE_CONFLICT
+    assert location.mappable is False
+
+
+def test_a_city_that_agrees_with_its_country_is_the_strongest_placement():
+    location = resolve_risk_location(
+        "Earthquake hits Kahramanmaras",
+        "Damage reported across the region.",
+        [EntityMention("country", "Turkey", None)],
+    )
+    assert (location.country, location.city) == ("Turkey", "Kahramanmaras")
+    assert location.confidence == LOCATION_CONFIDENCE_CITY_CONFIRMED
+    assert location.mappable is True
+
+
+def test_a_source_only_country_is_kept_but_never_pinned():
+    """The soft landing. The old behaviour -- use it anyway -- is preserved so
+    no event vanishes, but below the pin threshold so it cannot masquerade as a
+    confident placement."""
+    location = resolve_risk_location(
+        "France condemned the attack",
+        "Paris said it would respond.",
+        [EntityMention("country", "France", None)],
+    )
+    assert location.country == "France"
+    assert location.confidence == LOCATION_CONFIDENCE_SOURCE_ONLY
+    assert location.mappable is False
+
+
+def test_an_airport_places_an_event_the_text_never_names_a_country_for():
+    location = resolve_risk_location(
+        "Wildfire forces evacuation",
+        "Smoke reached the terminal.",
+        [EntityMention("airport", "Catania Airport", "CTA")],
+    )
+    assert location.country == "Italy"
+    assert location.confidence == LOCATION_CONFIDENCE_AIRPORT_DERIVED
+    assert location.mappable is True
+
+
+def test_an_unresolvable_place_scores_nothing_rather_than_zero():
+    location = resolve_risk_location("Storm warning issued", "Heavy rain expected.", [])
+    assert (location.country, location.city, location.confidence) == (None, None, None)
+    assert location.mappable is False
+
+
+def test_detect_risk_place_still_answers_the_two_value_question():
+    """The old signature is what enrich.py and the backfill call. It must keep
+    returning exactly (country, city) after the resolver grew a dataclass."""
+    assert detect_risk_place(
+        "Earthquake hits Kahramanmaras", "Damage reported.",
+        [EntityMention("country", "Turkey", None)],
+    ) == ("Turkey", "Kahramanmaras")
+
+
+# ==========================================================================
+# VERIFICATION: aviation relevance
+#
+# One sentence under test: the presence of an aviation WORD is not aviation
+# relevance. What counts is a stated operational fact.
+# ==========================================================================
+
+
+def test_aviation_words_without_operational_impact_score_nothing():
+    """§5's exact rule. Every one of these says "airline", "aviation" or
+    "flight" and none of them reports anything happening to an operation."""
+    for title, body in [
+        ("Earthquake kills dozens in Chile",
+         "The airline industry sent condolences. Aviation groups pledged aid."),
+        ("Protests continue in the capital",
+         "Flight attendants joined the march. The aviation sector is watching."),
+        ("Wildfire burns through national park",
+         "The area is popular with airline crews on layover."),
+    ]:
+        assert detect_aviation_relevance(title, body) is None
+
+
+def test_an_airspace_closure_in_the_headline_scores_highest():
+    relevance = detect_aviation_relevance(
+        "Airspace closed over eastern Poland after drone incursion", ""
+    )
+    assert relevance is not None
+    assert relevance.score == AVIATION_RELEVANCE_TITLE
+    assert relevance.score >= AVIATION_RELEVANCE_GATE
+    assert relevance.status == "ACTUAL"
+
+
+def test_an_operational_fact_in_the_body_still_clears_the_gate():
+    relevance = detect_aviation_relevance(
+        "Wildfire spreads near Athens",
+        "Residents were evacuated. Flights were diverted from Athens airport overnight.",
+    )
+    assert relevance is not None
+    assert relevance.score == AVIATION_RELEVANCE_BODY
+    assert relevance.score >= AVIATION_RELEVANCE_GATE
+
+
+def test_the_evidence_is_quoted_from_the_article_not_paraphrased():
+    """An evidence field a reader cannot find in the source is decoration."""
+    body = "Residents fled. Flights were diverted from Athens airport overnight. Aid arrived."
+    relevance = detect_aviation_relevance("Wildfire near Athens", body)
+    assert relevance is not None
+    assert relevance.evidence in body
+    assert "diverted" in relevance.evidence
+
+
+def test_a_forecast_closure_is_potential_and_a_reported_one_is_actual():
+    """Not a severity: a forecast closure and a reported one are equally worth
+    a planner's attention and differ only in kind."""
+    forecast = detect_aviation_relevance(
+        "Storm approaches", "Officials warned that flights could be cancelled tomorrow."
+    )
+    reported = detect_aviation_relevance(
+        "Storm hits", "Flights were cancelled at the airport this morning."
+    )
+    assert forecast is not None and forecast.status == "POTENTIAL"
+    assert reported is not None and reported.status == "ACTUAL"
+
+
+def test_turkish_operational_phrases_score_the_same_as_english_ones():
+    relevance = detect_aviation_relevance("Deprem sonrası hava sahası kapatıldı", "")
+    assert relevance is not None
+    assert relevance.score >= AVIATION_RELEVANCE_GATE
+
+
+def test_an_airport_specific_event_clears_the_gate():
+    relevance = detect_aviation_relevance(
+        "Volcanic ash closes Catania airport", "Catania airport closed until Thursday."
+    )
+    assert relevance is not None and relevance.score >= AVIATION_RELEVANCE_GATE
+
+
+def test_a_conflict_with_no_stated_flight_effect_scores_nothing():
+    assert detect_aviation_relevance(
+        "Shelling continues along the border",
+        "Dozens were killed overnight as artillery fire resumed.",
+    ) is None
+
+
+# ==========================================================================
+# VERIFICATION: currency flags
+# ==========================================================================
+
+
+def test_a_retrospective_headline_sets_historical_and_recap_but_never_invents():
+    """The guard has evidence for two of the five flags. The other three stay
+    None, because None means "nobody looked" and False is a claim."""
+    flags = detect_currency_flags("Remembering the 2013 crash, 10 years on")
+    assert flags["is_current_event"] is False
+    assert flags["is_historical"] is True
+    assert flags["is_recap"] is True
+    assert flags["is_analysis"] is None
+    assert flags["is_opinion"] is None
+
+
+def test_an_ordinary_headline_leaves_every_flag_unknown():
+    """Not-retrospective is not the same as proven-current. A heuristic that
+    cannot recognise currency must not assert it."""
+    assert set(detect_currency_flags("Earthquake strikes Japan").values()) == {None}
+
+
+# ==========================================================================
+# API: the three gates, and the graduated rollout that keeps them from
+# emptying the page on the deploy that ships them
+# ==========================================================================
+
+
+async def test_the_default_window_is_five_days(db_session):
+    """Backend and frontend must agree; this pins the backend half. Asserted
+    through aggregate_risks rather than the endpoint because the endpoint's
+    default is a FastAPI Query object until the framework resolves it."""
+    from app.api.v1.risks import aggregate_risks
+
+    assert DEFAULT_WINDOW_DAYS == 5
+    out = await aggregate_risks(db_session)
+    assert out.days == 5
+
+
+async def test_an_explicitly_stale_article_never_reaches_the_page(db_session):
+    source = await _source(db_session, "Stale")
+    await _risk_article(
+        db_session, source, url="https://s.com/old", risk_type="earthquake",
+        severity="high", country="Japan", is_current_event=False,
+    )
+    await db_session.commit()
+
+    from fastapi import Response
+
+    out = await list_risks(days=14, response=Response(), db=db_session)
+    assert out.total == 0
+    assert out.suppressed_not_current == 1
+
+
+async def test_an_unflagged_article_passes_the_currency_gate(db_session):
+    """`IS NOT FALSE`, not `IS TRUE`. Coverage is partial, so reading NULL as
+    "not current" would delete the archive rather than filter it."""
+    source = await _source(db_session, "Unflagged")
+    await _risk_article(
+        db_session, source, url="https://s.com/null", risk_type="earthquake",
+        severity="high", country="Japan", is_current_event=None,
+    )
+    await db_session.commit()
+
+    from fastapi import Response
+
+    out = await list_risks(days=14, response=Response(), db=db_session)
+    assert out.total == 1
+    assert out.suppressed_not_current == 0
+
+
+async def test_a_measured_irrelevant_event_is_removed_from_the_radar(db_session):
+    source = await _source(db_session, "Irrelevant")
+    await _risk_article(
+        db_session, source, url="https://a.com/no", risk_type="earthquake",
+        severity="high", country="Chile",
+        aviation_relevance_score=0.2, aviation_relevance_source="llm",
+    )
+    await db_session.commit()
+
+    from fastapi import Response
+
+    out = await list_risks(days=14, response=Response(), db=db_session)
+    assert out.total == 0
+    assert out.suppressed_aviation_irrelevant == 1
+
+
+async def test_an_unscored_event_survives_the_aviation_gate(db_session):
+    """The graduated rollout. NULL is "nobody measured it", and a gate that
+    reads it as a low score deletes every row written before this revision."""
+    source = await _source(db_session, "Unscored")
+    await _risk_article(
+        db_session, source, url="https://a.com/unscored", risk_type="earthquake",
+        severity="high", country="Chile", aviation_relevance_score=None,
+    )
+    await db_session.commit()
+
+    from fastapi import Response
+
+    out = await list_risks(days=14, response=Response(), db=db_session)
+    assert out.total == 1
+    assert out.suppressed_aviation_irrelevant == 0
+    assert out.countries[0].items[0].aviation_relevance_score is None
+
+
+async def test_a_relevant_event_passes_and_carries_its_evidence(db_session):
+    source = await _source(db_session, "Relevant")
+    await _risk_article(
+        db_session, source, url="https://a.com/yes", risk_type="volcano",
+        severity="high", country="Italy",
+        aviation_relevance_score=0.85, aviation_relevance_source="llm",
+        aviation_impact_evidence="Catania airport closed until Thursday.",
+        aviation_impact_status="ACTUAL",
+    )
+    await db_session.commit()
+
+    from fastapi import Response
+
+    out = await list_risks(days=14, response=Response(), db=db_session)
+    item = out.countries[0].items[0]
+    assert item.aviation_relevance_score == 0.85
+    assert item.aviation_relevance_source == "llm"
+    assert item.aviation_impact_evidence == "Catania airport closed until Thursday."
+    assert item.aviation_impact_status == "ACTUAL"
+
+
+async def test_one_member_reporting_the_operational_effect_carries_the_cluster(db_session):
+    """max() across the cluster, not the primary's own score. The primary is
+    picked for source tier and earliness, not for how completely it reported
+    the operational detail."""
+    source_a = await _source(db_session, "ClusterA", tier="agency")
+    source_b = await _source(db_session, "ClusterB")
+    italy = await _entity(db_session, "country", "Italy")
+    for url, score, src in (
+        ("https://m.com/vague", 0.1, source_a),
+        ("https://m.com/detailed", 0.9, source_b),
+    ):
+        await _risk_article(
+            db_session, src, url=url, risk_type="volcano", severity="high",
+            country="Italy", title="Etna eruption closes Catania airport",
+            entities=(italy,), aviation_relevance_score=score,
+        )
+    await db_session.commit()
+
+    from fastapi import Response
+
+    out = await list_risks(days=14, response=Response(), db=db_session)
+    assert out.total == 1
+    assert out.countries[0].items[0].aviation_relevance_score == 0.9
+
+
+async def test_an_official_source_publishes_below_the_confidence_gate(db_session):
+    """A civil-aviation authority's own notice is verified by BEING the
+    authority's statement. Published -- quietly, because one telling is one
+    telling -- rather than hidden for want of a second outlet."""
+    source = await _source(db_session, "CAA", tier="regulator")
+    await _risk_article(
+        db_session, source, url="https://caa.gov/notam", risk_type="storm",
+        severity="high", country="Japan", confidence_score=0.58,
+    )
+    await db_session.commit()
+
+    from fastapi import Response
+
+    out = await list_risks(days=14, response=Response(), db=db_session)
+    assert out.total == 1
+    assert out.suppressed_low_confidence == 0
+    assert out.countries[0].items[0].visibility == "low"
+
+
+async def test_the_same_score_from_an_ordinary_outlet_is_hidden(db_session):
+    """The control for the test above: the exemption is the tier, not the
+    score."""
+    source = await _source(db_session, "Trade", tier="trade")
+    await _risk_article(
+        db_session, source, url="https://trade.com/story", risk_type="storm",
+        severity="high", country="Japan", confidence_score=0.58,
+    )
+    await db_session.commit()
+
+    from fastapi import Response
+
+    out = await list_risks(days=14, response=Response(), db=db_session)
+    assert out.total == 0
+    assert out.suppressed_low_confidence == 1
+
+
+async def test_a_weak_placement_is_listed_but_never_pinned(db_session):
+    """§13. `country` is BLANKED rather than merely flagged: the map reads it
+    to find a centroid, and a dot drawn on a guess is indistinguishable from a
+    dot drawn on a fact."""
+    source = await _source(db_session, "WeakPlace")
+    await _risk_article(
+        db_session, source, url="https://p.com/weak", risk_type="war",
+        severity="high", country="United States", location_confidence=0.4,
+        mentioned_locations=[{"name": "Washington", "kind": "city", "role": "source"}],
+    )
+    await db_session.commit()
+
+    from fastapi import Response
+
+    out = await list_risks(days=14, response=Response(), db=db_session)
+    assert out.total == 1
+    assert out.unplaced_low_confidence == 1
+    assert [c.country for c in out.countries] == [UNKNOWN_COUNTRY]
+    item = out.countries[0].items[0]
+    assert item.country is None
+    assert item.is_mappable is False
+    assert item.location_confidence == 0.4
+    # The audit trail survives the blanking -- otherwise "konum belirsiz" is
+    # a statement the reader has no way to check.
+    assert item.mentioned_locations == [
+        {"name": "Washington", "kind": "city", "role": "source"}
+    ]
+
+
+async def test_a_confident_placement_keeps_its_country_and_its_pin(db_session):
+    source = await _source(db_session, "StrongPlace")
+    await _risk_article(
+        db_session, source, url="https://p.com/strong", risk_type="earthquake",
+        severity="high", country="Japan", city="Tokyo", location_confidence=0.9,
+    )
+    await db_session.commit()
+
+    from fastapi import Response
+
+    out = await list_risks(days=14, response=Response(), db=db_session)
+    assert [c.country for c in out.countries] == ["Japan"]
+    item = out.countries[0].items[0]
+    assert item.is_mappable is True
+    assert (item.country, item.city) == ("Japan", "Tokyo")
+    assert out.unplaced_low_confidence == 0
+
+
+async def test_an_unscored_placement_keeps_its_pin_during_the_transition(db_session):
+    """Every row written before this revision carries NULL here. Reading NULL
+    as "weak" would blank the map on the deploy, in the name of a check that
+    has not run yet."""
+    source = await _source(db_session, "LegacyPlace")
+    await _risk_article(
+        db_session, source, url="https://p.com/legacy", risk_type="flood",
+        severity="medium", country="France", location_confidence=None,
+    )
+    await db_session.commit()
+
+    from fastapi import Response
+
+    out = await list_risks(days=14, response=Response(), db=db_session)
+    assert [c.country for c in out.countries] == ["France"]
+    assert out.countries[0].items[0].is_mappable is True
+    assert out.unplaced_low_confidence == 0
+
+
+async def test_an_event_role_anywhere_in_the_cluster_beats_a_source_role(db_session):
+    """One outlet's dateline does not disqualify a place another outlet puts
+    the event in."""
+    source_a = await _source(db_session, "RoleA", tier="agency")
+    source_b = await _source(db_session, "RoleB")
+    japan = await _entity(db_session, "country", "Japan")
+    for url, role, src in (
+        ("https://r.com/dateline", "source", source_a),
+        ("https://r.com/scene", "event", source_b),
+    ):
+        await _risk_article(
+            db_session, src, url=url, risk_type="earthquake", severity="high",
+            country="Japan", title="Earthquake strikes Sendai region",
+            entities=(japan,), location_confidence=0.8,
+            mentioned_locations=[{"name": "Japan", "kind": "country", "role": role}],
+        )
+    await db_session.commit()
+
+    from fastapi import Response
+
+    out = await list_risks(days=14, response=Response(), db=db_session)
+    assert out.total == 1
+    assert out.countries[0].items[0].mentioned_locations == [
+        {"name": "Japan", "kind": "country", "role": "event"}
+    ]
+
+
+async def test_the_trend_series_applies_the_same_currency_gate(db_session):
+    """A retrospective the list refuses must not raise the trend line: a spike
+    with no signals behind it is a chart contradicting its own page."""
+    from fastapi import Response
+
+    from app.api.v1.risks import risk_trend
+
+    source = await _source(db_session, "TrendCurrency")
+    await _risk_article(
+        db_session, source, url="https://tc.com/now", risk_type="flood",
+        severity="high", country="France",
+    )
+    await _risk_article(
+        db_session, source, url="https://tc.com/anniversary", risk_type="flood",
+        severity="high", country="France", is_current_event=False,
+    )
+    await db_session.commit()
+
+    out = await risk_trend(days=30, response=Response(), db=db_session)
+    assert sum(p.count for p in out.points) == 1
+
+
+# ==========================================================================
+# The funnel report (spec §23)
+# ==========================================================================
+
+
+async def test_the_funnel_report_counts_every_stage_and_why_each_gate_passed(db_session):
+    from app.services.risk_quality import render_report_tr, risk_quality_report
+
+    source = await _source(db_session, "Funnel")
+    # Survives everything, on evidence.
+    await _risk_article(
+        db_session, source, url="https://f.com/keep", risk_type="volcano",
+        severity="high", country="Italy", aviation_relevance_score=0.9,
+        aviation_relevance_source="llm", location_confidence=0.9,
+    )
+    # Rejected by the currency gate.
+    await _risk_article(
+        db_session, source, url="https://f.com/old", risk_type="volcano",
+        severity="high", country="Italy", is_current_event=False,
+    )
+    # Rejected by the confidence gate.
+    await _risk_article(
+        db_session, source, url="https://f.com/weak", risk_type="flood",
+        severity="low", country="France", confidence_score=0.55,
+    )
+    # Rejected by the aviation gate.
+    await _risk_article(
+        db_session, source, url="https://f.com/irrelevant", risk_type="earthquake",
+        severity="high", country="Chile", aviation_relevance_score=0.1,
+    )
+    # Rejected by the location gate.
+    await _risk_article(
+        db_session, source, url="https://f.com/unplaced", risk_type="storm",
+        severity="low", country="Japan", location_confidence=0.3,
+    )
+    await db_session.commit()
+
+    report = await risk_quality_report(db_session, days=14)
+    assert report.total_articles == 5
+    assert report.current == 4
+    assert report.risk_candidates == 4
+    assert report.confidence_passed == 3
+    assert report.aviation_passed == 2
+    assert report.location_passed == 1
+    assert report.clusters == 1
+    assert report.rejected_not_current == 1
+    assert report.rejected_confidence == 1
+    assert report.rejected_aviation == 1
+    assert report.rejected_location == 1
+
+    rendered = render_report_tr(report)
+    assert "Risk Radarı veri kalitesi hunisi" in rendered
+    assert "Konumu doğrulanan" in rendered
+
+
+async def test_the_funnel_report_clusters_articles_that_have_entity_links(db_session):
+    """Regression: the report's query eager-loads entity_links but not the
+    `.entity` behind each one, and `entity_codes()` reads `link.entity.code`.
+    An article with no links never touches the attribute, so a fixture without
+    them cannot catch it -- against a real corpus it raised MissingGreenlet on
+    the first row."""
+    from app.services.risk_quality import risk_quality_report
+
+    source = await _source(db_session, "Linked")
+    italy = await _entity(db_session, "country", "Italy")
+    catania = await _entity(db_session, "airport", "Catania Airport", "CTA")
+    await _risk_article(
+        db_session, source, url="https://l.com/linked", risk_type="volcano",
+        severity="high", country="Italy", entities=(italy, catania),
+    )
+    await db_session.commit()
+
+    report = await risk_quality_report(db_session, days=14)
+    assert report.clusters == 1
+
+
+async def test_the_funnel_report_separates_measured_passes_from_unmeasured_ones(db_session):
+    """The report's most important lines. A gate passing everything unscored is
+    a gate not yet doing anything, and that has to be visible rather than
+    flattering."""
+    from app.services.risk_quality import risk_quality_report
+
+    source = await _source(db_session, "FunnelSource")
+    await _risk_article(
+        db_session, source, url="https://fs.com/measured", risk_type="volcano",
+        severity="high", country="Italy", aviation_relevance_score=0.9,
+        aviation_relevance_source="llm", location_confidence=0.9,
+    )
+    await _risk_article(
+        db_session, source, url="https://fs.com/unmeasured", risk_type="flood",
+        severity="low", country="France",
+    )
+    await db_session.commit()
+
+    report = await risk_quality_report(db_session, days=14)
+    assert report.aviation_passed == 2
+    assert report.aviation_unscored == 1
+    assert report.location_unscored == 1
+    assert report.aviation_by_source == {"llm": 1, "unscored": 1}
+
+
+# ==========================================================================
+# The enrichment writer: which path filled each column
+# ==========================================================================
+
+
+async def test_enrichment_falls_back_to_the_deterministic_aviation_floor():
+    """No LLM configured is the normal state for most of this feed. The keyword
+    floor answers, and the row records that it was the keyword floor."""
+    from app.pipeline.enrich import _classify_risk
+
+    result = await _classify_risk(
+        object(),
+        "Volcanic ash closes Catania airport",
+        "Catania airport closed until Thursday as ash fell across Sicily.",
+        [EntityMention("country", "Italy", None)],
+    )
+    assert result["risk_type"] == "volcano"
+    assert result["aviation_relevance_source"] == "heuristic"
+    assert result["aviation_relevance_score"] >= AVIATION_RELEVANCE_GATE
+    assert "Catania airport closed" in result["aviation_impact_evidence"]
+
+
+async def test_enrichment_marks_an_unfindable_signal_unscored_rather_than_zero():
+    """The distinction the whole graduated rollout rests on: "the keyword pass
+    found nothing" is not "there is no aviation impact"."""
+    from app.pipeline.enrich import _classify_risk
+
+    result = await _classify_risk(
+        object(),
+        "Earthquake kills dozens in Chile",
+        "The airline industry sent condolences.",
+        [EntityMention("country", "Chile", None)],
+    )
+    assert result["risk_type"] == "earthquake"
+    assert result["aviation_relevance_score"] is None
+    assert result["aviation_relevance_source"] == "unscored"
+
+
+async def test_enrichment_records_the_location_roles_it_rejected():
+    from app.pipeline.enrich import _classify_risk
+
+    result = await _classify_risk(
+        object(),
+        "Washington said an earthquake struck Japan",
+        "The Japanese government confirmed the quake near Sendai.",
+        [EntityMention("country", "United States", None), EntityMention("country", "Japan", None)],
+    )
+    assert result["risk_country"] == "Japan"
+    assert result["location_confidence"] is not None
+    assert {"name": "Washington", "kind": "city", "role": "source"} in result[
+        "mentioned_locations"
+    ]
+
+
+async def test_a_non_risk_article_clears_every_verification_column():
+    """A verification column left behind after its classification was withdrawn
+    is a fact about a row that no longer exists."""
+    from app.pipeline.enrich import _NO_RISK, _classify_risk
+
+    result = await _classify_risk(
+        object(), "Airline reports record quarterly profit", "Revenue grew.", []
+    )
+    assert result == _NO_RISK
+    assert set(result.values()) == {None}

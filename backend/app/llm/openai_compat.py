@@ -39,6 +39,112 @@ logger = get_logger(__name__)
 _HEADLINE_MARKER = re.compile(r"^\s*(?:HEADLINE|BAŞLIK|BASLIK)\s*:\s*", re.IGNORECASE)
 _SUMMARY_MARKER = re.compile(r"^\s*(?:SUMMARY|ÖZET|OZET)\s*:\s*", re.IGNORECASE)
 
+#: The five currency flags (spec §15), in the order the prompt lists them.
+#: `is_developing` / `is_resolved` are absent by design -- this pipeline has no
+#: event-lifecycle signal to answer them with. See the migration's docstring.
+CURRENCY_FLAGS = (
+    "is_current_event",
+    "is_historical",
+    "is_analysis",
+    "is_opinion",
+    "is_recap",
+)
+
+VALID_AVIATION_IMPACT_STATUSES = frozenset({"ACTUAL", "POTENTIAL"})
+
+#: How much of a quoted evidence sentence to keep. Matches
+#: heuristic.MAX_EVIDENCE_CHARS so the two paths cannot produce
+#: differently-shaped rows for the same column.
+MAX_EVIDENCE_CHARS = 300
+
+#: What "the model said nothing usable" looks like. A single shared literal
+#: because four return paths in classify_risk write it, and one of them
+#: drifting would mean a caller reading a key that is sometimes absent.
+_EMPTY_RISK: dict[str, object | None] = {
+    "risk_type": None,
+    "severity": None,
+    "country": None,
+    "city": None,
+    "location_confidence": None,
+    "mentioned_locations": None,
+    "aviation_relevance_score": None,
+    "aviation_impact_evidence": None,
+    "aviation_impact_status": None,
+    **{flag: None for flag in CURRENCY_FLAGS},
+}
+
+
+def _risk_place(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip()
+    # 80 chars is the column width; anything longer is the model narrating
+    # rather than naming a place.
+    return cleaned[:80] if cleaned and cleaned.lower() != "null" else None
+
+
+def _unit_interval(value: object) -> float | None:
+    """A 0-1 score, or None when the model did not give one.
+
+    Out-of-range numbers are CLAMPED rather than rejected: a model answering
+    1.2 has said "as high as it goes", which is an answer. A string, a bool or
+    a missing key is not, and those become None -- which every gate reads as
+    "unscored", never as zero.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return max(0.0, min(1.0, float(value)))
+
+
+def _tristate(value: object) -> bool | None:
+    """True / False / None, where None is "the model did not answer".
+
+    Not `bool(value)`: that collapses a missing flag into False, and False on
+    is_current_event is what removes a row from the radar. The three states
+    have to survive parsing intact.
+    """
+    return value if isinstance(value, bool) else None
+
+
+def _evidence(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip()
+    return cleaned[:MAX_EVIDENCE_CHARS] if cleaned and cleaned.lower() != "null" else None
+
+
+def _mentioned_locations(value: object) -> list[dict[str, str]] | None:
+    """The article's places with the role each played, or None.
+
+    Rebuilt field by field from validated values rather than stored as
+    returned: this lands in a JSONB column, and a model that answers with a
+    string, a nested object or a list of lists must not be able to write its
+    shape into the database for a reader to trip over later.
+    """
+    if not isinstance(value, list):
+        return None
+    cleaned: list[dict[str, str]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        name = _risk_place(item.get("name"))
+        if not name:
+            continue
+        kind = str(item.get("kind") or "").strip().lower()
+        role = str(item.get("role") or "").strip().lower()
+        cleaned.append(
+            {
+                "name": name,
+                "kind": kind if kind in {"country", "city"} else "unknown",
+                # Anything the model did not clearly mark as a speaker is
+                # treated as an event mention -- the conservative direction,
+                # since "source" is the label that REMOVES a place from
+                # consideration as the event location.
+                "role": "source" if role == "source" else "event",
+            }
+        )
+    return cleaned or None
+
 
 def _split_translation_pair(raw: str | None) -> tuple[str | None, str | None]:
     """Pull the two fields out of a HEADLINE:/SUMMARY: response.
@@ -240,7 +346,7 @@ class OpenAICompatProvider:
             for item in data
         ]
 
-    async def classify_risk(self, title: str, content: str) -> dict[str, str | None]:
+    async def classify_risk(self, title: str, content: str) -> dict[str, object | None]:
         """Risk Radarı classification, validated against the closed taxonomy.
 
         Every field is checked rather than trusted: a model that answers
@@ -249,15 +355,22 @@ class OpenAICompatProvider:
         label or filter chip for. An unparsable or off-taxonomy answer degrades
         to all-None, and the caller in app/pipeline/enrich.py then falls back to
         the keyword heuristic rather than losing the article's classification.
+
+        The verification fields (currency, aviation relevance, location roles)
+        ride the same call and are validated the same way, with one difference
+        that matters: a missing or unusable one is None, never a default. None
+        means the model did not answer, and every gate downstream treats that
+        as "unscored, publish it" rather than as a low score. A 0.0 written
+        where the model said nothing would be a row deleted on no evidence.
         """
         raw = await self._generate(risk_prompt(title, content))
         try:
             data = json.loads(raw)
         except (json.JSONDecodeError, TypeError):
             logger.warning("risk_classification_unparsable", raw=raw[:200])
-            return {"risk_type": None, "severity": None, "country": None, "city": None}
+            return _EMPTY_RISK.copy()
         if not isinstance(data, dict):
-            return {"risk_type": None, "severity": None, "country": None, "city": None}
+            return _EMPTY_RISK.copy()
 
         risk_type = data.get("risk_type")
         if not is_valid_risk_type(risk_type):
@@ -265,23 +378,27 @@ class OpenAICompatProvider:
             # time -- not an error worth logging.
             if risk_type:
                 logger.info("risk_type_off_taxonomy_discarded", value=str(risk_type)[:40])
-            return {"risk_type": None, "severity": None, "country": None, "city": None}
+            return _EMPTY_RISK.copy()
 
         severity = data.get("severity")
         if severity not in VALID_RISK_SEVERITIES:
             severity = "low"
 
-        def _place(value: object) -> str | None:
-            if not isinstance(value, str):
-                return None
-            cleaned = value.strip()
-            # 80 chars is the column width; anything longer is the model
-            # narrating rather than naming a place.
-            return cleaned[:80] if cleaned and cleaned.lower() != "null" else None
+        status = data.get("aviation_impact_status")
+        if isinstance(status, str):
+            status = status.strip().upper()
+        if status not in VALID_AVIATION_IMPACT_STATUSES:
+            status = None
 
         return {
             "risk_type": risk_type,
             "severity": severity,
-            "country": _place(data.get("country")),
-            "city": _place(data.get("city")),
+            "country": _risk_place(data.get("country")),
+            "city": _risk_place(data.get("city")),
+            "location_confidence": _unit_interval(data.get("location_confidence")),
+            "mentioned_locations": _mentioned_locations(data.get("mentioned_locations")),
+            "aviation_relevance_score": _unit_interval(data.get("aviation_relevance")),
+            "aviation_impact_evidence": _evidence(data.get("aviation_impact_evidence")),
+            "aviation_impact_status": status,
+            **{flag: _tristate(data.get(flag)) for flag in CURRENCY_FLAGS},
         }

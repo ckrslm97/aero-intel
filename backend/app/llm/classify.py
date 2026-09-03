@@ -92,6 +92,35 @@ class RiskAssessment:
     city: str | None
     aviation_impact_note: str | None
 
+    # --- the verification fields (spec §7-17) --------------------------------
+    #
+    # Optional with None defaults, for the same reason CampaignExtraction's
+    # intelligence fields are: every existing construction of this dataclass --
+    # the tests, the golden-set evaluator, the heuristic path -- keeps working
+    # unchanged, and a model that ignores the new prompt lines produces None
+    # here rather than a failed parse.
+    #
+    # None is "the model did not answer" on all of them, and no gate may read
+    # it as a low score. See _parse_risk.
+    #: 0-1: how sure the model is of `country`, given that the article's
+    #: datelines and government quotes name places the event did not happen in.
+    location_confidence: float | None = None
+    #: Every place named, with the role it played:
+    #: [{"name": "Japan", "kind": "country", "role": "event"}]
+    mentioned_locations: list[dict] | None = None
+    #: The sentence `aviation_impact_score` was read off, quoted verbatim.
+    #: Distinct from aviation_impact_note, which is the model's own Turkish
+    #: gloss: one is evidence, the other is commentary, and a reader checking
+    #: the score needs the first.
+    aviation_impact_evidence: str | None = None
+    #: "ACTUAL" | "POTENTIAL" -- reported, or forecast.
+    aviation_impact_status: str | None = None
+    is_current_event: bool | None = None
+    is_historical: bool | None = None
+    is_analysis: bool | None = None
+    is_opinion: bool | None = None
+    is_recap: bool | None = None
+
 
 @dataclass(frozen=True)
 class CampaignExtraction:
@@ -182,6 +211,60 @@ def _clean_pct(value: object) -> int | None:
         return None
     pct = int(value)
     return pct if 0 < pct <= 100 else None
+
+
+#: The five currency flags (spec §15). `is_developing` / `is_resolved` are
+#: absent by design: nothing in this pipeline carries an event lifecycle, only
+#: publication times, so no classifier could answer them from what it is shown.
+CURRENCY_FLAGS = (
+    "is_current_event",
+    "is_historical",
+    "is_analysis",
+    "is_opinion",
+    "is_recap",
+)
+
+AVIATION_IMPACT_STATUSES = frozenset({"ACTUAL", "POTENTIAL"})
+
+
+def _clean_tristate(value: object) -> bool | None:
+    """True / False / None, where None is "the model did not answer".
+
+    Not `bool(value)`. A missing flag collapsed to False is a row the currency
+    gate then deletes, on the strength of a key the model never emitted.
+    """
+    return value if isinstance(value, bool) else None
+
+
+def _clean_mentioned_locations(value: object) -> list[dict] | None:
+    """Places and their roles, rebuilt field by field.
+
+    Never the model's own object: this reaches a JSONB column, and a response
+    that answers with strings, nested lists or extra keys must not be able to
+    write its shape into the database for a later reader to trip over.
+    """
+    if not isinstance(value, list):
+        return None
+    cleaned: list[dict] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        name = _clean_str(item.get("name"))
+        if not name:
+            continue
+        kind = (_clean_str(item.get("kind")) or "").lower()
+        role = (_clean_str(item.get("role")) or "").lower()
+        cleaned.append(
+            {
+                "name": name,
+                "kind": kind if kind in {"country", "city"} else "unknown",
+                # Default to "event": "source" is the label that REMOVES a
+                # place from consideration as the event location, so it has to
+                # be asserted rather than assumed.
+                "role": "source" if role == "source" else "event",
+            }
+        )
+    return cleaned or None
 
 
 def _clean_entities(value: object, *, code_key: str = "code") -> list[dict]:
@@ -320,6 +403,18 @@ def _parse_risk(payload: dict) -> Outcome[RiskAssessment]:
     if probability is None or aviation_impact_score is None:
         return Outcome.failed("risk_missing_scoring_inputs")
 
+    # The verification fields are NOT required the way probability and
+    # aviation_impact_score above are. Those two are load-bearing inputs to the
+    # risk score, so a model that skips them has not answered the question;
+    # these describe how much to TRUST the answer, and a model that skips them
+    # has produced a less verifiable classification, not an invalid one.
+    # Failing the call over them would delete good rows to punish a model for
+    # ignoring a prompt line.
+    status = _clean_str(risk.get("aviation_impact_status"))
+    status = status.upper() if status else None
+    if status not in AVIATION_IMPACT_STATUSES:
+        status = None
+
     return Outcome.classified(
         RiskAssessment(
             category=risk_category,
@@ -329,6 +424,11 @@ def _parse_risk(payload: dict) -> Outcome[RiskAssessment]:
             country=_clean_str(risk.get("country")),
             city=_clean_str(risk.get("city")),
             aviation_impact_note=_clean_str(risk.get("aviation_impact_note")),
+            location_confidence=_clean_confidence(risk.get("location_confidence")),
+            mentioned_locations=_clean_mentioned_locations(risk.get("mentioned_locations")),
+            aviation_impact_evidence=_clean_str(risk.get("aviation_impact_evidence")),
+            aviation_impact_status=status,
+            **{flag: _clean_tristate(risk.get(flag)) for flag in CURRENCY_FLAGS},
         ),
         certainty=certainty,
     )

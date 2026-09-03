@@ -826,50 +826,662 @@ def detect_risk_type(title: str, content: str) -> str | None:
     return best_slug
 
 
-def detect_risk_place(
-    title: str, content: str, entities: list[EntityMention]
-) -> tuple[str | None, str | None]:
-    """(country, city) for a risk event.
+# ===========================================================================
+# WHERE THE EVENT HAPPENED, vs. WHERE SOMEBODY TALKED ABOUT IT
+#
+# The rule this section exists to break: "the first geographic entity in the
+# text is the event's location". That is what the previous implementation did
+# -- it walked `entities` and took the first country it recognised -- and it is
+# wrong in a way that is invisible on the map, because a wrong pin looks
+# exactly like a right one.
+#
+# The failing shape is a sentence like:
+#
+#     "Washington said an earthquake struck Japan."
+#
+# Read left to right, the first country-bearing name is the United States. The
+# earthquake is in Japan. The old chain pinned it to the US, and nothing
+# downstream could tell.
+#
+# The fix is not a better ordering -- it is a distinction the data never made:
+# a place name can appear in an article in two entirely different ROLES.
+#
+#   EVENT  the thing happened there
+#   SOURCE the government, ministry, capital or spokesperson that SPOKE about
+#          it is there
+#
+# A place in the SOURCE role is recorded in `mentioned_locations` (it is a true
+# fact about the article) and is never written to risk_country. The syntactic
+# signal for the SOURCE role is cheap and reliable: the place name is the
+# SUBJECT of a discourse verb ("Washington SAID", "Ankara ANNOUNCED", "Tokyo
+# URGED"), or it is qualified by government vocabulary ("the Japanese
+# GOVERNMENT", "Turkey's foreign MINISTRY").
+#
+# What is deliberately NOT attempted here: verifying a resolved country against
+# the coordinates it will be drawn at. There is no polygon dataset on the
+# server -- placement is a frontend centroid table -- so a "does this lat/lon
+# fall inside this country" check has nothing to run against. See
+# `location_confidence` instead, which is the honest substitute: it says how
+# much the resolution is worth, and the map refuses to pin anything below
+# LOCATION_MAP_PIN_MIN rather than drawing a confident-looking dot on a guess.
+# ===========================================================================
 
-    Country reuses the entity gazetteer that already ran for this article --
-    country mentions first, then the country behind any recognised airport,
-    which is the same fallback chain detect_region() uses.
+#: Verbs whose subject is speaking ABOUT an event rather than being in it. A
+#: place name immediately in front of one of these is a dateline or a
+#: metonym for a government, not a location. Written in folded form like every
+#: other pattern in this module (see fold_text).
+_DISCOURSE_VERBS: tuple[str, ...] = (
+    # Bare "warning" is deliberately absent: "tsunami warning", "storm
+    # warning" and "fire warning" are nouns, and including it marked the
+    # country in "France was also affected by the tsunami warning" as a
+    # speaker. Only the finite verb forms are discourse acts.
+    "said", "says", "saying", "announced", "announces", "announcing",
+    "warned", "warns", "urged", "urges", "condemned", "condemns",
+    "denied", "denies", "confirmed", "confirms", "reported", "reports",
+    "claimed", "claims", "accused", "accuses", "pledged", "vowed", "stated",
+    "declared", "declares", "called", "calls", "told", "tells", "insisted",
+    "welcomed", "rejected", "rejects", "criticised", "criticized",
+    "acikladi", "aciklama", "aciklamasinda", "duyurdu", "bildirdi", "uyardi",
+    "kinadi", "belirtti", "dedi", "cagrisinda", "acikliyor", "sundu",
+    "reddetti", "dogruladi", "yalanladi",
+)
 
-    City is the honest weak spot. The bundled airport dataset only knows cities
-    that have an airport, so the city vocabulary here stays the hand-built
-    RISK_CITY_COUNTRY table in app/llm/gazetteer.py (136 entries). Anything
-    outside it resolves to a country with no city, and that is most of the
-    world -- the map falls back to a country centroid for those rows rather
-    than pretending to a precision it does not have. A city is only accepted
-    when it does not contradict an already-resolved country, so a Reuters piece
-    naming both London and a flood in Jakarta cannot place the flood in London.
+#: Vocabulary that turns a place name into the institution that governs it.
+#: "Japan's foreign ministry" and "the Turkish government" are speakers, not
+#: scenes. Matched in a window AFTER the name (English possessive order) and
+#: BEFORE it (adjectival order is handled by the same window on the name's
+#: left, see `_role_for_occurrence`).
+_GOVERNMENT_CONTEXT: tuple[str, ...] = (
+    "government", "governments", "officials", "official", "ministry",
+    "ministries", "minister", "embassy", "consulate", "president",
+    "presidency", "state department", "foreign office", "spokesperson",
+    "spokesman", "spokeswoman", "authorities", "parliament", "senate",
+    "administration", "white house", "kremlin", "downing street",
+    "hukumeti", "hukumet", "disisleri", "bakanligi", "bakan", "buyukelciligi",
+    "yetkilileri", "yetkilisi", "sozcusu", "cumhurbaskani", "meclisi",
+)
+
+#: How many words may sit between a place name and the discourse verb that
+#: makes it a speaker. Three covers "Washington on Tuesday said" and "Japan's
+#: foreign ministry said"; anything looser starts reading the rest of the
+#: sentence. A character window was tried first and was measurably too greedy
+#: -- with 42 characters, "France was also affected by the tsunami warning"
+#: reached "warning", and "the Chile earthquake" reached a "ministry" that
+#: belonged to the previous clause.
+_ROLE_MAX_GAP_WORDS = 3
+
+#: A city resolved AND consistent with the country resolved independently of
+#: it: two signals that agree, which is the strongest thing this pipeline can
+#: produce for a location.
+LOCATION_CONFIDENCE_CITY_CONFIRMED = 0.9
+
+#: A country from a country entity in the EVENT role -- no city to confirm it,
+#: but nothing contradicting it either.
+LOCATION_CONFIDENCE_COUNTRY = 0.8
+
+#: A country derived from a named airport. Slightly below a country mention:
+#: the airport is certainly in that country, but the article naming an airport
+#: does not by itself say the event happened at it.
+LOCATION_CONFIDENCE_AIRPORT_DERIVED = 0.75
+
+#: A city was found and it contradicted the resolved country. The city is
+#: DROPPED (see resolve_risk_location) and what remains is a country the
+#: article disagreed with itself about -- published, but not pinned.
+LOCATION_CONFIDENCE_CONFLICT = 0.5
+
+#: The gazetteer matched a country, but its name never appears literally in
+#: the text -- it was recognised through an abbreviation or an inflected form
+#: this resolver does not index -- so the role test had nothing to read and the
+#: mention cannot be placed OR rejected. Used, and kept below the pin
+#: threshold: "we found a country and could not check it" is exactly the state
+#: that must not be drawn as a confident dot.
+LOCATION_CONFIDENCE_UNVERIFIED = 0.55
+
+#: The only country the article offered was in the SOURCE role. Kept rather
+#: than discarded -- "Washington said" really is evidence the story is
+#: US-adjacent, and dropping the row entirely would lose the event -- but
+#: deliberately below LOCATION_MAP_PIN_MIN, because it is exactly the
+#: resolution that used to produce confident wrong pins.
+LOCATION_CONFIDENCE_SOURCE_ONLY = 0.4
+
+#: The map draws nothing below this. A pin is a claim about a point on the
+#: earth; a guess rendered as a dot is indistinguishable from a fact rendered
+#: as a dot, and the reader has no way to tell them apart. Below the line the
+#: signal still appears in the list, labelled as unplaced.
+LOCATION_MAP_PIN_MIN = 0.70
+
+
+@dataclass(frozen=True)
+class MentionedLocation:
+    """One place named in the article, with the role it played in it."""
+
+    name: str
+    #: "country" | "city"
+    kind: str
+    #: "event" | "source" | "unverified" -- see the section header. "source"
+    #: means the place is the speaker's, not the event's; "unverified" means
+    #: the gazetteer recognised it through a form this resolver could not find
+    #: in the text, so no role test ever ran on it. The third value exists
+    #: because labelling an untested mention "event" would put a guess and a
+    #: measurement under the same word.
+    role: str
+
+    def as_dict(self) -> dict[str, str]:
+        return {"name": self.name, "kind": self.kind, "role": self.role}
+
+
+@dataclass(frozen=True)
+class RiskLocation:
+    """Where a risk event happened, and how much that answer is worth."""
+
+    country: str | None
+    city: str | None
+    #: 0-1, or None when nothing resolved at all. See the LOCATION_CONFIDENCE_*
+    #: constants -- each value is a named case, not a tuned number.
+    confidence: float | None
+    #: Every place the article named, event and source roles alike. A superset
+    #: of `country`/`city` on purpose: the fact that an article mentions
+    #: Washington is worth keeping even when Washington is not where the
+    #: earthquake was.
+    mentioned: tuple[MentionedLocation, ...] = ()
+
+    @property
+    def mappable(self) -> bool:
+        return self.confidence is not None and self.confidence >= LOCATION_MAP_PIN_MIN
+
+
+#: Datelines, where the discourse verb sits IN FRONT of the place rather than
+#: after it: "Reported from London", "İstanbul'dan bildirdi". Kept to a short
+#: explicit list rather than "any discourse verb before the name", which would
+#: mark Jakarta as a source in "Officials said the flood hit Jakarta".
+_DATELINE_PREFIXES: tuple[str, ...] = (
+    "reported from", "reporting from", "writing from", "speaking from",
+    "filed from", "dateline", "dan bildirdi", "den bildirdi", "muhabirimiz",
+)
+
+
+def _alternation(patterns: tuple[str, ...]) -> str:
+    return "|".join(re.escape(p) for p in patterns)
+
+
+@lru_cache(maxsize=1)
+def _speaker_after_re() -> re.Pattern[str]:
+    """The text right AFTER a place name, when that name is the speaker.
+
+    Anchored at the start and bounded to _ROLE_MAX_GAP_WORDS intervening words,
+    so it reads the place's own clause rather than the rest of the sentence.
+    Matches "Washington said", "Washington on Tuesday said", "Japan's foreign
+    ministry" (folded to "japan s foreign ministry") -- and does NOT match
+    "Chile earthquake death toll rises as officials confirmed", where the
+    government word belongs to somebody else.
     """
-    text = fold_text(f"{title} {content}")
+    gap = rf"(?:\s+\w+){{0,{_ROLE_MAX_GAP_WORDS}}}\s+"
+    return re.compile(
+        rf"^{gap}(?:{_alternation(_DISCOURSE_VERBS)}|{_alternation(_GOVERNMENT_CONTEXT)})\b"
+    )
 
-    country: str | None = None
+
+@lru_cache(maxsize=1)
+def _speaker_before_re() -> re.Pattern[str]:
+    """The text right BEFORE a place name, when that name is the speaker.
+
+    Anchored at the END, because this is the adjectival/possessive order --
+    "the government of JAPAN", "reported from LONDON". Anchoring is what stops
+    "foreign ministry on the CHILE earthquake" from marking Chile: the
+    government word has to be adjacent to the name, not merely nearby.
+    """
+    connector = r"(?:\s+(?:of|in|for|from|by|the|a))*\s+$"
+    return re.compile(
+        rf"\b(?:{_alternation(_GOVERNMENT_CONTEXT)}|{_alternation(_DATELINE_PREFIXES)})"
+        rf"{connector}"
+    )
+
+
+def _role_for_occurrence(sentence: str, start: int, end: int) -> str:
+    """"source" when this occurrence of a place name is the speaker's, else
+    "event".
+
+    Two tests, both local to the occurrence and both confined to ITS OWN
+    SENTENCE (see _folded_sentences): a discourse verb or government word in
+    the place's own clause after it, or government/dateline vocabulary directly
+    in front of it.
+
+    The sentence confinement is not a refinement, it is the difference between
+    working and not. "Flooding in Jakarta. Reported from London." folds to one
+    unpunctuated string, and a window that runs past the full stop reads
+    "jakarta reported from london" -- marking the flood's own city as a
+    dateline. Same failure put "Earthquake hits Kahramanmaras. Damage reported
+    across the region." in the source bucket.
+    """
+    if _speaker_after_re().search(sentence[end:]):
+        return "source"
+    if _speaker_before_re().search(sentence[:start]):
+        return "source"
+    return "event"
+
+
+def _folded_sentences(title: str, content: str) -> list[str]:
+    """The article as folded sentences, the headline first and separate.
+
+    Split BEFORE folding, because folding strips the punctuation the split
+    needs. The headline is joined with a full stop so it cannot merge with the
+    opening sentence of the body.
+    """
+    return [fold_text(s) for s in _sentences(f"{title}. {content}") if s.strip()]
+
+
+def _place_role(sentences: list[str], aliases: tuple[str, ...]) -> str | None:
+    """The role these aliases play across the article, or None when none of
+    them appears at all.
+
+    A place named several times is an EVENT location if ANY of its occurrences
+    is one. A story that opens "Ankara said" and later writes "the fire near
+    Ankara" is about a fire in Ankara -- one dateline does not disqualify a
+    place from also being the scene. The asymmetry is deliberate: "source" is
+    the label that REMOVES a candidate, so it has to be unanimous.
+    """
+    pattern = _keyword_pattern(aliases)
+    found = False
+    for sentence in sentences:
+        for match in pattern.finditer(sentence):
+            found = True
+            if _role_for_occurrence(sentence, match.start(), match.end()) == "event":
+                return "event"
+    return "source" if found else None
+
+
+@lru_cache(maxsize=1)
+def _aliases_by_country() -> dict[str, tuple[str, ...]]:
+    """Canonical country name -> every folded alias that resolves to it.
+
+    The role test can only judge a name it can find in the text, and the
+    gazetteer recognises countries through aliases the canonical name does not
+    cover ("türkiye" for turkey, "amerika" for united states). Testing only the
+    canonical name would make every alias-matched country untestable, which the
+    resolver would then have to treat as unverified -- see
+    LOCATION_CONFIDENCE_UNVERIFIED.
+    """
+    grouped: dict[str, list[str]] = {}
+    for alias, canonical in COUNTRY_ALIASES.items():
+        grouped.setdefault(canonical, []).append(fold_text(alias))
+    for canonical in grouped:
+        folded = fold_text(canonical)
+        if folded not in grouped[canonical]:
+            grouped[canonical].append(folded)
+    return {name: tuple(sorted(set(a for a in aliases if a))) for name, aliases in grouped.items()}
+
+
+def resolve_risk_location(
+    title: str, content: str, entities: list[EntityMention]
+) -> RiskLocation:
+    """Where the event happened, separated from where it was talked about.
+
+    Resolution order, and why:
+
+    1. **Country entities in the EVENT role.** The gazetteer already ran for
+       this article, so this costs a role test per country it found. A country
+       that only ever appears as a discourse subject is skipped here and kept
+       in `mentioned` instead -- this is the Washington/Japan fix.
+    2. **The country behind a named airport.** An airport is a fixed point on
+       the ground, so it is real evidence of place, but weaker than the article
+       naming the country outright (LOCATION_CONFIDENCE_AIRPORT_DERIVED).
+    3. **A city from RISK_CITY_COUNTRY**, which can also supply the country
+       when nothing above did.
+    4. **A SOURCE-role country, as a last resort**, at
+       LOCATION_CONFIDENCE_SOURCE_ONLY -- below the map's pin threshold. This
+       is the deliberate soft landing: the previous behaviour is preserved as
+       a fallback rather than deleted, so no event disappears, but it can no
+       longer masquerade as a confident placement.
+
+    CONSISTENCY (spec §12): a city is accepted only when RISK_CITY_COUNTRY
+    agrees with the country resolved above it. A city that contradicts it is
+    dropped and the confidence falls to LOCATION_CONFIDENCE_CONFLICT -- the
+    article disagreed with itself about where this happened, and that is
+    information, not noise to be averaged away.
+    """
+    sentences = _folded_sentences(title, content)
+    alias_index = _aliases_by_country()
+
+    mentioned: list[MentionedLocation] = []
+    seen: set[tuple[str, str]] = set()
+
+    def remember(name: str, kind: str, role: str) -> None:
+        key = (name.lower(), kind)
+        if key not in seen:
+            seen.add(key)
+            mentioned.append(MentionedLocation(name=name, kind=kind, role=role))
+
+    # ---- pass 1: cities, and the roles they play ------------------------
+    #
+    # Cities are resolved BEFORE countries, which is not the obvious order.
+    # The reason is metonymy: "Ankara condemned the attack in Damascus" never
+    # writes the word Turkey, so the country's own role test has nothing to
+    # read -- but the capital's does, and a capital that is speaking is its
+    # country speaking. Pass 2 consults these roles for exactly that.
+    city_roles: dict[str, set[str]] = {}
+    city_matches: list[tuple[str, str, str]] = []
+    for alias, (city_name, city_country) in RISK_CITY_COUNTRY.items():
+        role = _place_role(sentences, (alias,))
+        if role is None:
+            continue
+        remember(city_name, "city", role)
+        city_roles.setdefault(city_country, set()).add(role)
+        city_matches.append((city_name, city_country, role))
+
+    # ---- pass 2: countries ----------------------------------------------
+    event_country: str | None = None
+    source_country: str | None = None
+    unverified_country: str | None = None
+    confidence: float | None = None
+    seen_countries: set[str] = set()
+
     for mention in entities:
-        if mention.entity_type == "country" and mention.name.lower() in COUNTRY_TO_REGION:
-            country = mention.name.lower()
-            break
-    if country is None:
+        if mention.entity_type != "country":
+            continue
+        canonical = mention.name.lower()
+        if canonical not in COUNTRY_TO_REGION:
+            continue
+        role = _place_role(sentences, alias_index.get(canonical, (canonical,)))
+        if role is None:
+            # The gazetteer recognised this country through something this
+            # resolver cannot find in the text -- an abbreviation, an inflected
+            # form, or a capital standing in for the government. Its cities are
+            # the next best evidence: a country whose only named city is
+            # speaking is itself speaking.
+            roles = city_roles.get(canonical, set())
+            role = "event" if "event" in roles else ("source" if roles else None)
+        # Still None means nothing tested it at all. Recorded as "unverified"
+        # rather than "event": a mention whose role was never tested must not
+        # read like one that passed the test, and must not outrank one either.
+        seen_countries.add(canonical)
+        remember(canonical.title(), "country", role or "unverified")
+        if role == "event":
+            if event_country is None:
+                event_country = canonical
+        elif role == "source":
+            if source_country is None:
+                source_country = canonical
+        elif unverified_country is None:
+            unverified_country = canonical
+
+    if event_country is not None:
+        confidence = LOCATION_CONFIDENCE_COUNTRY
+    else:
         for mention in entities:
             if mention.entity_type == "airport" and mention.code:
                 mapped = AIRPORT_COUNTRY.get(mention.code)
                 if mapped:
-                    country = mapped
+                    event_country = mapped
+                    confidence = LOCATION_CONFIDENCE_AIRPORT_DERIVED
+                    remember(mapped.title(), "country", "event")
                     break
 
+    # ---- pass 3: which city, given the country --------------------------
     city: str | None = None
-    for alias, (city_name, city_country) in RISK_CITY_COUNTRY.items():
-        if country is not None and city_country != country:
+    conflicted = False
+    for city_name, city_country, role in city_matches:
+        if role == "source":
+            # "Washington said" names Washington and places nothing.
             continue
-        if _keyword_pattern((alias,)).search(text):
+        if event_country is not None and city_country != event_country:
+            # §12: the article named a city that is not in the country it also
+            # named. Recorded in `mentioned`, refused here.
+            conflicted = True
+            continue
+        if city is None:
             city = city_name
-            if country is None:
-                country = city_country
-            break
+            if event_country is None:
+                event_country = city_country
+                # Two independent signals agreeing is the strongest placement
+                # this pipeline produces -- and they agree whether or not the
+                # country's own role test could run. A gazetteer country the
+                # text never spells out, confirmed by a city inside it, is
+                # exactly that agreement.
+                confidence = (
+                    LOCATION_CONFIDENCE_CITY_CONFIRMED
+                    if city_country in seen_countries
+                    else LOCATION_CONFIDENCE_COUNTRY
+                )
+            else:
+                confidence = LOCATION_CONFIDENCE_CITY_CONFIRMED
 
-    return (country.title() if country else None, city)
+    if conflicted and city is None:
+        confidence = LOCATION_CONFIDENCE_CONFLICT
+
+    # The two soft landings, in order of how much they are worth. Both sit
+    # below LOCATION_MAP_PIN_MIN: the event is published, and the map declines
+    # to claim it knows where.
+    if event_country is None and unverified_country is not None:
+        event_country = unverified_country
+        confidence = LOCATION_CONFIDENCE_UNVERIFIED
+    if event_country is None and source_country is not None:
+        event_country = source_country
+        confidence = LOCATION_CONFIDENCE_SOURCE_ONLY
+
+    return RiskLocation(
+        country=event_country.title() if event_country else None,
+        city=city,
+        confidence=confidence if event_country else None,
+        mentioned=tuple(mentioned),
+    )
+
+
+def detect_risk_place(
+    title: str, content: str, entities: list[EntityMention]
+) -> tuple[str | None, str | None]:
+    """(country, city) for a risk event -- the two-value view of
+    `resolve_risk_location`, kept because several callers want only the place.
+
+    City is the honest weak spot. The bundled airport dataset only knows cities
+    that have an airport, so the city vocabulary here stays the hand-built
+    RISK_CITY_COUNTRY table in app/llm/gazetteer.py. Anything outside it
+    resolves to a country with no city, and that is most of the world -- the
+    map falls back to a country centroid for those rows rather than pretending
+    to a precision it does not have.
+    """
+    resolved = resolve_risk_location(title, content, entities)
+    return (resolved.country, resolved.city)
+
+
+# ===========================================================================
+# AVIATION RELEVANCE (spec §4-6, §16-17)
+#
+# The gate this feed most needed and least had. Every rule below exists to
+# enforce one sentence of the spec: **the presence of an aviation WORD is not
+# aviation relevance.** An earthquake story that happens to say "the airline
+# industry" scores nothing here. What scores is a concrete operational fact --
+# an airspace closed, flights cancelled, a runway shut, a NOTAM issued.
+#
+# So this is deliberately a small, closed list of OPERATIONAL patterns rather
+# than a broad aviation vocabulary. A broad vocabulary is what the old
+# `aviation_link` heuristic effectively was, and it could only ever answer
+# "an airport was named", which is why /risks has always had to label its own
+# output "anılan havalimanları" rather than "etkilenen".
+#
+# NULL IS NOT ZERO, and the distinction is the whole design. A score of None
+# means no operational signal was FOUND -- which on a keyword pass is weak
+# evidence of absence, not evidence. The gate in app/api/v1/risks.py therefore
+# publishes unscored rows and filters only rows something actually measured.
+# ===========================================================================
+
+#: Operational impact, stated. Every entry names a thing that happened to an
+#: aircraft, an airport or an airspace -- not a thing that happened near one.
+_AVIATION_OPERATIONAL: tuple[str, ...] = (
+    # Airspace
+    "airspace closed", "airspace closure", "airspace closures", "airspace shut",
+    "closed its airspace", "closed their airspace", "close its airspace",
+    "airspace restriction", "airspace restrictions", "airspace ban",
+    "no fly zone", "no flight zone",
+    "hava sahasi kapatildi", "hava sahasini kapatti", "hava sahasi kapali",
+    "hava sahasi kapanisi", "ucusa yasak bolge",
+    # Flights
+    "flights diverted", "flight diverted", "flights were diverted",
+    "flights cancelled", "flights canceled", "flight cancellations",
+    "flights suspended", "flights halted", "flights grounded",
+    "grounded flights", "flights delayed en masse", "ground stop",
+    "flight ban", "flight bans", "banned from flying", "flights resumed",
+    "ucuslar iptal", "ucus iptal", "seferler iptal", "ucuslar durduruldu",
+    "ucuslar askiya", "ucuslar yonlendirildi", "ucusa kapatildi",
+    "ucus yasagi", "ucuslar ertelendi",
+    # Airports
+    "airport closed", "airport closure", "airport closures", "airport shut",
+    "closed the airport", "suspended operations", "suspends operations",
+    "terminal evacuated", "terminal closed", "runway closed",
+    "runway closure", "runway shut", "apron closed",
+    "havalimani kapandi", "havalimani kapatildi", "havalimani kapali",
+    "terminal tahliye", "pist kapatildi", "pist kapali",
+    "havalimani faaliyetleri durduruldu",
+    # Air traffic control and formal notices
+    "notam", "atc strike", "air traffic control strike",
+    "air traffic controllers strike", "air traffic controller strike",
+    "atc disruption", "hava trafik kontrolorleri grevi", "atc grevi",
+)
+
+#: The same operational facts, written with the verb held away from the noun:
+#: "flights could be cancelled", "the airport will be closed", "uçuşlar bugün
+#: iptal edildi". A short regex tier rather than another hundred literals,
+#: because the literal list cannot enumerate the auxiliaries.
+#:
+#: Still tight: each one requires the AVIATION NOUN and an OPERATIONAL VERB
+#: within a few words of each other. "The airline industry expressed
+#: condolences" matches nothing here, which is the rule these patterns exist
+#: to keep (§5).
+_AVIATION_OPERATIONAL_RE = re.compile(
+    r"\bflights?\b(?:\s+\w+){0,4}?\s+\b(?:cancell?ed|cancellations?|diverted|"
+    r"suspended|grounded|halted|rerouted)\b"
+    r"|\bairspace\b(?:\s+\w+){0,3}?\s+\b(?:closed|closure|closures|shut|"
+    r"restricted|reopened)\b"
+    r"|\b(?:airport|airports|runway|runways|terminal|terminals)\b"
+    r"(?:\s+\w+){0,4}?\s+\b(?:closed|closure|closures|shut|shutdown|evacuated|"
+    r"suspended|reopened)\b"
+    r"|\bucus(?:lar|u|lari|larin)?\b(?:\s+\w+){0,4}?\s+"
+    r"\b(?:iptal|durduruldu|ertelendi|yonlendirildi|askiya)\b"
+    r"|\b(?:havalimani|havaalani|pist|terminal)\b(?:\s+\w+){0,4}?\s+"
+    r"\b(?:kapatildi|kapandi|kapali|tahliye)\b"
+)
+
+#: Language that makes an operational statement a FORECAST rather than a
+#: report. Decides ACTUAL vs POTENTIAL; it never changes the score, because
+#: "the airspace may close tomorrow" is exactly as relevant to a planner as
+#: "the airspace closed today" -- it is just a different kind of fact.
+_AVIATION_PROSPECTIVE: tuple[str, ...] = (
+    "could", "may", "might", "expected to", "expects to", "set to", "plans to",
+    "risk of", "at risk", "warns", "warned", "warning", "threatens",
+    "threatening", "if the", "would be", "prepared to", "considering",
+    "olabilir", "beklen", "riski", "uyardi", "tehdit", "planliyor",
+    "hazirlaniyor", "ihtimali",
+)
+
+#: An operational signal in the HEADLINE. The headline is what the article is
+#: about, so a closure named there is the story.
+AVIATION_RELEVANCE_TITLE = 0.85
+
+#: An operational signal in the body only. Above the gate, because a body that
+#: reports cancelled flights is reporting cancelled flights -- but below the
+#: headline case, which is the stronger claim.
+AVIATION_RELEVANCE_BODY = 0.75
+
+#: The publish gate (spec §16). A score at or above this is aviation-relevant.
+AVIATION_RELEVANCE_GATE = 0.70
+
+#: Longest quotable evidence sentence. Long enough for a real news sentence,
+#: short enough that a run-on paragraph does not become the "quote".
+MAX_EVIDENCE_CHARS = 300
+
+
+@dataclass(frozen=True)
+class AviationRelevance:
+    """A deterministic reading of how directly an article touches flying."""
+
+    score: float
+    #: The sentence the score came from, quoted from the article as written.
+    #: Not a paraphrase: an evidence field a reader cannot check against the
+    #: source is decoration.
+    evidence: str | None
+    #: "ACTUAL" | "POTENTIAL" -- did it happen, or is it forecast?
+    status: str
+
+
+def detect_aviation_relevance(title: str, content: str) -> AviationRelevance | None:
+    """The deterministic aviation-relevance floor, or None when no operational
+    signal is present at all.
+
+    None rather than 0.0, and the difference is load-bearing: this pass reads
+    keywords, so "found nothing" means "this pass found nothing", not "there is
+    no aviation impact". Returning 0.0 would let a gate delete an article on
+    the strength of a keyword list's silence. See the section header.
+    """
+    folded_title = _masked(fold_text(title))
+    folded_body = _masked(fold_text(content))
+
+    in_title = _has_operational_signal(folded_title)
+    if not in_title and not _has_operational_signal(folded_body):
+        return None
+
+    score = AVIATION_RELEVANCE_TITLE if in_title else AVIATION_RELEVANCE_BODY
+    evidence, prospective = _aviation_evidence(title if in_title else content)
+    return AviationRelevance(
+        score=score,
+        evidence=evidence,
+        status="POTENTIAL" if prospective else "ACTUAL",
+    )
+
+
+def _aviation_evidence(source_text: str) -> tuple[str | None, bool]:
+    """(the sentence that matched, is it forecast rather than report).
+
+    Sentences are folded one at a time so the QUOTE comes back in the
+    article's own words while the MATCH runs on normalised text -- a reader
+    checking the evidence against the source has to find the sentence verbatim.
+    """
+    for sentence in _sentences(source_text) or [source_text]:
+        folded = _masked(fold_text(sentence))
+        if not _has_operational_signal(folded):
+            continue
+        return sentence.strip()[:MAX_EVIDENCE_CHARS], _any(_AVIATION_PROSPECTIVE, folded)
+    return None, False
+
+
+def _has_operational_signal(folded: str) -> bool:
+    """Either tier: a literal operational phrase, or the held-apart form."""
+    return _any(_AVIATION_OPERATIONAL, folded) or bool(_AVIATION_OPERATIONAL_RE.search(folded))
+
+
+# ===========================================================================
+# CURRENCY FLAGS (spec §15) -- the heuristic half
+#
+# The LLM answers all five (is_current_event, is_historical, is_analysis,
+# is_opinion, is_recap); this function answers only the two that PR #62's
+# retrospective guard already has real evidence for, and leaves the rest None.
+#
+# None means "nobody looked", and it must not be spelled False. An
+# `is_current_event=False` written on no evidence is a row deleted by a gate
+# that never measured anything -- which is the failure mode the confidence
+# floor in app/api/v1/risks.py already documents at length for its own
+# unscored case.
+# ===========================================================================
+
+
+def detect_currency_flags(title: str) -> dict[str, bool | None]:
+    """is_historical / is_recap from the retrospective guard; the rest None.
+
+    `is_retrospective` reads the HEADLINE for anniversary markers and for an
+    old year narrated in the past tense -- both of which say "this piece is
+    looking backwards". That is the same claim as is_historical, so the signal
+    is reused rather than re-derived.
+
+    is_current_event is the negation ONLY when the guard fired: a headline that
+    is not retrospective has not thereby been shown to be current, so it stays
+    None and the uniqueness gate lets it through.
+    """
+    looking_back = is_retrospective(title)
+    return {
+        "is_current_event": False if looking_back else None,
+        "is_historical": True if looking_back else None,
+        "is_recap": True if looking_back else None,
+        "is_analysis": None,
+        "is_opinion": None,
+    }
 
 
 def classify_risk_heuristic(

@@ -68,7 +68,31 @@ def _should_translate(settings, intelligence_score: float) -> bool:
     return intelligence_score >= settings.translate_min_intelligence
 
 
-async def _classify_risk(engine, title: str, content: str, entities) -> dict[str, str | None]:
+#: Every risk column an enrichment row carries, all null. Returned whenever the
+#: article is not a risk event -- which is the overwhelmingly common case -- so
+#: the writer below always sees the same keys and a column can never be left
+#: carrying a previous run's value.
+_NO_RISK: dict[str, object | None] = {
+    "risk_type": None,
+    "risk_family": None,
+    "risk_severity": None,
+    "risk_country": None,
+    "risk_city": None,
+    "location_confidence": None,
+    "mentioned_locations": None,
+    "aviation_relevance_score": None,
+    "aviation_relevance_source": None,
+    "aviation_impact_evidence": None,
+    "aviation_impact_status": None,
+    "is_current_event": None,
+    "is_historical": None,
+    "is_analysis": None,
+    "is_opinion": None,
+    "is_recap": None,
+}
+
+
+async def _classify_risk(engine, title: str, content: str, entities) -> dict[str, object | None]:
     """Risk Radarı fields for one article, from the LLM where the provider has
     a risk classifier and from the keyword heuristic otherwise.
 
@@ -83,8 +107,31 @@ async def _classify_risk(engine, title: str, content: str, entities) -> dict[str
         the LLM budget is spent on relevance-gated articles only (see
         enrich_pending_articles), so the heuristic is the path most articles
         take anyway.
+
+    THE VERIFICATION FIELDS ARE MERGED, NOT CHOSEN BETWEEN. The model and the
+    keyword floor answer different questions well, and taking one path's answer
+    wholesale would throw away the other's:
+
+      * aviation relevance: the model's score wins when it gave one, because it
+        read the article; the deterministic floor fills in when it did not, and
+        `aviation_relevance_source` records which -- so a gate tightened later
+        knows its own denominator instead of inferring it from which provider
+        happened to be configured that week.
+      * location: the model may name a place the gazetteer never would, so its
+        country is kept -- but `resolve_risk_location` still runs, because
+        `mentioned_locations` and the role test are evidence the model does not
+        produce, and the heuristic's confidence is the only number available
+        when the model declined to give one.
+      * currency: the retrospective guard's verdict is a floor under the
+        model's, never an override of it.
     """
-    result: dict[str, str | None] | None = None
+    from app.llm.heuristic import (
+        detect_aviation_relevance,
+        detect_currency_flags,
+        resolve_risk_location,
+    )
+
+    result: dict[str, object | None] | None = None
     classifier = getattr(engine, "classify_risk", None)
     if classifier is not None:
         try:
@@ -98,27 +145,57 @@ async def _classify_risk(engine, title: str, content: str, entities) -> dict[str
 
     risk_type = result.get("risk_type")
     if not is_valid_risk_type(risk_type):
-        return {
-            "risk_type": None, "risk_family": None, "risk_severity": None,
-            "risk_country": None, "risk_city": None,
-        }
+        return dict(_NO_RISK)
 
     # The model may name a place the gazetteer never would; keep it, but fall
     # back to the entity-derived location when it says nothing.
-    country = result.get("country")
-    city = result.get("city")
-    if not country:
-        from app.llm.heuristic import detect_risk_place
+    resolved = resolve_risk_location(title, content, entities)
+    country = result.get("country") or resolved.country
+    city = result.get("city") or (resolved.city if not result.get("country") else None)
+    # A model-supplied confidence is the model's own; otherwise the resolver's,
+    # which is the only one that looked at the place roles at all.
+    location_confidence = result.get("location_confidence")
+    if location_confidence is None:
+        location_confidence = resolved.confidence if country == resolved.country else None
+    mentioned = result.get("mentioned_locations") or [
+        m.as_dict() for m in resolved.mentioned
+    ] or None
 
-        country, city_fallback = detect_risk_place(title, content, entities)
-        city = city or city_fallback
+    # Aviation relevance: LLM first, deterministic floor second, unscored last.
+    # "unscored" is a real, recorded state -- see the graduated gate in
+    # app/api/v1/risks.py, which publishes it rather than deleting it.
+    relevance_score = result.get("aviation_relevance_score")
+    evidence = result.get("aviation_impact_evidence")
+    status = result.get("aviation_impact_status")
+    relevance_source = "llm" if relevance_score is not None else None
+    if relevance_score is None:
+        floor = detect_aviation_relevance(title, content)
+        if floor is not None:
+            relevance_score = floor.score
+            evidence = evidence or floor.evidence
+            status = status or floor.status
+            relevance_source = "heuristic"
+        else:
+            relevance_source = "unscored"
+
+    flags = detect_currency_flags(title)
+    for flag, fallback in flags.items():
+        if result.get(flag) is None and fallback is not None:
+            result[flag] = fallback
 
     return {
         "risk_type": risk_type,
         "risk_family": risk_family_of(risk_type),
         "risk_severity": result.get("severity") or "low",
-        "risk_country": (country or None) and country[:80],
-        "risk_city": (city or None) and city[:80],
+        "risk_country": (country or None) and str(country)[:80],
+        "risk_city": (city or None) and str(city)[:80],
+        "location_confidence": location_confidence,
+        "mentioned_locations": mentioned,
+        "aviation_relevance_score": relevance_score,
+        "aviation_relevance_source": relevance_source,
+        "aviation_impact_evidence": evidence,
+        "aviation_impact_status": status,
+        **{flag: result.get(flag) for flag in flags},
     }
 
 
@@ -940,16 +1017,29 @@ async def backfill_risk_classification(
 
     Same reasoning as reclassify_articles: enrichment runs once per article, so
     every article ingested before this feature existed carries null risk fields
-    and would stay invisible to /risks forever. This touches only the five
-    risk_* columns -- category, translations, headlines, entities and status are
-    left exactly as they are, so it can be re-run after a keyword change
-    without un-publishing anything.
+    and would stay invisible to /risks forever. This touches only the risk_*
+    columns and the verification columns that sit beside them -- category,
+    translations, headlines, entities and status are left exactly as they are,
+    so it can be re-run after a keyword change without un-publishing anything.
 
     Deliberately heuristic-only. The live classifier is a per-article LLM call,
     and the archive is thousands of articles; a backfill that costs the whole
     daily token budget would not be runnable. Fresh articles still get the LLM
     path through enrich_pending_articles().
+
+    Which means the verification columns it writes are the DETERMINISTIC ones:
+    `aviation_relevance_source` comes out "heuristic" or "unscored" here, never
+    "llm", and the currency flags carry only what the retrospective guard can
+    see. That is the point of storing the source at all -- a backfilled row and
+    a model-scored row are different evidence, and a gate has to be able to
+    tell them apart.
     """
+    from app.llm.heuristic import (
+        detect_aviation_relevance,
+        detect_currency_flags,
+        resolve_risk_location,
+    )
+
     provider = HeuristicProvider()
 
     query = (
@@ -975,21 +1065,34 @@ async def backfill_risk_classification(
         if risk_type is None:
             # An article that no longer classifies must lose its old value --
             # otherwise tightening a keyword guard leaves the false positive it
-            # was written to remove sitting in the database.
+            # was written to remove sitting in the database. The verification
+            # columns go with it: they describe a risk classification, and one
+            # left behind after its classification was withdrawn is a fact
+            # about a row that no longer exists.
             if enrichment.risk_type is not None:
                 cleared += 1
-            enrichment.risk_type = None
-            enrichment.risk_family = None
-            enrichment.risk_severity = None
-            enrichment.risk_country = None
-            enrichment.risk_city = None
+            for column, value in _NO_RISK.items():
+                setattr(enrichment, column, value)
         else:
             classified += 1
+            resolved = resolve_risk_location(article.title, article.raw_content, entities)
+            relevance = detect_aviation_relevance(article.title, article.raw_content)
+
             enrichment.risk_type = risk_type
             enrichment.risk_family = risk_family_of(risk_type)
             enrichment.risk_severity = result["severity"] or "low"
             enrichment.risk_country = (result["country"] or None) and result["country"][:80]
             enrichment.risk_city = (result["city"] or None) and result["city"][:80]
+            enrichment.location_confidence = resolved.confidence
+            enrichment.mentioned_locations = (
+                [m.as_dict() for m in resolved.mentioned] or None
+            )
+            enrichment.aviation_relevance_score = relevance.score if relevance else None
+            enrichment.aviation_relevance_source = "heuristic" if relevance else "unscored"
+            enrichment.aviation_impact_evidence = relevance.evidence if relevance else None
+            enrichment.aviation_impact_status = relevance.status if relevance else None
+            for flag, value in detect_currency_flags(article.title).items():
+                setattr(enrichment, flag, value)
 
         # Periodic commits, same as reclassify_articles: a single end-of-run
         # commit over a pooled remote database loses whole batches to idle

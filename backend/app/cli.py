@@ -544,6 +544,28 @@ async def _campaign_quality_report(days: int | None) -> None:
     print(render_report_tr(report))
 
 
+async def _risk_quality_report(days: int | None) -> None:
+    """§23's funnel: total articles -> current -> risk candidate -> confidence
+    -> aviation relevance -> location verified -> clustered signal.
+
+    Read-only and LLM-free, so it is safe against production while enrichment
+    is running. Its most important lines are the "ölçülmemiş" ones: three of
+    the four gates publish unscored rows on purpose, and this is what says how
+    much of the funnel that leniency is currently carrying.
+    """
+    from app.services.risk_quality import (
+        DEFAULT_WINDOW_DAYS,
+        render_report_tr,
+        risk_quality_report,
+    )
+
+    async with AsyncSessionLocal() as db:
+        report = await risk_quality_report(
+            db, days=days if days is not None else DEFAULT_WINDOW_DAYS
+        )
+    print(render_report_tr(report))
+
+
 async def _purge_blacklisted_articles(dry_run: bool) -> None:
     """Retire archived articles from blacklisted domains (Reddit).
 
@@ -896,6 +918,7 @@ def main() -> None:
             "backfill-campaign-classes",
             "backfill-campaign-kind",
             "campaign-quality-report",
+            "risk-quality-report",
             "purge-blacklisted-articles",
         ],
     )
@@ -904,7 +927,9 @@ def main() -> None:
         type=int,
         help=(
             "re-enrich: only articles fetched in the last N days (default: all). "
-            "campaign-quality-report: reporting window in days (default: 7)"
+            "campaign-quality-report: reporting window in days (default: 7). "
+            "risk-quality-report: reporting window in days (default: the "
+            "radar's own default window)"
         ),
     )
     parser.add_argument(
@@ -1068,6 +1093,11 @@ def main() -> None:
         # 7-day default rather than "everything", because a report over all
         # time would describe the pipeline's history, not its health.
         asyncio.run(_campaign_quality_report(args.days))
+    elif args.command == "risk-quality-report":
+        # --days reuses the shared window flag; absent means the radar's own
+        # default window, so the funnel describes the page a reader is
+        # actually looking at rather than an arbitrary reporting period.
+        asyncio.run(_risk_quality_report(args.days))
     elif args.command == "purge-blacklisted-articles":
         asyncio.run(_purge_blacklisted_articles(args.dry_run))
 

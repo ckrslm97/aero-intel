@@ -194,10 +194,47 @@ def risk_prompt(title: str, content: str) -> str:
         f'- "severity" is one of: {severities}. Use "high" for loss of life or '
         'destruction, "medium" for injuries, evacuation or damage, "low" otherwise.\n'
         '- "country" and "city" are where the EVENT happened (English names), or null '
-        "if the article does not say.\n\n"
+        "if the article does not say.\n"
+        # --- the verification fields (spec §7-17) ---------------------------
+        #
+        # Asked for in THIS call rather than a second one. The risk subset of
+        # this feed is small (18 of 484 articles in the local corpus) but the
+        # call is per-article, so a separate verification pass would double
+        # the token bill of the whole pipeline to enrich a fraction of it.
+        "- The place that SPOKE is not the place where it HAPPENED. In "
+        '"Washington said an earthquake struck Japan", the country is Japan; '
+        "Washington is the government that commented. A capital, a ministry or "
+        'a dateline is never the event location. Put every place the article '
+        'names in "mentioned_locations" with the role it played.\n'
+        '- "location_confidence" is how sure you are of "country": 0.9 when the '
+        "article states the place plainly, 0.5 when you inferred it, below 0.4 "
+        "when you are guessing.\n"
+        '- "aviation_relevance" is how much this event affects FLYING, not how '
+        "often the article says the word airline. An airspace closure, "
+        "cancelled or diverted flights, a closed airport or runway, a NOTAM or "
+        "an ATC strike is high (0.8+). A conflict, a quake or an economic story "
+        "with no stated operational effect on flights is low (0.2), even when it "
+        "mentions airlines, airports or aviation. Quote the sentence you read it "
+        'off in "aviation_impact_evidence" -- the article\'s own words, not a '
+        "summary -- or null if there is none.\n"
+        '- "aviation_impact_status" is "ACTUAL" when the article reports the '
+        'effect as having happened, "POTENTIAL" when it is forecast or feared.\n'
+        '- "is_current_event" is true only for something happening now or in '
+        "the last few days. An anniversary, a retrospective, a court case about "
+        "an old event, an analysis piece, an opinion column or a week-in-review "
+        "roundup is false -- and set the matching flag as well.\n\n"
         "Respond with ONLY a valid JSON object, no explanation, no markdown fences:\n"
         '{"risk_type": <one of the types above or null>, "severity": <severity or null>, '
-        '"country": <string or null>, "city": <string or null>}\n\n'
+        '"country": <string or null>, "city": <string or null>, '
+        '"location_confidence": <0.0-1.0 or null>, '
+        '"mentioned_locations": [{"name": <string>, "kind": "country"|"city", '
+        '"role": "event"|"source"}], '
+        '"aviation_relevance": <0.0-1.0 or null>, '
+        '"aviation_impact_evidence": <string or null>, '
+        '"aviation_impact_status": "ACTUAL"|"POTENTIAL"|null, '
+        '"is_current_event": <true|false|null>, "is_historical": <true|false|null>, '
+        '"is_analysis": <true|false|null>, "is_opinion": <true|false|null>, '
+        '"is_recap": <true|false|null>}\n\n'
         f"Title: {title}\nContent: {content[:1500]}\n\nJSON:"
     )
 
