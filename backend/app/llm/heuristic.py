@@ -212,7 +212,12 @@ def _airport_match_is_credible(
     code as "JAN" and the month as "Jan", so requiring the original token to
     be upper-case keeps "flights to JAN" and drops "Okinawa Jan 2027".
     """
-    if end != start:  # multi-token alias ("john f kennedy"): self-evidencing
+    # Every alias has to look like a name where it stands, however many tokens
+    # it has: "High Level Airport" (YOJ) is two ordinary words, and "a decision
+    # taken at a high level" put it on a card about Germany.
+    if not cased[start][:1].isupper():
+        return False
+    if end != start:  # multi-token alias ("john f kennedy"): nothing below applies
         return True
 
     # A single token has to look like a name where it stands. Capitalisation is
@@ -224,8 +229,6 @@ def _airport_match_is_credible(
     # "a decision taken at the NATO summit" put ALLIANCE MUNICIPAL AIRPORT on
     # it, and an alert covering "Ida-Viru county" -- the hyphen is a token
     # boundary, so "Ida" stood alone -- put IDAHO FALLS beside it.
-    if not cased[start][:1].isupper():
-        return False
     if len(gram) != 3:
         # A capitalised name ("Heathrow", "Tartu"). Nothing below applies.
         return True
@@ -274,6 +277,12 @@ def extract_entity_mentions(title: str, content: str) -> list[EntityMention]:
             seen.add(key)
             mentions.append(EntityMention(entity_type, name, code))
 
+    #: (start, end, name, code) for every airport alias that matched, kept
+    #: until the whole text is scanned so a shorter alias sitting INSIDE a
+    #: longer one can be dropped. "St Petersburg" contains "Petersburg", which
+    #: is an airport in Alaska, and both were published on the same card.
+    airport_hits: list[tuple[int, int, str, str]] = []
+
     total = len(tokens)
     for start, first in enumerate(tokens):
         if first not in ALIAS_FIRST_TOKENS:
@@ -287,10 +296,18 @@ def extract_entity_mentions(title: str, content: str) -> list[EntityMention]:
                 note("airline", airline[0], airline[1])
             airport = AIRPORTS.get(gram)
             if airport and _airport_match_is_credible(gram, cased, start, end):
-                note("airport", airport[0], airport[1])
+                airport_hits.append((start, end, airport[0], airport[1]))
             country = COUNTRY_ALIASES.get(gram)
             if country:
                 note("country", country.title(), None)
+
+    for start, end, name, code in airport_hits:
+        contained = any(
+            other_start <= start and end <= other_end and (other_start, other_end) != (start, end)
+            for other_start, other_end, _, _ in airport_hits
+        )
+        if not contained:
+            note("airport", name, code)
     return mentions
 
 
