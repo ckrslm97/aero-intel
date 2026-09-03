@@ -3,7 +3,7 @@ import { YearDots } from "@/components/charts/year-dots";
 import { Delta } from "@/components/ui/delta";
 import { StatusPill, statusToneOf, type StatusTone } from "@/components/ui/status-pill";
 import { ANNUAL_KIND_SUFFIX, annualScopeLabel, freshnessOf } from "@/lib/cockpit";
-import { formatCompactNumber, formatRate, formatUtcTime } from "@/lib/format";
+import { formatMetricValue, formatUtcTime } from "@/lib/format";
 import type {
   AnnualPoint,
   AnnualSeries,
@@ -73,14 +73,19 @@ export interface PulseCell {
   status: { tone: StatusTone; label: string; title: string } | null;
 }
 
-/** Percent and cent metrics carry meaningful decimals; compact notation would
- * render 84,0% as "84". Same set, same reason, as the KPI strip. */
-const PRECISE_UNITS = new Set(["%", "¢/RPK", "¢/ASK"]);
-
-function annualValue(value: number, unit: string): string {
-  if (unit === "%") return `%${value.toFixed(1).replace(".", ",")}`;
-  if (PRECISE_UNITS.has(unit)) return value.toFixed(2).replace(".", ",");
-  return formatCompactNumber(value);
+/** An annual cell's value, with the Turkish percent sign where the unit is one.
+ *
+ * The DIGITS are `formatMetricValue`'s (lib/format.ts) and no longer this
+ * file's: percent and cent metrics carry meaningful decimals -- compact
+ * notation renders 84,00 as "84" -- and this cell used to say so in its own
+ * copy of the rule, at a different precision from the KPI strip's copy and
+ * from the /kpi detail page, which had no such rule at all. What stays here is
+ * PLACEMENT, which is a layout fact: "%84,00" reads as Turkish, and the cell
+ * then suppresses its unit row so the five cells keep one height.
+ */
+function annualValue(value: number, unit: string, metricKey?: string): string {
+  const digits = formatMetricValue(value, unit, metricKey);
+  return unit === "%" ? `%${digits}` : digits;
 }
 
 function signedPoints(diff: number): string {
@@ -170,7 +175,7 @@ function annualCell(
   return {
     ...base,
     badge: `IATA ${latest.year}${ANNUAL_KIND_SUFFIX[latest.kind]}`,
-    value: annualValue(latest.value, series.unit),
+    value: annualValue(latest.value, series.unit, series.metric_key),
     // A percentage is printed as "%84,0" with nothing after it; the unit row
     // still occupies its 12px so the five cells stay the same height.
     unit: series.unit === "%" ? null : series.unit,
@@ -231,9 +236,10 @@ export function buildPulseCells(
     badge: liveBadge(usdTry?.as_of, " · 15dk", now),
     asOfLabel: formatUtcTime(usdTry?.as_of),
     // Four decimals for a cross where the fourth digit is the one that moves,
-    // two for a TRY or JPY rate where it is not -- the same precision rule the
-    // FX table below uses, so the anchor rate cannot be printed two ways.
-    value: usdTry ? formatRate(usdTry.value, usdTry.value < 10 ? 4 : 2) : null,
+    // two for a TRY or JPY rate where it is not. The cut used to be typed here
+    // AND in the FX table AND nowhere at all on /kpi/fx_eur_usd, which printed
+    // the same reading as "1,1"; `formatMetricValue` is now the only copy.
+    value: usdTry ? formatMetricValue(usdTry.value, usdTry.unit, "fx_usd_try") : null,
     unit: usdTry?.unit ?? null,
     deltas: [
       { scope: "1g", pct: usdTry?.day_delta_pct ?? null },
@@ -267,7 +273,7 @@ export function buildPulseCells(
     cadence: "live",
     badge: liveBadge(brent?.as_of, "", now),
     asOfLabel: formatUtcTime(brent?.as_of),
-    value: brent?.value != null ? formatRate(brent.value, 2) : null,
+    value: brent?.value != null ? formatMetricValue(brent.value, brent.unit) : null,
     unit: brent?.unit ?? null,
     deltas: [
       { scope: "1g", pct: brent?.day_change_pct ?? null },

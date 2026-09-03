@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import { KpiDetailChart } from "@/components/charts/kpi-detail-chart";
 import { Badge } from "@/components/ui/badge";
 import { API_BASE_URL, apiFetch } from "@/lib/api";
-import { formatCompactNumber, formatDelta, formatDeltaPoints } from "@/lib/format";
+import { formatDeltaPoints, formatMetricValue, formatSignedPct } from "@/lib/format";
 import { KPI_ICONS } from "@/lib/kpi-icons";
 import type { KpiDetailOut, KpiPeriod } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -65,9 +65,13 @@ export function KpiDetailClient({ metricKey }: { metricKey: string }) {
   // denominated in points, percent for everything else. See KpiOut in
   // lib/types.ts on why the payload never offers both.
   const delta = detail.delta_pct ?? detail.delta_points;
+  // `formatSignedPct`, which is what every other delta in this app is drawn
+  // with (ui/delta.tsx). This page had its own `formatDelta` printing "+4.2%"
+  // -- an English decimal point, and the percent sign on the wrong side of the
+  // number -- for the same move Kokpit's KUR cell printed as "+%4,2".
   const deltaLabel =
     detail.delta_pct !== null
-      ? formatDelta(detail.delta_pct)
+      ? formatSignedPct(detail.delta_pct)
       : detail.delta_points !== null
         ? formatDeltaPoints(detail.delta_points)
         : null;
@@ -118,8 +122,12 @@ export function KpiDetailClient({ metricKey }: { metricKey: string }) {
       <div className="flex flex-wrap items-end justify-between gap-6 rounded-xl border border-border bg-card p-5">
         <div className="flex flex-col gap-1">
           <div className="flex items-baseline gap-1.5">
+            {/* The page's own precision rule used to be compact notation,
+                which quotes a currency cross to one decimal: /kpi/fx_eur_usd
+                printed "1,1" for the reading Kokpit prints as "1,0850". The
+                rule now lives in lib/format.ts and every surface reads it. */}
             <span className="text-4xl font-semibold tracking-tight">
-              {formatCompactNumber(detail.value)}
+              {formatMetricValue(detail.value, detail.unit, detail.metric_key)}
             </span>
             {detail.unit && <span className="text-base text-muted-foreground">{detail.unit}</span>}
           </div>
@@ -196,7 +204,7 @@ export function KpiDetailClient({ metricKey }: { metricKey: string }) {
                   <span>{c.source}</span>
                 )}
                 <span className="text-muted-foreground">
-                  {formatCompactNumber(c.value)} {detail.unit}
+                  {formatMetricValue(c.value, detail.unit, detail.metric_key)} {detail.unit}
                 </span>
                 {/* The second reading's own timestamp. Without it a refused
                     comparison ("Karşılaştırılamaz") is unanswerable. */}
@@ -238,7 +246,12 @@ export function KpiDetailClient({ metricKey }: { metricKey: string }) {
         </div>
 
         {detail.history.length > 1 ? (
-          <KpiDetailChart history={detail.history} period={detail.period} unit={detail.unit} />
+          <KpiDetailChart
+            history={detail.history}
+            period={detail.period}
+            unit={detail.unit}
+            metricKey={detail.metric_key}
+          />
         ) : (
           <p className="rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
             Bu dönem için henüz yeterli geçmiş veri kaydedilmedi.
@@ -287,7 +300,7 @@ export function KpiDetailClient({ metricKey }: { metricKey: string }) {
                       })}
                     </td>
                     <td className="px-2 py-2 font-medium">
-                      {formatCompactNumber(point.value)}
+                      {formatMetricValue(point.value, detail.unit, detail.metric_key)}
                       {detail.unit && (
                         <span className="ml-1 font-normal text-muted-foreground">
                           {detail.unit}

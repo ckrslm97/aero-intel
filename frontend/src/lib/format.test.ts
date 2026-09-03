@@ -1,25 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { formatCompactNumber, formatDelta, formatRate, formatSignedPct } from "./format";
-
-describe("formatDelta", () => {
-  it("signs a positive change with a leading +", () => {
-    expect(formatDelta(4.2)).toBe("+4.2%");
-  });
-
-  it("does not double-sign a negative change", () => {
-    expect(formatDelta(-3.5)).toBe("-3.5%");
-  });
-
-  it("does not sign a zero change", () => {
-    expect(formatDelta(0)).toBe("0.0%");
-  });
-
-  it("rounds to one decimal place", () => {
-    expect(formatDelta(1.249)).toBe("+1.2%");
-    expect(formatDelta(1.25)).toBe("+1.3%");
-  });
-});
+import {
+  formatCompactNumber,
+  formatDeltaPoints,
+  formatMetricValue,
+  formatRate,
+  formatSignedPct,
+} from "./format";
 
 describe("formatCompactNumber", () => {
   it("formats large numbers in Turkish compact notation", () => {
@@ -60,5 +47,59 @@ describe("formatSignedPct", () => {
 
   it("honours a requested precision", () => {
     expect(formatSignedPct(23.4, 0)).toBe("+%23");
+  });
+});
+
+describe("formatMetricValue", () => {
+  // THE regression this function exists for: /kpi/fx_eur_usd rendered its
+  // reading with the dashboard's compact formatter and printed "1,1", while
+  // Kokpit printed the same number as "1,0850". One metric, one page apart,
+  // two answers.
+  it("quotes a cross below 10 to four decimals", () => {
+    expect(formatMetricValue(1.085, "USD", "fx_eur_usd")).toBe("1,0850");
+    expect(formatMetricValue(0.857, "GBP", "fx_eur_gbp")).toBe("0,8570");
+  });
+
+  it("quotes a rate at or above 10 to two, where the fourth digit says nothing", () => {
+    expect(formatMetricValue(41.7231, "TRY", "fx_usd_try")).toBe("41,72");
+    expect(formatMetricValue(147.2, "JPY", "fx_usd_jpy")).toBe("147,20");
+  });
+
+  // The unit cannot decide this one: kpi_service.py stores only the QUOTE
+  // currency ("TRY", "USD"), which a price could carry too. The key is the
+  // only thing on the wire that says "this is a cross".
+  it("reads the FX rule off the metric key, not off the unit", () => {
+    expect(formatMetricValue(1.085, "USD", "some_other_metric")).toBe("1,1");
+    expect(formatMetricValue(1.085, "USD", "fx_eur_usd")).toBe("1,0850");
+  });
+
+  it("keeps two decimals for percent, cent and price units", () => {
+    expect(formatMetricValue(83.45, "%")).toBe("83,45");
+    expect(formatMetricValue(8.632, "¢/RPK")).toBe("8,63");
+    expect(formatMetricValue(68.4, "$/bbl")).toBe("68,40");
+  });
+
+  // The negative half: a counter is read as a magnitude, and forcing two
+  // decimals onto 341 200 000 passengers would be precision nobody asked for
+  // and nobody can check.
+  it("still compacts a large counter", () => {
+    // U+00A0 between number and unit, as in the formatCompactNumber suite.
+    expect(formatMetricValue(1_500_000, "yolcu", "passengers_ytd")).toBe("1,5\u00a0Mn");
+    expect(formatMetricValue(42, null, null)).toBe("42");
+  });
+
+  it("survives a missing unit and a missing key", () => {
+    expect(formatMetricValue(42.5)).toBe("42,5");
+  });
+});
+
+describe("formatDeltaPoints", () => {
+  it("names the unit a percentage metric actually moves in", () => {
+    // A load factor going 83,0 -> 83,4 rose 0,4 POINTS. Its percent form
+    // (+%0,48) is a number nobody in revenue management would recognise,
+    // printed under the unit they do.
+    expect(formatDeltaPoints(0.4)).toBe("+0,4 puan");
+    expect(formatDeltaPoints(-1.25)).toBe("-1,3 puan");
+    expect(formatDeltaPoints(0)).toBe("0,0 puan");
   });
 });

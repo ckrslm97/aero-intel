@@ -5,7 +5,7 @@ import { CountUp } from "@/components/motion/count-up";
 import { MotionItem, MotionList } from "@/components/motion/motion-list";
 import { Delta } from "@/components/ui/delta";
 import { adjacentYearPair, annualScopeLabel } from "@/lib/cockpit";
-import { formatCompactNumber } from "@/lib/format";
+import { formatMetricValue } from "@/lib/format";
 import type { AnnualSeries } from "@/lib/types";
 
 /** Five cells, down from eight.
@@ -23,15 +23,6 @@ const STRIP_KEYS = [
   "rask",
   "cask",
 ] as const;
-
-/** Percent and cent metrics carry meaningful decimals; compact notation would
- * render 8,63¢ as "8,6". */
-const PRECISE_UNITS = new Set(["%", "¢/RPK", "¢/ASK"]);
-
-function formatValue(value: number, unit: string): string {
-  if (PRECISE_UNITS.has(unit)) return value.toFixed(2).replace(".", ",");
-  return formatCompactNumber(value);
-}
 
 /** The empty-comparison note. CASK is the live case: its 2025 point is missing
  * upstream, so there is no year-on-year to print and saying so is the only
@@ -75,7 +66,11 @@ function StripCell({ series }: { series: AnnualSeries }) {
       <span className="flex shrink-0 items-baseline gap-1">
         <CountUp
           value={latest.value}
-          format={(v) => formatValue(v, series.unit)}
+          // Percent and cent metrics carry meaningful decimals (compact
+          // notation renders 8,63¢ as "8,6"), and that rule used to be a
+          // private copy here, a second one in market-pulse-row.tsx and a
+          // third absent from the /kpi detail page. One rule, one file.
+          format={(v) => formatMetricValue(v, series.unit, series.metric_key)}
           className="text-xl font-semibold leading-none tabular-nums"
         />
         <span className="truncate text-[10px] text-muted-foreground">{series.unit}</span>

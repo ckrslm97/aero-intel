@@ -546,6 +546,29 @@ const CONFIDENCE_GATE_LABELS_TR: Record<string, string> = {
   below_gate: "eşiğin altında",
 };
 
+/** What one row-level gate decided about a row -- or null when the payload
+ * carries no verdict for that gate at all.
+ *
+ * Three states, not two, and the third is the reason this is a function. A
+ * missing key is not a failure: colouring an absent verdict red would assert a
+ * rejection nothing told us about, which is the same class of lie as drawing
+ * an unmeasured score as 0.00.
+ *
+ * Read this rather than re-deriving `score < threshold` on screen. The
+ * confidence gate passes STRICTLY above its threshold and has an exemption
+ * ladder above it (`_confidence_verdict` in backend/app/services/
+ * risk_quality.py), so a row scoring exactly 0.60 is REJECTED while
+ * `score < 0.60` says it passed -- the rejected row sat in the table in normal
+ * type, indistinguishable from the ones that got through.
+ */
+export function gateVerdict(
+  gates: Record<string, boolean>,
+  key: string,
+): boolean | null {
+  const verdict: boolean | undefined = gates[key];
+  return verdict === undefined ? null : verdict;
+}
+
 export function confidenceGateLabel(reason: string): string {
   return CONFIDENCE_GATE_LABELS_TR[reason] ?? reason;
 }

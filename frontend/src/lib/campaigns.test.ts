@@ -395,13 +395,86 @@ describe("campaignRegions and campaignCountries", () => {
     expect(campaignRegions(promotion({ region: null, markets: "londra, dubai" }))).toEqual([]);
   });
 
-  it("reads countries off the resolved route only", () => {
+  it("reads the structured markets column too, not the route alone", () => {
+    // `markets_json` is what the SERVER filters on (`_regions_of` /
+    // `_countries_of`, backend/app/api/v1/promotions.py). It was missing from
+    // PromotionOut, so this page could only see the route -- and the CSV
+    // export, which runs the server-side filter, selected rows the chip row
+    // could not even offer. One dimension, two answers.
+    expect(
+      campaignRegions(
+        promotion({ region: null, markets_json: { regions: ["europe", " middle-east "] } }),
+      ).sort(),
+    ).toEqual(["europe", "middle-east"]);
+    expect(
+      campaignCountries(promotion({ markets_json: { countries: ["Almanya", " Japonya "] } })).sort(),
+    ).toEqual(["Almanya", "Japonya"]);
+  });
+
+  it("reads countries off the resolved route as well as the market list", () => {
     expect(
       campaignCountries(
         promotion({ route_json: { origin: { country: "Türkiye" }, dest: { country: "Japonya" } } }),
       ).sort(),
     ).toEqual(["Japonya", "Türkiye"]);
     expect(campaignCountries(promotion())).toEqual([]);
+  });
+
+  it("contributes nothing for a legacy row whose markets were never extracted", () => {
+    // NULL is not an empty list: an unextracted campaign names no market,
+    // which is not the same claim as naming none. Neither shape may invent a
+    // chip, and neither may crash the facet builder.
+    expect(campaignCountries(promotion({ markets_json: null }))).toEqual([]);
+    expect(campaignRegions(promotion({ region: null, markets_json: null }))).toEqual([]);
+    expect(campaignRegions(promotion({ region: null, markets_json: {} }))).toEqual([]);
+  });
+});
+
+describe("markets_json and the filters", () => {
+  // The screen filter and the CSV export must select the SAME rows. The export
+  // runs `_regions_of` / `_countries_of` server-side; these assert the client
+  // reads the same column for the same answer.
+  const berlin = promotion({
+    id: "berlin",
+    region: null,
+    route_json: null,
+    markets_json: { countries: ["Almanya"], regions: ["europe"] },
+  });
+  const tokyo = promotion({
+    id: "tokyo",
+    region: null,
+    route_json: { origin: { country: "Türkiye" }, dest: { country: "Japonya", region: "asia" } },
+    markets_json: null,
+  });
+
+  it("selects a campaign whose only mention of a country lives in markets_json", () => {
+    expect(filterCampaigns([berlin, tokyo], { ...EMPTY_CAMPAIGN_FILTERS, country: "Almanya" }, TODAY))
+      .toEqual([berlin]);
+    expect(filterCampaigns([berlin, tokyo], { ...EMPTY_CAMPAIGN_FILTERS, region: "europe" }, TODAY))
+      .toEqual([berlin]);
+  });
+
+  it("still selects on the route for a row that has no markets_json", () => {
+    // The negative half: reading the new column must not stop the old one
+    // working, or the fix would trade one under-selection for another.
+    expect(filterCampaigns([berlin, tokyo], { ...EMPTY_CAMPAIGN_FILTERS, country: "Japonya" }, TODAY))
+      .toEqual([tokyo]);
+    expect(filterCampaigns([berlin, tokyo], { ...EMPTY_CAMPAIGN_FILTERS, region: "asia" }, TODAY))
+      .toEqual([tokyo]);
+  });
+
+  it("offers a chip for every value it would then select on", () => {
+    // The chip row is built from `campaignFacetCounts`, so a value that
+    // matches the filter but counts zero is a filter nobody can reach.
+    expect(campaignFacetCounts([berlin, tokyo], EMPTY_CAMPAIGN_FILTERS, "country", TODAY)).toEqual({
+      Almanya: 1,
+      Japonya: 1,
+      "Türkiye": 1,
+    });
+    expect(campaignFacetCounts([berlin, tokyo], EMPTY_CAMPAIGN_FILTERS, "region", TODAY)).toEqual({
+      europe: 1,
+      asia: 1,
+    });
   });
 });
 

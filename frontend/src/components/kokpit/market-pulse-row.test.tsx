@@ -195,7 +195,12 @@ describe("buildPulseCells", () => {
     // different and wrong claim.
     const cells = buildPulseCells(fullAnnual, null, null);
     expect(cells[2].deltas[0].valueLabel).toBe("+0,5pp");
-    expect(cells[2].value).toBe("%84,0");
+    // Two decimals, and the second one is not decoration: this cell used to
+    // print a percentage to ONE decimal while the KPI strip's copy of the same
+    // rule printed it to two and /kpi/load_factor printed it to none. The
+    // digits now come from `formatMetricValue` (lib/format.ts), which is the
+    // only place any surface asks how precise a percent is.
+    expect(cells[2].value).toBe("%84,00");
   });
 
   it("colours only the cost base", () => {
