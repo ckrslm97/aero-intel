@@ -238,6 +238,32 @@ PRODUCTION_FALSE_POSITIVES = [
         "milli park destinasyonları arasına girmiş oldu.",
         id="dormant_crater_lake_tourism_is_not_a_volcano",
     ),
+    pytest.param(
+        "Boeing MH-139A Grey Wolf helicopter cleared to guard US nuclear "
+        "missile fields",
+        # Faithful to what the fetcher actually stores: the article, then the
+        # site's related-articles rail. The story itself reports a procurement
+        # milestone and contains no hazard vocabulary at all -- "troops" and
+        # the context words that license it come from three different teasers
+        # at the bottom of the page.
+        "The US Air Force Global Strike Command announced that the Boeing "
+        "MH-139A Grey Wolf reached initial operational capability, clearing "
+        "the helicopter for the intercontinental ballistic missile security "
+        "mission it was procured to perform. It replaces the UH-1N fleet at "
+        "Malmstrom Air Force Base. More from AeroTime: airline begins "
+        "evacuation flights; rescue crews reach the crash site; troops board "
+        "a transport in the disaster response exercise.",
+        id="military_procurement_milestone_with_a_related_links_rail",
+    ),
+    pytest.param(
+        'TCMB\'den "Deprem Bölgesi Konut Arzı ve Bölgesel Kira Enflasyonu '
+        'Gelişmeleri" analizi',
+        "TCMB analizinde, dezenflasyon sürecinde en fazla katılık görülen "
+        "kalemlerden birinin kira olduğu, bunda 6 Şubat depremleri sonrası "
+        "konut stokundaki kayıp ve bölgeden diğer illere göçlerin etkili "
+        "olduğu belirtildi. Deprem bölgesinde konut arzı artmaya devam ediyor.",
+        id="central_bank_rent_analysis_naming_the_earthquake_region",
+    ),
 ]
 
 
@@ -2540,3 +2566,58 @@ async def test_backfill_applies_the_same_veto_as_live_enrichment(db_session):
         "vetoed article must lose its stale risk classification"
     )
     assert stats["cleared"] >= 1
+
+
+def test_one_weak_word_in_the_body_is_not_an_event_but_two_are():
+    """The floor that removed the Grey Wolf story, stated as the rule itself.
+
+    Weak keywords ("war", "troops", "coup") are the ones that carry ordinary
+    prose, so a single body occurrence -- which on a real page is as likely to
+    come from a related-articles rail as from the story -- must not classify.
+    The same article with the word twice does classify: this is a threshold,
+    not a ban, and a test that only checked the negative side would be
+    satisfied by deleting the keyword.
+    """
+    context = " Passengers were evacuated and rescue teams arrived."
+    once = "Carriers rerouted after troops moved to the border." + context
+    twice = (
+        "Carriers rerouted after troops moved to the border. More troops "
+        "followed overnight." + context
+    )
+    headline = "Airlines adjust Middle East routings"
+
+    assert detect_risk_type(headline, once) is None
+    assert detect_risk_type(headline, twice) == "war"
+
+
+def test_a_weak_word_in_the_headline_still_classifies_on_its_own():
+    """The floor is scored, not counted, and _TITLE_WEIGHT clears it alone --
+    otherwise "Troops seize the airport" would need the word twice in the body
+    to be believed."""
+    assert (
+        detect_risk_type(
+            "Troops seize control of the airport",
+            "The terminal was closed and passengers were evacuated.",
+        )
+        == "war"
+    )
+
+
+def test_the_earthquake_region_is_a_place_and_a_quake_in_it_is_still_an_event():
+    """Masking "deprem bölgesi" must not deafen the radar to earthquakes that
+    happen there. The mask removes a place name; a reported quake brings its
+    own verb."""
+    assert (
+        detect_risk_type(
+            "Deprem bölgesinde konut arzı ve kira enflasyonu raporu",
+            "Kira artışının nedenleri incelendi.",
+        )
+        is None
+    )
+    assert (
+        detect_risk_type(
+            "Deprem bölgesinde 5.4 büyüklüğünde deprem meydana geldi",
+            "AFAD sarsıntının merkez üssünü açıkladı, vatandaşlar tahliye edildi.",
+        )
+        == "earthquake"
+    )
