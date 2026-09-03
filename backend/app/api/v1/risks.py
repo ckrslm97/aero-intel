@@ -48,6 +48,7 @@ from app.core.db import get_db
 from app.llm.heuristic import AVIATION_RELEVANCE_GATE, LOCATION_MAP_PIN_MIN
 from app.models.article import Article, ArticleEnrichment
 from app.models.entity import ArticleEntity
+from app.pipeline.verify import CONFIDENCE_FORMULA_MIN
 from app.pipeline.clustering import EventCandidate, cluster, entity_codes, pick_primary, tier_for_source
 from app.taxonomy import (
     COUNTRY_TO_REGION,
@@ -430,15 +431,15 @@ VERIFIED_SOURCE_TIERS = frozenset({"official", "regulator"})
 #: presentation.
 CONFIDENCE_LOW_BAND = 0.61
 
-#: The formula's own arithmetic minimum: 0.4 + 0.15 * 0 + 0.3 * 0. A score
-#: BELOW this cannot have come out of pipeline/verify.py at all, so it means
-#: the confidence pass never ran for that row -- ArticleEnrichment.confidence_
-#: score is a NOT NULL column defaulting to 0.0, which is exactly what an
-#: unscored row carries. Those are published normally: the gate acts on
-#: evidence of weakness, and a number nobody computed is not evidence.
-#: Treating "we did not measure this" as "we measured it and it was bad" would
-#: be inventing the very reading the gate claims to be applying.
-CONFIDENCE_UNSCORED_BELOW = 0.4
+#: The formula's own arithmetic minimum, imported from the module that owns the
+#: formula rather than re-typed here. A score BELOW it cannot have come out of
+#: pipeline/verify.py at all, so it means the confidence pass never ran for that
+#: row -- ArticleEnrichment.confidence_score is a NOT NULL column defaulting to
+#: 0.0, which is exactly what an unscored row carries. Those are published
+#: normally: the gate acts on evidence of weakness, and a number nobody computed
+#: is not evidence. Treating "we did not measure this" as "we measured it and it
+#: was bad" would be inventing the very reading the gate claims to be applying.
+CONFIDENCE_UNSCORED_BELOW = CONFIDENCE_FORMULA_MIN
 
 
 def visibility_for(
@@ -877,16 +878,30 @@ async def aggregate_risks(db: AsyncSession, days: int = DEFAULT_WINDOW_DAYS) -> 
             country=risk_country,
             city=risk_city,
             # The RESOLVED COUNTRY's region first, the article's own detected
-            # region only as a fallback. The other way round put "Ülke: United
-            # States" next to "Bölge: Orta Doğu" in the detail panel, because
-            # ArticleEnrichment.region is derived from every country the
-            # article mentions -- a Pentagon story about Middle East operations
-            # is filed under middle-east while its risk_country is the US.
-            # Both facts are true about the ARTICLE; only one of them is true
-            # about the PLACE this signal is pinned to, and this field is the
-            # place.
+            # region only as a fallback -- AND ONLY WHEN THE PLACEMENT WAS
+            # PUBLISHED AT ALL.
+            #
+            # The ordering is the older half of this rule: the other way round
+            # put "Ülke: United States" next to "Bölge: Orta Doğu" in the
+            # detail panel, because ArticleEnrichment.region is derived from
+            # every country the article mentions -- a Pentagon story about
+            # Middle East operations is filed under middle-east while its
+            # risk_country is the US. Both facts are true about the ARTICLE;
+            # only one of them is true about the PLACE this signal is pinned
+            # to, and this field is the place.
+            #
+            # `placed` is the newer half, and it closes a hole the blanking
+            # above opened. When the map gate blanks a weak placement,
+            # `country` becomes UNKNOWN_COUNTRY, COUNTRY_TO_REGION has no entry
+            # for it, and the fallback fired -- so the pipeline said "konum
+            # doğrulanamadı" while the card still wore a "Orta Doğu" chip. A
+            # region IS a placement claim, only a coarser one, and publishing
+            # the coarse version of an answer we just refused to give is the
+            # same failure blanking exists to prevent. Unplaced signals now
+            # carry no region at all, and `mentioned_locations` remains the
+            # audit trail for what the article actually named.
             region=COUNTRY_TO_REGION.get(country.lower())
-            or (country_bearer.enrichment.region if country_bearer else None),
+            or (country_bearer.enrichment.region if placed and country_bearer else None),
             is_fresh=bool(published and (now - published) <= FRESH_WINDOW),
             source_count=len(members),
             # The primary's own summary: it is the telling that was picked as
@@ -1143,6 +1158,31 @@ class RiskRejectionOut(BaseModel):
     #: case: fix the one rule and the row appears.
     also_failed: list[str] = []
 
+    #: Every row-level gate's verdict, pass AND fail, keyed by
+    #: risk_quality.GATE_KEYS: currency | confidence | aviation | location.
+    #:
+    #: `reason` and `also_failed` list only what went wrong, and the table
+    #: built on them could not tell "rejected for currency, clean otherwise"
+    #: from "rejected for currency, and three gates were never evaluated" --
+    #: an absent verdict and a passing one rendered the same. The full map is
+    #: what lets the screen show the DECISION each rule actually reached.
+    #:
+    #: Populated for every rejection, including the two that are not gate
+    #: verdicts (`outside_window`, `duplicate`): those rows still have an
+    #: enrichment for the four rules to read, and an analyst widening the
+    #: window wants to know what the row would hit next.
+    gates: dict[str, bool] = {}
+    #: Whether the confidence gate published this row, called out of `gates`
+    #: because it is the only gate with an exemption ladder rather than a
+    #: threshold.
+    confidence_gate_passed: bool = True
+    #: Which rung of that ladder decided it: "corroborated" | "unscored" |
+    #: "scored" | "official" | "below_gate". The one the table has to be able
+    #: to show is "unscored" -- a row published because nobody measured it is
+    #: not a row that passed anything, and `confidence_score` being None is
+    #: only half of that sentence.
+    confidence_gate_reason: str = "unscored"
+
     risk_type: str | None = None
     risk_severity: str | None = None
     confidence_score: float | None = None
@@ -1190,6 +1230,9 @@ def _rejection_out(row) -> "RiskRejectionOut":
         reason=row.reason,
         reason_label_tr=REJECTION_REASON_LABELS_TR.get(row.reason, row.reason),
         also_failed=list(row.also_failed),
+        gates=dict(row.gates),
+        confidence_gate_passed=row.confidence_gate_passed,
+        confidence_gate_reason=row.confidence_gate_reason,
         risk_type=row.risk_type,
         risk_severity=row.risk_severity,
         confidence_score=row.confidence_score,

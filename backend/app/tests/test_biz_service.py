@@ -8,6 +8,7 @@ from app.models.news_event import NewsEvent
 from app.models.source import Source
 from app.services.biz_service import (
     EMPTY_MESSAGE,
+    RIVAL_EVENT_CAP,
     biz_overview,
     competitor_signals,
     strategic_developments,
@@ -73,6 +74,49 @@ async def test_competitor_signals_groups_by_rival_and_skips_untouched_rivals(db_
     # simply absent, not padded onto the list.
     codes = {s["airline_code"] for s in signals}
     assert "QR" not in codes
+
+
+async def test_competitor_count_is_the_real_total_not_the_page_size(db_session):
+    """The counter used to be `len(rows)` over a query capped at ten, so every
+    rival covered more than ten times in the window reported exactly "10 olay".
+    A month with forty Emirates events and one with ten rendered identically,
+    and the ranking underneath -- sorted on that same saturated number --
+    ordered the rivals by nothing at all.
+
+    Both halves are asserted: the count clears the cap, and the events list
+    still stops at it and says so.
+    """
+    source = await _source(db_session)
+    ek = Entity(entity_type="airline", name="Emirates", code="EK")
+    kl = Entity(entity_type="airline", name="KLM", code="KL")
+    db_session.add_all([ek, kl])
+    await db_session.flush()
+    ek_article = await _article(db_session, source, "ek-many", entities=[ek])
+    kl_article = await _article(db_session, source, "kl-few", entities=[kl])
+    await db_session.commit()
+
+    over_cap = RIVAL_EVENT_CAP + 4
+    for i in range(over_cap):
+        await _event(db_session, slug=f"ek-evt-{i}", primary_article_id=ek_article.id)
+    for i in range(RIVAL_EVENT_CAP):
+        await _event(db_session, slug=f"kl-evt-{i}", primary_article_id=kl_article.id)
+    await db_session.commit()
+
+    signals = await competitor_signals(db_session, days=30)
+    by_code = {s["airline_code"]: s for s in signals}
+
+    assert by_code["EK"]["count"] == over_cap
+    assert by_code["KL"]["count"] == RIVAL_EVENT_CAP
+    # The two used to be indistinguishable. They must not be.
+    assert by_code["EK"]["count"] != by_code["KL"]["count"]
+    # ...and the ranking reads the real total, so the busier rival leads.
+    assert [s["airline_code"] for s in signals] == ["EK", "KL"]
+
+    # The cap still applies to the payload -- and the card says so instead of
+    # listing ten events under a headline reading fourteen.
+    assert len(by_code["EK"]["events"]) == RIVAL_EVENT_CAP
+    assert by_code["EK"]["events_truncated"] is True
+    assert by_code["KL"]["events_truncated"] is False
 
 
 async def test_competitor_signals_sorts_by_event_count_descending(db_session):

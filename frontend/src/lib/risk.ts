@@ -530,3 +530,22 @@ export function rejectionPlaceLabel(
 export function scoreOrUnscored(score: number | null | undefined): string {
   return score === null || score === undefined ? "ölçülmedi" : score.toFixed(2);
 }
+
+/** What the confidence gate DECIDED, in Turkish. Mirrors `_confidence_verdict`
+ * in backend/app/services/risk_quality.py.
+ *
+ * The score alone does not say this. A blank score next to a gate that passed
+ * reads as "measured and fine" when it usually means "never measured, so the
+ * gate declined to judge" -- and an exemption (a second newsroom, an official
+ * source) is a third thing again: published, but not on its own score. */
+const CONFIDENCE_GATE_LABELS_TR: Record<string, string> = {
+  corroborated: "çoklu kaynak muafiyeti",
+  unscored: "ölçülmedi, kapı yargılamadı",
+  scored: "eşiği geçti",
+  official: "resmî kaynak muafiyeti",
+  below_gate: "eşiğin altında",
+};
+
+export function confidenceGateLabel(reason: string): string {
+  return CONFIDENCE_GATE_LABELS_TR[reason] ?? reason;
+}

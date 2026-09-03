@@ -1,8 +1,9 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
 
+from app.pipeline.verify import CONFIDENCE_FORMULA_MIN
 from app.taxonomy import effective_source_tier
 
 _WORDS_PER_MINUTE = 200
@@ -73,7 +74,10 @@ class ArticleEnrichmentOut(BaseModel):
     #: second endpoint -- the same role confidence_detail plays for campaigns.
     score_detail: dict | None = None
     sentiment: str
-    confidence_score: float
+    #: Cross-source confidence, 0-1 -- or None when nothing ever scored this
+    #: article. See `_null_out_unscored_confidence` below for why the second
+    #: state has to exist on the wire.
+    confidence_score: float | None = None
     corroborating_source_count: int
     verified_at: datetime | None
     tags: str
@@ -94,6 +98,35 @@ class ArticleEnrichmentOut(BaseModel):
     #: renders the block when it is present and omits it entirely otherwise --
     #: this is never a field a row is expected to have.
     why_important_tr: str | None = None
+
+    @field_validator("confidence_score", mode="after")
+    @classmethod
+    def _null_out_unscored_confidence(cls, value: float | None) -> float | None:
+        """An unscored row publishes None, not 0.0.
+
+        `ArticleEnrichment.confidence_score` is a NOT NULL column defaulting to
+        0.0, so an article the confidence pass never reached is stored
+        indistinguishably from one it scored at rock bottom -- and this schema
+        used to forward that 0.0 as a measurement. The drawer read it, banded
+        it, and printed "Düşük güven · %0" over an article nobody had ever
+        assessed: a verdict the system never reached, rendered with the same
+        confidence as one it did.
+
+        CONFIDENCE_FORMULA_MIN is what separates the two, and it is not a tuned
+        threshold: it is the arithmetic minimum of the formula in
+        pipeline/verify.py (0.4 + 0.15 * 0 + 0.3 * 0). Nothing that pass writes
+        can land below it, so anything that did was never written by it. The
+        Risk Radarı's own gate reads the same constant to reach the opposite
+        decision -- it PUBLISHES such rows rather than hiding them -- which is
+        the same principle applied twice: absence of measurement is not
+        evidence, in either direction.
+
+        A genuinely scored low value (0.535 is the seeded catalogue's
+        single-source floor) is above the line and travels through untouched.
+        """
+        if value is None or value < CONFIDENCE_FORMULA_MIN:
+            return None
+        return value
 
     @computed_field  # type: ignore[prop-decorator]
     @property

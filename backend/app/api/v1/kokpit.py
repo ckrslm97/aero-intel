@@ -11,10 +11,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.cache_headers import AGGREGATES, CURATED, FX, public_cache
 from app.core.db import get_db
-from app.ingest.historical_seed import PUBLISHED_AT as IATA_PUBLISHED_AT
 from app.ingest.historical_seed import SOURCE as IATA_SOURCE
 from app.ingest.historical_seed import SOURCE_URL as IATA_SOURCE_URL
 from app.ingest.historical_seed import YEARS as IATA_YEARS
+
+# "Which year is a forecast" is the seed report's own fact, so it is imported
+# rather than re-derived here: /kpis labels its periods with the same helper,
+# and two copies of the rule would be two chances for a KPI card and the chart
+# beside it to disagree about 2026.
+from app.ingest.historical_seed import year_kind as _year_kind
 from app.models.kpi import KPI
 from app.repositories.curated_repository import CuratedRepository
 from app.repositories.kpi_repository import KpiRepository
@@ -354,22 +359,7 @@ ANNUAL_METRICS: tuple[tuple[str, str, bool], ...] = (
     ("ancillary_revenue_ytd", "Ek gelir", True),
 )
 
-# IATA published the June 2026 outlook with the current year as a forecast and
-# the year before it as an estimate (see historical_seed.py's own note). Derived
-# from PUBLISHED_AT rather than hardcoded, so re-seeding from a later report
-# moves the dashed tail of the chart with it.
-FORECAST_YEAR = IATA_PUBLISHED_AT.year
-ESTIMATE_YEAR = FORECAST_YEAR - 1
-
 ANNUAL_SCOPE_TR = "sektör geneli · yıllık · IATA Küresel Görünüm (Haziran 2026)"
-
-
-def _year_kind(year: int) -> str:
-    if year >= FORECAST_YEAR:
-        return "forecast"
-    if year == ESTIMATE_YEAR:
-        return "estimate"
-    return "actual"
 
 
 @router.get("/annual-series", response_model=AnnualSeriesBoardOut)

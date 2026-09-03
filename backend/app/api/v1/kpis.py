@@ -12,10 +12,24 @@ from app.api.cache_headers import AGGREGATES, public_cache
 from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.logging import get_logger
+from app.ingest.historical_seed import year_kind
 from app.ingest.markets import fetch_history
 from app.repositories.kpi_repository import KpiRepository
-from app.schemas.kpi import KpiCorroborationOut, KpiDetailOut, KpiHistoryPointOut, KpiOut
-from app.services.kpi_service import JET_FUEL_CRACK_SPREAD_USD, LY_SUFFIX
+from app.schemas.kpi import (
+    CORROBORATION_DIVERGES,
+    CORROBORATION_INCOMPARABLE,
+    CORROBORATION_MATCH,
+    CORROBORATION_VERDICT_LABELS_TR,
+    KpiCorroborationOut,
+    KpiDetailOut,
+    KpiHistoryPointOut,
+    KpiOut,
+)
+from app.services.kpi_service import (
+    JET_FUEL_CRACK_SPREAD_USD,
+    LY_SUFFIX,
+    PUBLISHED_ESTIMATE_KEYS,
+)
 
 logger = get_logger(__name__)
 
@@ -95,6 +109,72 @@ LY_YEAR = 2025
 LY_COMPARISON_LABEL = "2025'e göre"
 PREVIOUS_COMPARISON_LABEL = "önceki ölçüme göre"
 
+# ---------------------------------------------------------------------------
+# WHAT PERIOD A KPI'S VALUE DESCRIBES
+#
+# Two populations share this endpoint and they are not the same kind of number.
+# Brent's card carries a price that existed at a moment; load_factor's carries
+# IATA's projection for a calendar year that has not finished. The page drew
+# both identically -- value, delta, timestamp -- so "Küresel doluluk oranı
+# 83,4" read as a measurement taken at the timestamp beside it, which is the
+# single most misleading thing this API does.
+#
+# PUBLISHED_ESTIMATE_KEYS is the discriminator, imported from the service that
+# writes those rows rather than re-listed here: it is exactly the set of
+# metrics whose value is a transcribed IATA figure (app/services/kpi_service.py
+# -> latest_published_estimates), so it cannot fall out of step with what the
+# seed actually publishes.
+#
+# The YEAR comes from the row's own `as_of`, which is the same rule Kokpit's
+# annual chart groups by (app/api/v1/kokpit.py get_annual_series): the seed
+# dates a closed year to its 31 December and the open one to the report's
+# publication date, so `as_of.year` is the period in both cases. And the KIND
+# comes from `year_kind`, the seed's own helper -- so a KPI card and the chart
+# beside it can never disagree about whether 2026 is a forecast.
+# ---------------------------------------------------------------------------
+
+PERIOD_KIND_LABELS_TR: dict[str, str] = {
+    "forecast": "tahmin",
+    "estimate": "ön gerçekleşme",
+    "actual": "gerçekleşen",
+}
+
+#: What a live metric's value describes. Not "anlık": flights_today is derived
+#: from an instantaneous count and fuel_price from a published assumption, and
+#: neither is happening right now. "The last time we read it" is true of all of
+#: them.
+LIVE_PERIOD_LABEL_TR = "son ölçüm"
+
+
+def period_label_for(metric_key: str, as_of: datetime) -> str:
+    """"2026 · tahmin" for a published annual figure, "son ölçüm" otherwise."""
+    if metric_key not in PUBLISHED_ESTIMATE_KEYS:
+        return LIVE_PERIOD_LABEL_TR
+    year = as_of.year
+    return f"{year} · {PERIOD_KIND_LABELS_TR[year_kind(year)]}"
+
+
+def deltas_for(new_value: float, old_value: float | None, unit: str) -> tuple[
+    float | None, float | None
+]:
+    """(delta_pct, delta_points) between two readings of one metric.
+
+    Exactly one of the pair is ever a number -- see the note above KpiOut in
+    app/schemas/kpi.py. A metric already denominated in points reports the
+    point difference; everything else reports the percent one.
+
+    `None, None` when the comparison cannot be made: a missing previous
+    reading, or a zero one, which cannot anchor a percent change. Zero would
+    have said "unchanged", which is a measurement nobody took.
+    """
+    if old_value is None:
+        return None, None
+    if unit == "%":
+        return None, round(new_value - old_value, 2)
+    if not old_value:
+        return None, None
+    return round((new_value - old_value) / old_value * 100, 2), None
+
 @router.get("", response_model=list[KpiOut])
 async def list_kpis(
     response: Response = None,  # type: ignore[assignment]
@@ -125,18 +205,20 @@ async def list_kpis(
             continue
 
         latest = history[-1]
-        delta_pct = None
-        if len(history) >= 2 and history[-2].value:
-            delta_pct = round((latest.value - history[-2].value) / history[-2].value * 100, 2)
+        # One rule for both comparisons, and the same one the detail page
+        # applies: a load factor's movement is points on the dashboard card and
+        # points on its detail page, or the two surfaces state different
+        # numbers for the same move.
+        delta_pct, delta_points = deltas_for(
+            latest.value, history[-2].value if len(history) >= 2 else None, latest.unit
+        )
 
         ly_value = (
             market_ly.get(f"{metric_key}{LY_SUFFIX}")
             if metric_key in YAHOO_HISTORY_SYMBOLS
             else stored_ly.get(metric_key)
         )
-        ly_delta_pct = None
-        if ly_value:  # a zero LY value can't anchor a percent change either
-            ly_delta_pct = round((latest.value - ly_value) / ly_value * 100, 2)
+        ly_delta_pct, ly_delta_points = deltas_for(latest.value, ly_value, latest.unit)
 
         out.append(
             KpiOut(
@@ -145,15 +227,18 @@ async def list_kpis(
                 value=latest.value,
                 unit=latest.unit,
                 delta_pct=delta_pct,
+                delta_points=delta_points,
                 up_is_good=up_is_good,
                 trend=[h.value for h in history],
                 is_estimate=latest.is_estimate,
                 as_of=latest.as_of,
                 ly_value=ly_value,
                 ly_delta_pct=ly_delta_pct,
+                ly_delta_points=ly_delta_points,
                 comparison_label=(
                     LY_COMPARISON_LABEL if ly_value is not None else PREVIOUS_COMPARISON_LABEL
                 ),
+                period_label=period_label_for(metric_key, latest.as_of),
             )
         )
 
@@ -189,6 +274,98 @@ async def export_kpi_observations_csv(
     )
 
 
+# ---------------------------------------------------------------------------
+# CROSS-VALIDATION: WHEN TWO READINGS ARE THE SAME NUMBER, AND WHEN THEY ARE
+# NOT COMPARABLE AT ALL
+#
+# The detail page carries a "Çapraz doğrulama" block: our primary reading of a
+# metric next to a second, unrelated source's (Yahoo's last trade vs the ECB
+# reference fixing, via Frankfurter). It made two claims it had not earned:
+#
+#  * It never compared the two TIMESTAMPS. A Frankfurter row that stopped
+#    updating three days ago sat beside today's Yahoo quote and, if the rate
+#    happened not to have moved much, was badged "Eşleşiyor" -- corroboration
+#    asserted between a reading and a stale one.
+#  * A comparison it could not compute became 0.0 (`if latest.value else 0.0`),
+#    and 0.0 is the strongest possible agreement. The one case where we knew
+#    nothing rendered as the case where we were surest.
+#
+# Both are now expressible: `diff_pct` is Optional and `verdict` carries the
+# answer, including "incomparable". The threshold moved here from the browser
+# at the same time -- see CORROBORATION_MATCH_PCT.
+# ---------------------------------------------------------------------------
+
+#: Below this percent difference, two independent readings are the same number.
+#: Half a percent is about the width of the spread between a live last-trade
+#: quote and a daily reference fixing for the same pair -- i.e. the gap two
+#: honest sources produce by measuring at different instants, not a
+#: disagreement about the rate.
+#:
+#: It lived in kpi-detail-client.tsx as a bare `c.diff_pct < 0.5`, which put
+#: the verdict in the layer that draws it: any second surface reading the same
+#: payload was free to pick a different number and call the same pair matched
+#: or not. It is a claim about our data, so it is decided on this side of the
+#: wire, once.
+CORROBORATION_MATCH_PCT = 0.5
+
+#: How far apart the two readings may be timestamped and still be a
+#: cross-check.
+#:
+#: The KPI refresh targets every 15 minutes and writes the primary and its
+#: corroboration in the same run, so a healthy pair is timestamped seconds
+#: apart. Two hours is eight missed ticks -- comfortably past scheduler jitter
+#: (the cron is best-effort on a free runner, see .github/workflows/
+#: jobs-kpis.yml) and unambiguously a cross-check source that has stopped
+#: answering. Beyond it the two numbers describe different moments, and the
+#: honest verdict is that they cannot be compared rather than that they agree.
+CORROBORATION_MAX_AGE_GAP = timedelta(hours=2)
+
+REASON_NO_PRIMARY_VALUE = "no_primary_value"
+REASON_AS_OF_TOO_FAR_APART = "as_of_too_far_apart"
+
+
+def corroboration_out(latest, other) -> KpiCorroborationOut:
+    """One cross-check row, with its verdict already decided.
+
+    `latest` is the primary observation; `other` is the second source's. The
+    percent difference is measured against the primary because the primary is
+    what the page is showing -- "this number, checked" rather than a symmetric
+    distance between two equals.
+    """
+    common = {
+        "source": other.source,
+        "source_url": other.source_url,
+        "value": other.value,
+        "as_of": other.as_of,
+    }
+
+    def incomparable(reason: str) -> KpiCorroborationOut:
+        return KpiCorroborationOut(
+            diff_pct=None,
+            verdict=CORROBORATION_INCOMPARABLE,
+            verdict_label_tr=CORROBORATION_VERDICT_LABELS_TR[CORROBORATION_INCOMPARABLE],
+            incomparable_reason=reason,
+            **common,
+        )
+
+    if not latest.value:
+        # A zero (or absent) primary cannot anchor a percent difference. This
+        # is the branch that used to fall through to 0.0.
+        return incomparable(REASON_NO_PRIMARY_VALUE)
+    if abs(latest.as_of - other.as_of) > CORROBORATION_MAX_AGE_GAP:
+        return incomparable(REASON_AS_OF_TOO_FAR_APART)
+
+    diff_pct = round(abs(latest.value - other.value) / latest.value * 100, 3)
+    verdict = CORROBORATION_MATCH if diff_pct < CORROBORATION_MATCH_PCT else CORROBORATION_DIVERGES
+    return KpiCorroborationOut(
+        diff_pct=diff_pct,
+        verdict=verdict,
+        verdict_label_tr=CORROBORATION_VERDICT_LABELS_TR[verdict],
+        incomparable_reason=None,
+        **common,
+    )
+
+
 @router.get("/{metric_key}", response_model=KpiDetailOut)
 async def get_kpi_detail(
     metric_key: str,
@@ -206,22 +383,16 @@ async def get_kpi_detail(
         raise HTTPException(status_code=404, detail="No observations recorded yet for this KPI")
 
     latest = latest_rows[-1]
-    delta_pct = None
-    if len(latest_rows) == 2 and latest_rows[0].value:
-        delta_pct = round((latest.value - latest_rows[0].value) / latest_rows[0].value * 100, 2)
+    previous = latest_rows[0] if len(latest_rows) == 2 else None
+    delta_pct, delta_points = deltas_for(
+        latest.value, previous.value if previous else None, latest.unit
+    )
 
     corroborations = [
-        KpiCorroborationOut(
-            source=c.source,
-            source_url=c.source_url,
-            value=c.value,
-            as_of=c.as_of,
-            diff_pct=round(abs(latest.value - c.value) / latest.value * 100, 3) if latest.value else 0.0,
-        )
-        for c in await repo.latest_corroborations(metric_key)
+        corroboration_out(latest, c) for c in await repo.latest_corroborations(metric_key)
     ]
 
-    history, history_is_external = await _load_history(db, metric_key, period)
+    history, history_provenance = await _load_history(db, metric_key, period)
 
     return KpiDetailOut(
         metric_key=metric_key,
@@ -229,21 +400,92 @@ async def get_kpi_detail(
         value=latest.value,
         unit=latest.unit,
         delta_pct=delta_pct,
+        delta_points=delta_points,
         up_is_good=up_is_good,
         is_estimate=latest.is_estimate,
         as_of=latest.as_of,
+        period_label=period_label_for(metric_key, latest.as_of),
+        comparison_label=comparison_label_for(metric_key, latest, previous),
         source=latest.source,
         source_url=latest.source_url,
         corroborations=corroborations,
+        corroboration_match_pct=CORROBORATION_MATCH_PCT,
         history=history,
-        history_is_external=history_is_external,
+        history_is_external=history_provenance != OWN_HISTORY,
+        history_provenance=history_provenance,
+        history_provenance_tr=HISTORY_PROVENANCE_NOTES_TR[history_provenance],
         period=period,
     )
 
 
+def comparison_label_for(metric_key: str, latest, previous) -> str | None:
+    """What the delta on this page is measured against, said in Turkish.
+
+    The browser hardcoded "önceki ölçüme göre" under every KPI's delta. For a
+    live market metric that is exactly right -- the previous row is the
+    previous quarter-hour's quote. For an annual published figure it is not:
+    the stored rows ARE the yearly series, so the previous row is LAST YEAR,
+    and the page was labelling a year-on-year change as a tick-to-tick one.
+
+    None when there is nothing to compare against, so a surface renders no
+    label rather than one describing a delta that does not exist.
+    """
+    if previous is None:
+        return None
+    if metric_key in PUBLISHED_ESTIMATE_KEYS and previous.as_of.year != latest.as_of.year:
+        return f"{previous.as_of.year}'e göre"
+    return PREVIOUS_COMPARISON_LABEL
+
+
+# ---------------------------------------------------------------------------
+# WHERE A CHART'S HISTORY CAME FROM -- THREE ANSWERS, NOT TWO
+#
+# `history_is_external` was a boolean, and the page printed "doğrudan kaynağın
+# kendi arşivinden alınmıştır" whenever it was True. That sentence is true of
+# Brent and of every FX pair. It is NOT true of /kpi/fuel_price, the one metric
+# that has no archive of its own: its chart is Brent's published closes with
+# JET_FUEL_CRACK_SPREAD_USD added to every point (see _load_history). Nobody
+# publishes that series; we compute it. Presenting it as "the source's own
+# archive" claims a jet-fuel price history that does not exist anywhere, which
+# is the same class of error as showing a derived number without its
+# derivation -- except here the derivation was not merely omitted, it was
+# actively denied.
+#
+# So the field is a three-state slug and the sentence travels with it, written
+# where the arithmetic is known instead of reassembled in the browser.
+# ---------------------------------------------------------------------------
+
+#: The metric's own published archive, fetched from the source under its own
+#: symbol. Nothing was transformed.
+SOURCE_ARCHIVE = "source_archive"
+#: A REAL external archive belonging to a DIFFERENT instrument, transformed by
+#: a stated rule to stand in for this metric. Externally sourced and derived,
+#: which is neither of the other two answers.
+DERIVED_EXTERNAL = "derived_external"
+#: Our own accumulated observations, sparse until the scheduler has run a while.
+OWN_HISTORY = "own_history"
+
+HISTORY_PROVENANCE_NOTES_TR: dict[str, str] = {
+    SOURCE_ARCHIVE: "Geçmiş veriler doğrudan kaynağın kendi arşivinden alınmıştır.",
+    # Built from the constant rather than restating "57", so the sentence and
+    # the arithmetic cannot drift apart the way this branch's crack spread
+    # already did once (see _load_history).
+    DERIVED_EXTERNAL: (
+        f"Geçmiş veriler türetilmiştir: her nokta, Brent'in kendi yayımlanmış "
+        f"kapanışına {JET_FUEL_CRACK_SPREAD_USD:.0f}$ crack spread "
+        f"(IATA Haziran 2026 varsayımı) eklenerek hesaplanmıştır. Jet yakıtının "
+        f"kendi işlem geçmişi değildir."
+    ),
+    OWN_HISTORY: (
+        "Geçmiş veriler kendi periyodik ölçümlerimizden biriktirilmiştir -- "
+        "zamanlayıcı çalıştıkça zamanla dolar, geriye dönük doldurulmaz."
+    ),
+}
+
+
 async def _load_history(
     db: AsyncSession, metric_key: str, period: str
-) -> tuple[list[KpiHistoryPointOut], bool]:
+) -> tuple[list[KpiHistoryPointOut], str]:
     settings = get_settings()
 
     # fuel_price is derived from Brent crude (see kpi_service.py) -- reuse
@@ -259,21 +501,27 @@ async def _load_history(
     # writes the value so the two can no longer drift apart.
     yahoo_symbol = YAHOO_HISTORY_SYMBOLS.get(metric_key)
     crack_spread = 0.0
+    provenance = SOURCE_ARCHIVE
     if metric_key == "fuel_price":
         yahoo_symbol = YAHOO_HISTORY_SYMBOLS["oil_price"]
         crack_spread = JET_FUEL_CRACK_SPREAD_USD
+        # Brent's real archive, plus a stated constant -- a third kind of
+        # provenance, and the reason this is a slug and not a boolean.
+        provenance = DERIVED_EXTERNAL
 
     if yahoo_symbol:
         points = await fetch_history(settings.yahoo_finance_base_url, yahoo_symbol, period)
         if points:
             return (
                 [KpiHistoryPointOut(as_of=ts, value=round(v + crack_spread, 2)) for ts, v in points],
-                True,
+                provenance,
             )
         # Yahoo Finance unreachable -- fall through to our own accumulated
-        # history rather than returning nothing.
+        # history rather than returning nothing. The provenance falls with it:
+        # what is drawn is now our own observations, whatever we would have
+        # drawn had the fetch succeeded.
 
     since = datetime.now(timezone.utc) - PERIOD_TO_TIMEDELTA[period]
     repo = KpiRepository(db)
     rows = await repo.history_since(metric_key, since)
-    return [KpiHistoryPointOut(as_of=r.as_of, value=r.value) for r in rows], False
+    return [KpiHistoryPointOut(as_of=r.as_of, value=r.value) for r in rows], OWN_HISTORY

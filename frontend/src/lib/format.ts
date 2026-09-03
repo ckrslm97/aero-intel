@@ -12,6 +12,18 @@ export function formatDelta(deltaPct: number): string {
   return `${sign}${deltaPct.toFixed(1)}%`;
 }
 
+/** A movement in POINTS, for a metric that is already a percentage.
+ *
+ * A load factor going 83.0 -> 83.4 rose 0.4 points; rendering that same move
+ * as "+0.5%" (its percent form, 0.48) prints a number nobody in revenue
+ * management would recognise, under the unit they do. The backend sends
+ * exactly one of `delta_pct` / `delta_points` per metric so a surface cannot
+ * pick the wrong one -- see KpiOut in lib/types.ts. */
+export function formatDeltaPoints(deltaPoints: number): string {
+  const sign = deltaPoints > 0 ? "+" : "";
+  return `${sign}${deltaPoints.toFixed(1)} puan`;
+}
+
 const rateFormatters = new Map<number, Intl.NumberFormat>();
 
 /** A rate or price with Turkish separators: 41.7231 -> "41,72".

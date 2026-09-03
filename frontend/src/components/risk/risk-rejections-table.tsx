@@ -5,7 +5,12 @@ import { ExternalLink } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { DenseTable, DenseTd, DenseTh } from "@/components/ui/dense-table";
 import { relativeTimeTr } from "@/lib/campaigns";
-import { rejectionPlaceLabel, riskSourceTierLabel, scoreOrUnscored } from "@/lib/risk";
+import {
+  confidenceGateLabel,
+  rejectionPlaceLabel,
+  riskSourceTierLabel,
+  scoreOrUnscored,
+} from "@/lib/risk";
 import type { RiskRejection } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -137,6 +142,13 @@ function Row({ row }: { row: RiskRejection }) {
 
       <DenseTd numeric>
         <Score value={row.confidence_score} threshold={0.6} />
+        {/* The gate's own verdict, under its number -- the same pairing the
+            aviation column uses. A blank score beside a passing gate reads as
+            "measured and fine"; it usually means the gate declined to judge an
+            unmeasured row, and that is a different piece of work. */}
+        <span className="mt-0.5 block text-[10px] font-normal text-muted-foreground">
+          {confidenceGateLabel(row.confidence_gate_reason)}
+        </span>
       </DenseTd>
 
       <DenseTd numeric>

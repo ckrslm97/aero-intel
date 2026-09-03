@@ -72,6 +72,30 @@ BILLION = 1_000_000_000
 MILLION = 1_000_000
 
 
+#: The year the published report treats as a FORECAST, and the one before it as
+#: an ESTIMATE. Derived from PUBLISHED_AT rather than hardcoded, so re-seeding
+#: from a later IATA edition moves both without a second edit.
+FORECAST_YEAR = PUBLISHED_AT.year
+ESTIMATE_YEAR = FORECAST_YEAR - 1
+
+
+def year_kind(year: int) -> str:
+    """"forecast" | "estimate" | "actual" for one year of this series.
+
+    Lives beside the report it describes rather than in either of the two API
+    modules that need it. Kokpit's annual chart dashes the forecast tail with
+    it (app/api/v1/kokpit.py) and the KPI detail page labels a metric's period
+    with it (app/api/v1/kpis.py) -- and a KPI card calling 2026 a measurement
+    while the chart beside it draws 2026 dashed is exactly the disagreement one
+    shared helper exists to prevent.
+    """
+    if year >= FORECAST_YEAR:
+        return "forecast"
+    if year == ESTIMATE_YEAR:
+        return "estimate"
+    return "actual"
+
+
 @dataclass(frozen=True)
 class SeedPoint:
     metric_key: str

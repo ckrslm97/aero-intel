@@ -1,9 +1,31 @@
-from datetime import date, datetime
+import calendar
+from datetime import date, datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.curated import FxForecast, IataIndicator
+
+
+def forecast_target_date(publication_date: date, horizon_months: int | None) -> date | None:
+    """The date an institution's own horizon lands on, or None.
+
+    None when `horizon_months` is NULL, which is not an edge case: a bank
+    publishing "end-2026", "year-end" or "Q4 2026" writes a horizon this table
+    deliberately refuses to rewrite into a month count (see the module
+    docstring in app/models/curated.py -- silently mapping one onto a tidy
+    column would be our interpolation presented as their forecast). So the
+    answer is genuinely unknown, and it is returned as unknown.
+
+    Calendar arithmetic, clamped to the month's length, so a 31 August + 6m
+    lands on 28/29 February rather than raising.
+    """
+    if horizon_months is None:
+        return None
+    months = publication_date.month - 1 + horizon_months
+    year = publication_date.year + months // 12
+    month = months % 12 + 1
+    return date(year, month, min(publication_date.day, calendar.monthrange(year, month)[1]))
 
 
 class CuratedRepository:
@@ -141,15 +163,50 @@ class CuratedRepository:
         return existing, False
 
     async def fx_forecasts(
-        self, *, currency_pair: str | None = None, horizon_months: int | None = None
+        self,
+        *,
+        currency_pair: str | None = None,
+        horizon_months: int | None = None,
+        only_upcoming: bool = False,
     ) -> list[FxForecast]:
+        """The curated bank forecasts, newest publication first.
+
+        `only_upcoming` drops rows whose own horizon has already ELAPSED. A
+        bank's "+3 months" published in March is a claim about June, and in
+        September it is a claim about the past -- still a true record of what
+        was said, and still worth keeping in the table, but no longer a
+        statement about where the rate is going. Kokpit's Kur Riski tile asks
+        for it because that tile is about the road ahead; the /kokpit forecast
+        table does not, because it is a record of who said what.
+
+        Nothing is dropped on a guess. A row whose `horizon_months` is NULL
+        cannot be dated at all (see `forecast_target_date`), so it survives the
+        filter: refusing to publish a claim we cannot prove is stale would be
+        acting on an absence of evidence.
+
+        Applied in Python rather than as SQL date arithmetic: the table is a
+        hand-curated few dozen rows, the month-add is calendar arithmetic that
+        already exists once above, and an expression like
+        `publication_date + make_interval(months => horizon_months)` returns
+        NULL for exactly the rows that must be kept -- which would have
+        silently inverted the rule.
+        """
         query = select(FxForecast)
         if currency_pair is not None:
             query = query.where(FxForecast.currency_pair == currency_pair)
         if horizon_months is not None:
             query = query.where(FxForecast.horizon_months == horizon_months)
         query = query.order_by(FxForecast.currency_pair, FxForecast.publication_date.desc())
-        return list((await self.db.execute(query)).scalars().all())
+        rows = list((await self.db.execute(query)).scalars().all())
+        if not only_upcoming:
+            return rows
+        today = datetime.now(timezone.utc).date()
+        return [
+            row
+            for row in rows
+            if (target := forecast_target_date(row.publication_date, row.horizon_months)) is None
+            or target >= today
+        ]
 
     async def iata_indicators(
         self, *, kind: str | None = None, region: str | None = None

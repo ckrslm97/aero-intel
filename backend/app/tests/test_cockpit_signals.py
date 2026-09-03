@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from fastapi import Response
 
-from app.api.v1 import kokpit
+from app.api.v1 import kokpit, risks
 from app.repositories.kpi_repository import KpiRepository
 from app.services import cockpit_signals_service as svc
 
@@ -58,6 +58,12 @@ def test_worst_picks_the_most_severe_level():
 # --- Kur Riski ------------------------------------------------------------
 
 
+def _forecast(institution: str, horizon_label: str, value: float) -> svc.FxForecastPoint:
+    return svc.FxForecastPoint(
+        institution=institution, horizon_label=horizon_label, value=value
+    )
+
+
 @pytest.mark.parametrize(
     "move_pct,expected",
     [
@@ -74,22 +80,29 @@ def test_worst_picks_the_most_severe_level():
     ],
 )
 def test_fx_level_bands_the_absolute_30_day_move(move_pct, expected):
-    signal = svc.build_fx_signal(spot=41.7, move_30d_pct=move_pct, forecast_values=[])
+    signal = svc.build_fx_signal(spot=41.7, move_30d_pct=move_pct, forecasts=[])
     assert signal.level == expected
 
 
 def test_fx_signal_is_unknown_rather_than_good_without_enough_history():
-    signal = svc.build_fx_signal(spot=41.7, move_30d_pct=None, forecast_values=[])
+    signal = svc.build_fx_signal(spot=41.7, move_30d_pct=None, forecasts=[])
     assert signal.level == svc.UNKNOWN
     assert signal.level_label_tr == "Veri yok"
     assert signal.value_label == "—"
 
 
-def test_fx_signal_states_the_forecast_range_and_never_an_average():
+def test_fx_signal_states_both_endpoints_and_never_an_average():
     signal = svc.build_fx_signal(
-        spot=41.70, move_30d_pct=1.0, forecast_values=[51.4, 52.0, 52.0, 66.0]
+        spot=41.70,
+        move_30d_pct=1.0,
+        forecasts=[
+            _forecast("JPMorgan", "end-2026", 51.4),
+            _forecast("Garanti BBVA Yatırım", "year-end", 52.0),
+            _forecast("Danske Bank", "+3m", 52.0),
+            _forecast("Danske Bank", "+12m", 66.0),
+        ],
     )
-    # Both ends of the curated range, each a real institution's own number.
+    # Both ends of the curated set, each a real institution's own number.
     assert "51,40" in signal.reason_tr
     assert "66,00" in signal.reason_tr
     # The mean of those four is 55.35 -- averaging curated forecasts is
@@ -98,9 +111,53 @@ def test_fx_signal_states_the_forecast_range_and_never_an_average():
     assert "ortalama" not in signal.reason_tr.lower()
 
 
-def test_fx_signal_omits_the_range_when_nothing_is_curated_yet():
-    signal = svc.build_fx_signal(spot=41.70, move_30d_pct=1.0, forecast_values=[])
+def test_fx_signal_refuses_to_call_mixed_horizons_a_range():
+    """The bug this shape exists to prevent: a 51,40 end-2026 call and a 66,00
+    +12m call are nine months and two institutions apart, and printing them as
+    "51,40-66,00 aralığında" invents a spread of opinion about one date."""
+    signal = svc.build_fx_signal(
+        spot=41.70,
+        move_30d_pct=1.0,
+        forecasts=[
+            _forecast("JPMorgan", "end-2026", 51.4),
+            _forecast("Danske Bank", "+12m", 66.0),
+        ],
+    )
     assert "aralığında" not in signal.reason_tr
+    assert "Tek bir aralık değil." in signal.reason_tr
+    # Each endpoint is attributed to the institution AND the horizon that
+    # actually produced it -- never one endpoint's horizon over both numbers.
+    assert "JPMorgan, end-2026 vadeli" in signal.reason_tr
+    assert "Danske Bank, +12m vadeli" in signal.reason_tr
+
+
+def test_fx_signal_still_calls_one_shared_horizon_a_range():
+    """The negative half: when every curated row IS about the same date, the
+    endpoints really are a spread of opinion and the word survives."""
+    signal = svc.build_fx_signal(
+        spot=41.70,
+        move_30d_pct=1.0,
+        forecasts=[
+            _forecast("Danske Bank", "+12m", 66.0),
+            _forecast("JPMorgan", "+12m", 58.0),
+        ],
+    )
+    assert "(+12m vadeli) 58,00–66,00 aralığında" in signal.reason_tr
+    assert "Tek bir aralık değil" not in signal.reason_tr
+
+
+def test_fx_signal_never_says_range_for_a_single_curated_row():
+    signal = svc.build_fx_signal(
+        spot=41.70, move_30d_pct=1.0, forecasts=[_forecast("Danske Bank", "+3m", 52.0)]
+    )
+    assert "aralığında" not in signal.reason_tr
+    assert "Küratörlü tek banka tahmini: Danske Bank, +3m vadeli 52,00" in signal.reason_tr
+
+
+def test_fx_signal_omits_the_forecast_clause_when_nothing_is_curated_yet():
+    signal = svc.build_fx_signal(spot=41.70, move_30d_pct=1.0, forecasts=[])
+    assert "aralığında" not in signal.reason_tr
+    assert "tahmin" not in signal.reason_tr.lower()
 
 
 # --- Yakıt Riski ----------------------------------------------------------
@@ -195,6 +252,28 @@ def test_risk_signal_names_the_worst_country_when_there_is_one():
 def test_risk_signal_omits_the_country_clause_when_nothing_resolved():
     signal = svc.build_risk_signal(high_count=0, total=0)
     assert "En yoğun ülke" not in signal.reason_tr
+
+
+def test_risk_tile_counts_the_same_window_the_page_it_links_to_opens_on():
+    """The tile states a count and links straight to the Risk Radarı. If the
+    two cover different windows, clicking a tile reading "4" lands on a page
+    showing two -- one question, two numbers, and nothing on either surface to
+    explain the gap.
+
+    Asserted as identity, not equality to a literal: a test hardcoding 5 would
+    pass again the moment someone re-hardcoded 5 in both places, which is the
+    arrangement that broke (the tile carried 14 beside a comment claiming it
+    matched the page).
+    """
+    assert svc.RISK_WINDOW_DAYS is risks.DEFAULT_WINDOW_DAYS
+
+
+def test_risk_tile_states_the_window_it_banded():
+    """The band is a raw count, so it only means something next to the span it
+    was counted over. Whatever the shared window becomes, the tile says it."""
+    signal = svc.build_risk_signal(high_count=3, total=9)
+    assert f"Son {svc.RISK_WINDOW_DAYS} gün" in signal.reason_tr
+    assert f"Son {svc.RISK_WINDOW_DAYS} gün" in signal.method_tr
 
 
 # --- Rakip Aktivitesi -----------------------------------------------------

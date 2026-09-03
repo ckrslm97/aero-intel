@@ -53,7 +53,16 @@ export interface ArticleEnrichmentOut {
    * a row scored by an older version of the scorer is still a row. */
   score_detail: Record<string, unknown> | null;
   sentiment: string;
-  confidence_score: number;
+  /** Cross-source confidence, 0-1 -- or null when nothing ever scored this
+   * article.
+   *
+   * The backend column is NOT NULL and defaults to 0.0, so a row the
+   * confidence pass never reached is STORED identically to one scored at rock
+   * bottom. The schema now separates them (backend/app/schemas/article.py) and
+   * publishes the unmeasured as null, because the drawer was banding that 0.0
+   * and printing "Düşük güven · %0" over an article nobody had assessed.
+   * Render the absence as an absence. */
+  confidence_score: number | null;
   corroborating_source_count: number;
   verified_at: string | null;
   tags: string;
@@ -199,22 +208,36 @@ export interface EditionSummaryOut {
   pdf_available: boolean;
 }
 
+/** A KPI's movement is reported EITHER as a percent OR as points, never both.
+ *
+ * A load factor going 83.0 -> 83.4 rose 0.4 POINTS; the percent form (0.48) is
+ * arithmetically true and is not what an airline means by "doluluk arttı". So
+ * for a metric already denominated in points (`unit === "%"`) the backend
+ * sends `delta_pct: null` and fills `delta_points`; every other unit is the
+ * other way round. Read whichever is non-null -- `kpiDeltaLabel` in
+ * lib/kpi.ts does that once for every surface. */
 export interface KpiOut {
   metric_key: string;
   label: string;
   value: number;
   unit: string;
   delta_pct: number | null;
+  delta_points: number | null;
   up_is_good: boolean;
   trend: number[];
   is_estimate: boolean;
   as_of: string;
   /** Same-metric value from LY (2025), when the backend has one. */
   ly_value: number | null;
-  /** Percent change vs LY (2025). */
+  /** Percent change vs LY (2025). Null for a point-denominated metric. */
   ly_delta_pct: number | null;
+  /** Point change vs LY (2025), for point-denominated metrics. */
+  ly_delta_points: number | null;
   /** "2025 (LY)'e göre" when LY exists, else "önceki ölçüme göre". */
   comparison_label: string;
+  /** What period `value` describes: "2026 · tahmin" for an IATA annual figure,
+   * "son ölçüm" for a live reading. */
+  period_label: string | null;
 }
 
 export interface StatusCountOut {
@@ -252,24 +275,59 @@ export interface KpiCorroborationOut {
   source: string;
   source_url: string | null;
   value: number;
+  /** When the CORROBORATING reading was taken -- compare against
+   * `KpiDetailOut.as_of`, which is when the primary's was. */
   as_of: string;
-  diff_pct: number;
+  /** Null when the two readings could not be compared at all. Never 0: a
+   * comparison that did not happen has no number, and 0 is the strongest
+   * agreement this scale can express. */
+  diff_pct: number | null;
+  /** The verdict, decided on the backend (the 0.5% rule used to live in this
+   * component). Render `verdict_label_tr` rather than re-deriving it. */
+  verdict: "match" | "diverges" | "incomparable";
+  verdict_label_tr: string;
+  /** Why the comparison was refused: "no_primary_value" |
+   * "as_of_too_far_apart". Null when `diff_pct` was computed. */
+  incomparable_reason: string | null;
 }
+
+/** Where a detail chart's history came from. Three answers, not two:
+ * `derived_external` is a REAL external archive belonging to a DIFFERENT
+ * instrument, transformed by a stated rule -- jet fuel is Brent's published
+ * closes plus IATA's crack spread, and nobody publishes that series. Calling
+ * it "the source's own archive" claimed a history that exists nowhere. */
+export type KpiHistoryProvenance = "source_archive" | "derived_external" | "own_history";
 
 export interface KpiDetailOut {
   metric_key: string;
   label: string;
   value: number;
   unit: string;
+  /** See the note on KpiOut: null for a point-denominated metric. */
   delta_pct: number | null;
+  delta_points: number | null;
   up_is_good: boolean;
   is_estimate: boolean;
   as_of: string;
+  /** What period `value` describes -- "2026 · tahmin" for an annual forecast.
+   * Without it a projection for an unfinished year read as a spot reading. */
+  period_label: string | null;
+  /** What the delta is measured against. Null when there is no delta. */
+  comparison_label: string | null;
   source: string;
   source_url: string | null;
   corroborations: KpiCorroborationOut[];
+  /** The threshold the verdicts were decided on, so the page can state the
+   * rule instead of asserting it. */
+  corroboration_match_pct: number | null;
   history: KpiHistoryPointOut[];
+  /** `history_provenance !== "own_history"`. Kept for older readers; the
+   * three-state field below is what to read. */
   history_is_external: boolean;
+  history_provenance: KpiHistoryProvenance;
+  /** The sentence to print under the chart, written where the derivation is
+   * known rather than reassembled here. */
+  history_provenance_tr: string | null;
   period: KpiPeriod;
 }
 
@@ -382,6 +440,15 @@ export interface PromotionOut {
   discount_pct: number | null;
   /** Comma-separated world-region slugs and/or plain city names, mixed. */
   markets: string | null;
+  /** The structured markets the flat string above cannot express. Null on a
+   * legacy row -- an unextracted campaign names no market, which is not the
+   * same claim as naming none.
+   *
+   * Serialised because the export and the screen were selecting different
+   * rows without it: the backend's `_countries_of`/`_regions_of` read this
+   * column, so `country=almanya` matched campaigns the on-screen chip could
+   * not even offer. */
+  markets_json: { countries?: string[]; regions?: string[] } | null;
   /** When tickets can be BOUGHT -- the window the timeline draws. "YYYY-MM-DD". */
   sale_starts: string | null;
   sale_ends: string | null;
@@ -1083,6 +1150,23 @@ export interface RiskRejection {
   /** Every OTHER gate this row would also have failed. Empty is the good
    * case: fix the one rule and the article appears. */
   also_failed: string[];
+  /** Every row-level gate's verdict, pass AND fail: currency | confidence |
+   * aviation | location.
+   *
+   * `reason` and `also_failed` list only the failures, so a table built on
+   * them could not tell "rejected for currency, clean otherwise" from
+   * "rejected for currency, three gates never evaluated" -- an absent verdict
+   * and a passing one rendered the same. */
+  gates: Record<string, boolean>;
+  /** Whether the confidence gate published this row. Separate from `gates`
+   * because it is the only gate with an exemption ladder rather than a
+   * threshold, and the pass alone does not say which rung carried it. */
+  confidence_gate_passed: boolean;
+  /** Which rung decided it: "corroborated" | "unscored" | "scored" |
+   * "official" | "below_gate". The one that must be visible is "unscored":
+   * a row published because nobody measured it did not pass anything, and a
+   * null `confidence_score` is only half of that sentence. */
+  confidence_gate_reason: string;
   risk_type: string | null;
   risk_severity: string | null;
   confidence_score: number | null;

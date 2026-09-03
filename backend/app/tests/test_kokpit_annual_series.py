@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from fastapi import Response
 
 from app.api.v1 import kokpit
+from app.ingest import historical_seed
 from app.ingest.historical_seed import YEARS, seed_kpi_history
 from app.repositories.kpi_repository import KpiRepository
 
@@ -83,9 +84,14 @@ async def test_annual_series_is_empty_rather_than_fabricated_before_seeding(db_s
 
 
 def test_year_kind_is_derived_from_the_report_not_hardcoded():
-    assert kokpit.FORECAST_YEAR == kokpit.IATA_PUBLISHED_AT.year
-    assert kokpit.ESTIMATE_YEAR == kokpit.FORECAST_YEAR - 1
-    assert kokpit._year_kind(kokpit.FORECAST_YEAR + 1) == "forecast"
+    assert historical_seed.FORECAST_YEAR == historical_seed.PUBLISHED_AT.year
+    assert historical_seed.ESTIMATE_YEAR == historical_seed.FORECAST_YEAR - 1
+    assert kokpit._year_kind(historical_seed.FORECAST_YEAR + 1) == "forecast"
+    assert kokpit._year_kind(historical_seed.ESTIMATE_YEAR) == "estimate"
+    assert kokpit._year_kind(historical_seed.ESTIMATE_YEAR - 1) == "actual"
+    # The chart and the KPI detail page label the same year through the same
+    # helper -- kokpit._year_kind IS historical_seed.year_kind, not a copy.
+    assert kokpit._year_kind is historical_seed.year_kind
 
 
 def test_every_annual_metric_has_a_label_short_enough_for_a_strip_cell():

@@ -146,6 +146,12 @@ export function riskRejection(overrides: Partial<RiskRejection> = {}): RiskRejec
     reason: "aviation_relevance_low",
     reason_label_tr: "Havacılıkla ilgisiz",
     also_failed: [],
+    // The thin shape's gate map: nothing measured, so the three gates that
+    // read a score all declined to judge and only the aviation one -- which
+    // this row IS rejected on -- failed.
+    gates: { currency: true, confidence: true, aviation: false, location: true },
+    confidence_gate_passed: true,
+    confidence_gate_reason: "unscored",
     risk_type: "war",
     risk_severity: "high",
     confidence_score: null,
