@@ -246,17 +246,22 @@ JET_FUEL_NOTE_TR = (
 )
 
 
-#: The one period every Brent reading in this app is taken over: a year of
-#: DAILY closes ("1y" is weekly -- see ingest/markets.HISTORY_RANGES).
+#: The one period EVERY contract on this panel is read over -- Brent, WTI and
+#: Henry Hub alike, and both of Brent's two surfaces: a year of DAILY closes
+#: ("1y" is weekly -- see ingest/markets.HISTORY_RANGES).
 #:
-#: Named because two surfaces depend on it being the same number. Kokpit's
-#: fuel tile used to place today's Brent inside the WEEKLY year (~52 closes)
-#: while this panel placed it inside the DAILY one (~250), so one page printed
-#: two different percentiles for one contract on the same screen -- under a
-#: module comment claiming the two "can never disagree" because they share a
+#: Named because surfaces depend on it being the same number. Kokpit's fuel
+#: tile used to place today's Brent inside the WEEKLY year (~52 closes) while
+#: this panel placed it inside the DAILY one (~250), so one page printed two
+#: different percentiles for one contract on the same screen -- under a module
+#: comment claiming the two "can never disagree" because they share a
 #: `percentile_of`. Sharing the function was never the thing that mattered;
 #: sharing the series is.
-BRENT_HISTORY_PERIOD = "1y_daily"
+#:
+#: Not named for Brent, though Brent is why it exists: `energy_metrics` reads
+#: all three contracts over it, and a percentile is only comparable between
+#: rows that were placed inside the same kind of year.
+DAILY_CLOSE_PERIOD = "1y_daily"
 
 
 async def brent_indicators() -> EnergyIndicators:
@@ -276,7 +281,7 @@ async def brent_indicators() -> EnergyIndicators:
     """
     settings = get_settings()
     points = await fetch_history(
-        settings.yahoo_finance_base_url, BRENT_SYMBOL, BRENT_HISTORY_PERIOD
+        settings.yahoo_finance_base_url, BRENT_SYMBOL, DAILY_CLOSE_PERIOD
     )
     return indicators_from_history(points)
 
@@ -295,7 +300,7 @@ async def energy_metrics() -> list[EnergyMetric]:
     # paid three ~1s round trips on every cold cache; gathered it pays one.
     histories = await asyncio.gather(
         *(
-            fetch_history(settings.yahoo_finance_base_url, symbol, BRENT_HISTORY_PERIOD)
+            fetch_history(settings.yahoo_finance_base_url, symbol, DAILY_CLOSE_PERIOD)
             for _, symbol, _, _ in _SOURCED_CONTRACTS
         )
     )

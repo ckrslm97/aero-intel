@@ -93,6 +93,12 @@ TITLE_SIMILARITY_MIN = 0.55
 # Press coverage clusters within days of a launch; six weeks is generous for
 # that and still far short of the year that separates a campaign from its
 # annual re-run, which is the false merge this gate exists to prevent.
+#
+# What is measured is each side's `_campaign_moment`, NOT its `detected_at`.
+# Since the news path stamps `detected_at` with the run's own clock, every
+# candidate in one run carries the identical value and a `detected_at` gap of
+# zero would wave through every pair this gate exists to stop -- including a
+# campaign and its annual re-run pulled from the archive by the same sweep.
 MAX_DETECTION_GAP = timedelta(days=45)
 
 # Turkish is agglutinative: "uçuşlarında", "uçuşları" and "uçuşlar" are the same
@@ -220,6 +226,12 @@ class PromoCandidate:
     url: str
     source_name: str
     detected_at: datetime
+    #: When the SOURCE DOCUMENT said it, as opposed to when we saw it. Mirrors
+    #: `Promotion.source_published_at` and is what the timing gate measures --
+    #: `detected_at` on the news path is the run's clock, identical across every
+    #: candidate of a run and therefore useless for telling two campaigns apart.
+    #: NULL when the source stated no date (the airline page scraper, always).
+    source_published_at: datetime | None = None
     discount_pct: int | None = None
     markets: str | None = None
     sale_starts: date | None = None
@@ -247,6 +259,7 @@ def candidate_from_row(row: Promotion) -> PromoCandidate:
         url=row.url,
         source_name=row.source_name,
         detected_at=row.detected_at,
+        source_published_at=row.source_published_at,
         discount_pct=row.discount_pct,
         markets=row.markets,
         sale_starts=row.sale_starts,
@@ -307,20 +320,46 @@ def _windows_overlap(
     )
 
 
+def _campaign_moment(
+    source_published_at: datetime | None, detected_at: datetime
+) -> datetime:
+    """The best evidence of WHEN this campaign was in the world.
+
+    The source document's own date when it has one, because that is a fact
+    about the campaign; our sighting only when it does not, because that is a
+    fact about our cron. The airline page scraper never has one -- a campaign
+    page states no publication time -- so for those rows the sighting is
+    genuinely the earliest moment we can name.
+    """
+    return _aware(source_published_at or detected_at)
+
+
 def _time_plausible(candidate: PromoCandidate, row: Promotion) -> bool:
     """Could these two be the same campaign, in time?
 
     When both sides state a window, disjoint windows settle it: an August sale
     and next August's re-run of the same sale, with the same title, are two
     campaigns. When one side states none -- the common case, since press
-    coverage usually omits dates -- fall back to how far apart we saw them.
+    coverage usually omits dates -- fall back to how far apart the two were in
+    the world, per `_campaign_moment`.
+
+    That fallback must not be read off `detected_at` alone. The news path
+    stamps `detected_at` with `run_started_at` (see pipeline/promotions.py), so
+    two articles a year apart processed by one sweep carry the SAME
+    `detected_at` and a raw sighting gap of zero would declare every such pair
+    plausible -- exactly the annual-re-run false merge this gate exists to
+    prevent, and one that leaves nothing on screen to notice. Comparing
+    publication dates restores the year that actually separates them.
     """
     overlap = _windows_overlap(
         candidate.sale_starts, candidate.sale_ends, row.sale_starts, row.sale_ends
     )
     if overlap is not None:
         return overlap
-    return abs(_aware(candidate.detected_at) - _aware(row.detected_at)) <= MAX_DETECTION_GAP
+    gap = _campaign_moment(candidate.source_published_at, candidate.detected_at) - (
+        _campaign_moment(row.source_published_at, row.detected_at)
+    )
+    return abs(gap) <= MAX_DETECTION_GAP
 
 
 def is_duplicate(candidate: PromoCandidate, row: Promotion) -> bool:
@@ -534,9 +573,23 @@ def merge_candidate(
     # name next to another's link. The airline's campaign page is the canonical
     # destination for its own campaign, so it takes both or neither.
     if prefer_candidate and candidate.url:
+        link_replaced = candidate.url[:500] != row.url
         diff.set("url", candidate.url[:500])
         diff.set("source_name", candidate.source_name)
         diff.set("airline_name", candidate.airline_name or row.airline_name)
+        if link_replaced:
+            # The publication date belongs to the document the row cites, so
+            # when the link is genuinely replaced the date goes with it. This is
+            # the one place a null legitimately overwrites a value: adopting the
+            # airline's campaign page while keeping the displaced news report's
+            # publication date would print "the source was published on the
+            # 3rd" beneath a page that states no date at all.
+            #
+            # Guarded on the URL actually changing, because a source restating
+            # ITSELF (same URL, prefer_candidate=True -- see
+            # pipeline/promotions.py) must not age the row forward on a re-read;
+            # that path fills the field only when the row has none.
+            diff.set("source_published_at", candidate.source_published_at)
 
     # Earliest sighting wins: we genuinely first saw this campaign then, and
     # this is what the "Yeni" badge and the 48h banner read.

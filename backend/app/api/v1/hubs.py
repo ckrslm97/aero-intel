@@ -29,6 +29,13 @@ async def get_network_signals(
     it printed the browser's fetch time -- a stamp that refreshes itself
     forever over a feed that may have stopped. The list is unchanged, under
     `regions`.
+
+    A BREAKING SHAPE CHANGE that this response's own cache headers make
+    non-atomic: `AGGREGATES` is 300s fresh plus 1500s stale-while-revalidate,
+    so for up to ~30 minutes after a deploy the new bundle can be handed the
+    old array out of the edge. The clients read it through
+    `frontend/src/lib/network-signals.regionsOf`, which understands both
+    shapes, precisely so that window renders signals rather than "sinyal yok".
     """
     public_cache(response, AGGREGATES)
     now = datetime.now(timezone.utc)

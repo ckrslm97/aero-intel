@@ -6,9 +6,9 @@ from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.cache_headers import AGGREGATES, public_cache
-from app.api.window import window_envelope
+from app.api.window import windows_envelope
 from app.core.db import get_db
-from app.services.recommendations import build_recommendations
+from app.services.recommendations import build_recommendations, recommendation_windows
 
 router = APIRouter(prefix="/recommendations", tags=["recommendations"])
 
@@ -36,7 +36,11 @@ async def list_recommendations(
         db, days=days, category=category, region=region, airline=airline, now=now
     )
     return {
-        **window_envelope(now, days),
+        # `windows`, not a single `window`: the TK review themes run over four
+        # times `days` and the upcoming-events section looks FORWARD, so items
+        # from outside any one declared range are normal here. See
+        # services/recommendations.recommendation_windows.
+        **windows_envelope(now, recommendation_windows(now, days)),
         "days": days,
         "count": len(items),
         "items": items,

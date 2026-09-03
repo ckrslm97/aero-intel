@@ -404,8 +404,8 @@ async def test_the_fuel_tile_reads_the_daily_close_series_not_the_weekly_one(
     out = await kokpit.get_cockpit_signals(Response(), db_session)
     fuel = next(signal for signal in out.signals if signal.key == "fuel")
 
-    assert ("BZ=F", energy_service.BRENT_HISTORY_PERIOD) in seen
-    assert energy_service.BRENT_HISTORY_PERIOD == "1y_daily"
+    assert ("BZ=F", energy_service.DAILY_CLOSE_PERIOD) in seen
+    assert energy_service.DAILY_CLOSE_PERIOD == "1y_daily"
     # ...and never the weekly one, which is what the percentile used to use.
     assert not any(period == "1y" for _, period in seen)
     # The last CLOSE, not a stored quote.
@@ -432,6 +432,42 @@ async def test_the_tile_and_the_panel_state_the_same_brent(db_session, monkeypat
     assert fuel.as_of == panel.as_of, "the close's own stamp, not our cron's"
     assert svc.tr_percent(panel.percentile_1y, 0) in fuel.reason_tr
     assert svc.tr_signed_percent(panel.month_change_pct) in fuel.reason_tr
+
+
+async def test_the_fuel_tile_does_not_link_to_a_page_fed_by_another_series(
+    db_session, monkeypatch
+):
+    """The cost of moving the tile onto the published closes, paid honestly.
+
+    The tile linked to /kpi/oil_price, and that was right while it read
+    `kpis.latest("oil_price")` -- the very row that page prints. It now reads
+    the daily CLOSE (energy_service.brent_indicators) while /kpi/oil_price
+    still prints the KPI archive, which is the intraday `regularMarketPrice`
+    the cron caught (kpi_service.py -> ingest/markets.fetch_quote). Mid-session
+    those are two prices with two `as_of`s for one contract, under one
+    "Yahoo Finance (BZ=F)" label, at the two ends of one link.
+
+    So there is no link. `source_url` still reaches the contract, and the same
+    close is on the same page in Market Pulse. Restoring an `href` is fine --
+    to a surface fed by THIS series.
+    """
+    closes = [(datetime(2026, 6, 1, tzinfo=timezone.utc) + timedelta(days=i), 60.0 + i)
+              for i in range(120)]
+
+    async def fake_history(base_url, symbol, period):
+        return closes if symbol == "BZ=F" else []
+
+    monkeypatch.setattr(energy_service, "fetch_history", fake_history)
+
+    out = await kokpit.get_cockpit_signals(Response(), db_session)
+    fuel = next(signal for signal in out.signals if signal.key == "fuel")
+
+    assert fuel.href is None
+    # The contract is still reachable -- what is gone is the in-app page that
+    # would have answered with a different number.
+    assert fuel.source_url == "https://finance.yahoo.com/quote/BZ=F"
+    # And the tile is still stating the close, not the archived quote.
+    assert fuel.value_label == f"{svc.tr_number(energy_service.indicators_from_history(closes).value, 2)} $"
 
 
 async def test_a_stored_kpi_quote_no_longer_reaches_the_fuel_tile(

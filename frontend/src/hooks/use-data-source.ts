@@ -28,12 +28,6 @@ interface DataSourceState<T> {
   retry: () => void;
 }
 
-/** Faz 12's per-source graceful-degradation contract in one hook: loading /
- * error / stale-but-showing-old-data / fresh, plus a retry that re-runs the
- * same fetcher. `fetcher` is called once on mount and again whenever `deps`
- * changes or `retry()` is called; a run superseded by a newer one (deps
- * changed again, or unmount) never applies its result -- the classic
- * fetch-race guard, just centralised instead of hand-rolled per component. */
 /** The response's own stamp, when it has one.
  *
  * Aggregate endpoints return `generated_at` (backend/app/api/window.py); older
@@ -52,6 +46,12 @@ function stampOf(result: unknown): Date {
   return new Date();
 }
 
+/** Faz 12's per-source graceful-degradation contract in one hook: loading /
+ * error / stale-but-showing-old-data / fresh, plus a retry that re-runs the
+ * same fetcher. `fetcher` is called once on mount and again whenever `deps`
+ * changes or `retry()` is called; a run superseded by a newer one (deps
+ * changed again, or unmount) never applies its result -- the classic
+ * fetch-race guard, just centralised instead of hand-rolled per component. */
 export function useDataSource<T>(
   fetcher: (signal: AbortSignal) => Promise<T>,
   deps: React.DependencyList,

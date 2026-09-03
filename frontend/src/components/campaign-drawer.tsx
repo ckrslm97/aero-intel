@@ -41,7 +41,17 @@ const REGION_NAME: Record<string, string> = Object.fromEntries(
   worldRegions.map((r) => [r.slug, r.name]),
 );
 
+/** UTC, and the cells that use it say "UTC" out loud.
+ *
+ * These three stamps -- last check, first sighting, and the source article's
+ * publication -- are facts about the RECORD, and a record's timestamp that
+ * shifts with who is looking at it is not a fact (the same rule
+ * risk/risk-detail-drawer.tsx states, and the one LastUpdatedStamp follows).
+ * Left in the reader's own zone, one row's "İlk tespit" would print two
+ * different hours, and across midnight two different days, to two analysts
+ * comparing the same campaign. */
 const DETECTED_FORMAT = new Intl.DateTimeFormat("tr-TR", {
+  timeZone: "UTC",
   dateStyle: "medium",
   timeStyle: "short",
 });
@@ -391,21 +401,23 @@ export function CampaignDrawer({
             />
             <Cell
               label="Son kontrol"
-              value={lastChecked ? DETECTED_FORMAT.format(new Date(lastChecked)) : "—"}
+              value={
+                lastChecked ? `${DETECTED_FORMAT.format(new Date(lastChecked))} UTC` : "—"
+              }
               hint={
                 lastChecked
-                  ? "Kampanyanın sayfasında en son doğrulandığı an"
+                  ? "Kampanyanın sayfasında en son doğrulandığı an (UTC)"
                   : "Bu kayıt ilk tespitten sonra yeniden kontrol edilmedi"
               }
             />
             <Cell
               label="İlk tespit"
-              value={DETECTED_FORMAT.format(new Date(promotion.detected_at))}
+              value={`${DETECTED_FORMAT.format(new Date(promotion.detected_at))} UTC`}
               hint={
                 promotion.source_published_at
                   ? `Kampanyayı ilk gördüğümüz an. Kaynak haberin yayın tarihi: ${DETECTED_FORMAT.format(
                       new Date(promotion.source_published_at),
-                    )}`
+                    )} UTC`
                   : "Kampanyayı ilk gördüğümüz an"
               }
             />

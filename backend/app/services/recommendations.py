@@ -30,6 +30,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer, selectinload
 
+from app.api.window import horizon_of, window_of
 from app.core.db import run_with_own_session
 from app.core.logging import get_logger
 from app.core.tr_dates import format_date_range
@@ -844,3 +845,29 @@ async def build_recommendations(
         key=lambda r: (SEVERITY_ORDER.get(r["severity"], 9), -len(r["evidence"]), r["title"])
     )
     return recommendations[:MAX_RECOMMENDATIONS]
+
+
+def recommendation_windows(now: datetime, days: int) -> dict[str, dict]:
+    """The windows this module's six detectors actually run over.
+
+    Published rather than left implicit because they are NOT one window, and a
+    payload that declares a single `[since, until]` around them is describing
+    itself wrongly. Three genuinely different spans:
+
+    * `comparison` -- the four news detectors (competitor promotions, regional
+      route surges, airline momentum, negative sentiment clusters), each
+      measuring `days` against the `days` before it.
+    * `tk_review_themes` -- four times wider, because reviews are curated in
+      occasional passes and a 7-day slice of them is usually empty
+      (TK_REVIEW_WINDOW_MULTIPLIER).
+    * `upcoming_events` -- FORWARD. Calendar entries sit past the end of every
+      other window here, which is exactly why one window could not cover them.
+
+    Exported so /recommendations and the commercial block of /biz declare the
+    same spans they were built from, from the same constants.
+    """
+    return {
+        "comparison": window_of(now, days),
+        "tk_review_themes": window_of(now, days * TK_REVIEW_WINDOW_MULTIPLIER),
+        "upcoming_events": horizon_of(now, EVENT_HORIZON_DAYS),
+    }

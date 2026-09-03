@@ -978,17 +978,24 @@ export interface AnnualSeriesBoardOut {
  * Mirrors backend/app/api/window.py. */
 export interface ResponseWindow {
   days: number;
-  /** ISO datetime -- the window's near edge, exactly `until - days`. */
+  /** ISO datetime -- the window's near edge. `until - days` for a look-back;
+   * equal to `generated_at` for a forward horizon (`horizon_of`). */
   since: string;
-  /** ISO datetime -- equal to the response's `generated_at`. */
+  /** ISO datetime -- equal to the response's `generated_at` for a look-back,
+   * and `generated_at + days` for a forward horizon. */
   until: string;
 }
 
 /** Carried by every aggregate endpoint. `generated_at` is when the SERVER cut
  * the window, which is the only defensible "son güncelleme": the browser's
- * fetch time (what these pages printed before it existed) says the data is
- * fresh every time the reader reloads, even from cache, even when the cron
- * behind it stopped days ago. */
+ * fetch time says the data is fresh every time the reader reloads, even from
+ * cache.
+ *
+ * One surface was actually printing that fetch time (the Ağ Sinyalleri tab,
+ * hub-network-signals.tsx) and now prints this instead. The rest print no
+ * stamp at all yet -- BizOverviewOut has no caller, and the İçgörüler, Hublar
+ * and Öneriler clients fetch by hand without `useDataSource`. For those this
+ * field is something true to print when they come to print it. */
 export interface Stamped {
   generated_at: string;
 }
@@ -1000,7 +1007,11 @@ export interface Stamped {
 export type NetworkSignalGroup = RouteSignalGroup;
 
 /** GET /hubs/network-signals. An envelope, not a bare list: the tab prints a
- * "son güncelleme" and needs a real one to print. */
+ * "son güncelleme" and needs a real one to print.
+ *
+ * Read it through `regionsOf` (lib/network-signals.ts), never `.regions`
+ * directly -- a stale edge can still serve the pre-envelope array to this
+ * bundle for a cache lifetime after the deploy. */
 export interface NetworkSignalsOut extends Stamped {
   window: ResponseWindow;
   regions: NetworkSignalGroup[];
@@ -1080,7 +1091,12 @@ export interface BizCommercialSignal {
 }
 
 export interface BizOverviewOut extends Stamped {
-  window: ResponseWindow;
+  /** One window PER section, not one for the payload: three sections are cut
+   * to `days`, while `commercial_signals` widens its review themes fourfold
+   * and carries calendar items from FORWARD of every other window here. Keys
+   * are the section names, plus `commercial_comparison`,
+   * `commercial_tk_review_themes` and `commercial_upcoming_events`. */
+  windows: Record<string, ResponseWindow>;
   days: number;
   competitor_signals: BizSection<BizCompetitorSignal>;
   network_signals: BizSection<NetworkSignalGroup>;

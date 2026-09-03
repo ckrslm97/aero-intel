@@ -68,13 +68,22 @@ const SENTIMENT_META = {
 } as const;
 
 /** A real timestamp, day precision -- the corpus's own edge, formatted where
- * it is printed rather than baked into a sentence. */
+ * it is printed rather than baked into a sentence.
+ *
+ * UTC, deliberately. `collected_through` is a full datetime (the corpus's
+ * `max(collected_at)`, tz-aware), and rendering it in the reader's own zone
+ * would let one row print two different days: 2026-07-19T21:30Z is the 19th in
+ * London and the 20th in Istanbul. The same rule the risk drawer states -- a
+ * record's timestamp that shifts with who is looking at it is not a fact. */
+const COLLECTED_STAMP = new Intl.DateTimeFormat("tr-TR", {
+  timeZone: "UTC",
+  day: "numeric",
+  month: "long",
+  year: "numeric",
+});
+
 function formatTimestamp(iso: string): string {
-  return new Date(iso).toLocaleDateString("tr-TR", {
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-  });
+  return COLLECTED_STAMP.format(new Date(iso));
 }
 
 function formatDate(iso: string | null): string | null {

@@ -193,8 +193,14 @@ async def biz_overview(db: AsyncSession, days: int = 30, now: datetime | None = 
     `now` is threaded into all four rather than left to each: they are four
     sequential reads, so without an anchor the last section's window starts
     later than the first's, and the page's `generated_at` matches none of them.
-    The differences are small and the claim is not: this payload says "son 30
-    gün", once, for everything in it.
+    The differences are small and the claim is not.
+
+    ONE INSTANT, NOT ONE WINDOW. Three sections are cut to `days` from this
+    anchor; `commercial_signals` is `build_recommendations`, which runs its
+    review themes four times wider and its event items FORWARD of today. The
+    endpoint therefore publishes `windows` per section rather than a single
+    `window` -- see app/api/v1/biz.py and
+    services/recommendations.recommendation_windows.
     """
     anchor = now or datetime.now(timezone.utc)
     competitors = await competitor_signals(db, days=days, now=anchor)

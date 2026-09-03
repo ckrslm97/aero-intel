@@ -15,6 +15,7 @@ from app.services.energy_service import (
     annualized_volatility,
     indicators_from_history,
     pct_change,
+    percentile_of,
 )
 
 BASE = datetime(2026, 8, 31, tzinfo=timezone.utc)
@@ -152,6 +153,28 @@ def test_percentile_places_the_latest_close_inside_its_own_year():
 
     out_low = indicators_from_history(series([40.0, 30.0, 20.0, 10.0]))
     assert out_low.percentile_1y == 25.0
+
+
+# `percentile_of` moved here from cockpit_signals_service with the series it is
+# computed over. Its own two tests came with it: `indicators_from_history` never
+# reaches it with an empty series (it returns early on one, energy_service.py),
+# so nothing else in the suite can see the empty case at all.
+
+
+def test_percentile_of_places_a_value_inside_its_own_series():
+    assert percentile_of(5.0, [1.0, 2.0, 3.0, 4.0, 5.0]) == 100.0
+    assert percentile_of(3.0, [1.0, 2.0, 3.0, 4.0, 5.0]) == 60.0
+    assert percentile_of(0.5, [1.0, 2.0]) == 0.0
+
+
+def test_percentile_of_is_none_for_an_empty_series_never_a_defaulted_fifty():
+    """The promise the docstring makes, and the only test that can hold it to it.
+
+    A defaulted 50 would place Brent in the middle of a year nobody measured,
+    and the fuel tile bands its level off exactly this number -- "orta seviye"
+    printed out of an empty series is an invented reading, not a missing one.
+    """
+    assert percentile_of(95.0, []) is None
 
 
 def test_sparkline_thins_a_daily_year_but_plots_only_real_closes():

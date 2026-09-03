@@ -45,12 +45,14 @@ async def _fixture(db):
     return source, airline
 
 
-async def _stale_article(db, source, airline, *, published_at, slug="eski-haber"):
+async def _stale_article(
+    db, source, airline, *, published_at, slug="eski-haber", title=None
+):
     """A campaign article the press filed weeks ago and we are reading now."""
     article = Article(
         source_id=source.id,
         url=f"https://example.com/pg/{slug}",
-        title=f"{slug} kampanya %40 indirim",
+        title=title or f"{slug} kampanya %40 indirim",
         raw_content="Kampanya kapsaminda %40 indirim.",
         published_at=published_at,
         fetched_at=published_at,
@@ -62,7 +64,9 @@ async def _stale_article(db, source, airline, *, published_at, slug="eski-haber"
     db.add(
         ArticleEnrichment(
             article_id=article.id,
-            headline=slug,
+            # The pipeline reads the enrichment's headline in preference to the
+            # article's own, so this is the string the dedup gates actually see.
+            headline=title or slug,
             summary="s",
             category="revenue_management",
             subcategory="promotion",
@@ -188,3 +192,71 @@ async def test_a_row_from_a_source_with_no_date_says_so(db_session, monkeypatch)
     row = await _only_promotion(db_session)
     assert row.source_published_at is None
     assert row.detected_at is not None
+
+
+# --- what the run clock cost the dedup gate, and how it was paid back -------
+
+_DATELESS_PAYLOAD = (
+    '{"discount_pct": 40, "sale_starts": null, "sale_ends": null,'
+    ' "travel_starts": null, "travel_ends": null, "markets": "Avrupa"}'
+)
+
+
+def _dateless_generator():
+    async def generate(prompt):
+        return _DATELESS_PAYLOAD
+
+    return generate
+
+
+async def _two_articles_one_run(db_session, monkeypatch, *, gap: timedelta):
+    """Two reports of an identically-titled, window-less campaign, `gap` apart,
+    both read by ONE sweep -- so both carry the same `detected_at`."""
+    monkeypatch.setattr("app.llm.factory.get_raw_generator", _dateless_generator)
+    source, airline = await _fixture(db_session)
+    title = "Kuzey Kıbrıs uçuşlarında %40 indirim"
+    recent = datetime(2026, 8, 20, 9, 0, tzinfo=timezone.utc)
+    await _stale_article(
+        db_session, source, airline, published_at=recent, slug="yeni", title=title
+    )
+    await _stale_article(
+        db_session, source, airline, published_at=recent - gap, slug="eski", title=title
+    )
+    await db_session.commit()
+    await extract_promotions(db_session)
+    return (await db_session.execute(select(Promotion))).scalars().all()
+
+
+async def test_a_campaign_and_its_annual_re_run_do_not_merge_in_one_sweep(
+    db_session, monkeypatch
+):
+    """The regression the run clock opened, pinned shut.
+
+    Since `detected_at` became `run_started_at`, every candidate of a run
+    carries the SAME sighting -- so a timing gate measured on `detected_at`
+    reads a gap of zero for every pair and waves all of them through. Two
+    reports of last August's sale and this August's re-run, same title, no
+    stated window, would then merge: one carrier's campaign deleted from the
+    timeline with nothing left on screen to notice it. The gate measures the
+    SOURCE dates, which really are a year apart.
+    """
+    rows = await _two_articles_one_run(db_session, monkeypatch, gap=timedelta(days=365))
+
+    assert len(rows) == 2, "a year between the reports is a year between the campaigns"
+    assert len({row.source_published_at for row in rows}) == 2
+    assert len({row.detected_at for row in rows}) == 1, (
+        "and they do share one sighting -- which is exactly why it cannot be the gate"
+    )
+
+
+async def test_two_reports_of_one_campaign_in_the_same_week_still_merge(
+    db_session, monkeypatch
+):
+    """The positive direction: the gate did not simply stop matching.
+
+    Press coverage clusters within days of a launch, and those really are one
+    campaign reported twice -- still one bar on the timeline, not two.
+    """
+    rows = await _two_articles_one_run(db_session, monkeypatch, gap=timedelta(days=4))
+
+    assert len(rows) == 1, "one campaign, two reports, one bar"

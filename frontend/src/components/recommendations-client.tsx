@@ -15,6 +15,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { apiFetch } from "@/lib/api";
 import { airlineTabs, worldRegions } from "@/lib/nav";
 import { CATEGORY_BY_SLUG } from "@/lib/taxonomy";
+import type { ResponseWindow } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 // Mirrors the dict built by backend/app/services/recommendations.py. Declared
@@ -47,7 +48,10 @@ interface Recommendation {
 interface RecommendationsOut {
   /** When the server cut the window -- see backend/app/api/window.py. */
   generated_at: string;
-  window: { days: number; since: string; until: string };
+  /** One window per detector group, because they are not one window:
+   * `comparison` is `days`, `tk_review_themes` is four times that, and
+   * `upcoming_events` looks FORWARD past the end of both. */
+  windows: Record<"comparison" | "tk_review_themes" | "upcoming_events", ResponseWindow>;
   days: number;
   count: number;
   items: Recommendation[];

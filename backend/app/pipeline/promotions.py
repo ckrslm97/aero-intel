@@ -691,6 +691,12 @@ async def extract_promotions(
             url=article.url[:500],
             source_name=(article.source.name if article.source else "Haber"),
             detected_at=detected,
+            # Carried into dedup, not just into the row: `detected_at` is now
+            # one constant for the whole run, so the timing gate in
+            # promo_dedup._time_plausible has nothing but this date with which
+            # to tell a campaign from its annual re-run when neither states a
+            # sale window.
+            source_published_at=source_published,
             discount_pct=fields.discount_pct,
             markets=fields.markets,
             sale_starts=fields.sale_starts,

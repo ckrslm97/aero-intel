@@ -345,7 +345,27 @@ def build_fuel_signal(
         "method_tr": FUEL_METHOD_TR,
         "source": source or "Yahoo Finance (BZ=F)",
         "source_url": source_url,
-        "href": "/kpi/oil_price",
+        # NO IN-APP DETAIL PAGE, deliberately -- `href` is None and the schema
+        # documents that as "the tile has no deeper page".
+        #
+        # It used to link to /kpi/oil_price, and that was correct only while
+        # this tile read `kpis.latest("oil_price")`: the same row the detail
+        # page prints. It no longer does. Every number here now comes from the
+        # PUBLISHED DAILY CLOSE (services/energy_service.brent_indicators), so
+        # that the tile and the Market Pulse Brent cell read one series over
+        # one period; /kpi/oil_price still prints the KPI archive, which is the
+        # intraday `regularMarketPrice` our cron happened to catch
+        # (services/kpi_service.py -> ingest/markets.fetch_quote). Mid-session
+        # those are two different prices with two different `as_of`s.
+        #
+        # A link whose two ends print different numbers for the same contract,
+        # under the same "Yahoo Finance (BZ=F)" label, is worse than no link:
+        # it is the "one contract, two answers" error this whole change set
+        # exists to remove, just relocated from tile<->panel to tile<->detail.
+        # `source_url` still reaches the contract itself, and the same close --
+        # with its day and week windows and its sparkline -- is on this page in
+        # Market Pulse. Restore a link only to a surface fed by THIS series.
+        "href": None,
         "as_of": as_of,
     }
 
