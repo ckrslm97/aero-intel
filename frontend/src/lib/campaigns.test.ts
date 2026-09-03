@@ -172,10 +172,49 @@ describe("date-window filters", () => {
     expect(remainingDaysLabel("2026-09-03", TODAY)).toBe("Bugün son gün");
   });
 
-  it("reads today as a local calendar day, never a UTC instant", () => {
-    // A reader west of UTC must not be told it is already tomorrow.
-    expect(todayIso(new Date(2026, 8, 3, 23, 30))).toBe("2026-09-03");
-    expect(todayIso(new Date(2026, 8, 3, 0, 15))).toBe("2026-09-03");
+  it("reads today on the BACKEND's calendar -- UTC -- not the reader's", () => {
+    // Every status, sort key and visibility decision behind these rows is cut
+    // against `_today()` in backend/app/api/v1/promotions.py, which is
+    // explicitly UTC. Deriving the page's own "today" from the reader's zone
+    // put the two three hours apart, so between 00:00 and 03:00 TRT the card
+    // contradicted the payload it was rendering.
+    expect(todayIso(new Date("2026-09-03T00:00:00Z"))).toBe("2026-09-03");
+    expect(todayIso(new Date("2026-09-03T23:59:59Z"))).toBe("2026-09-03");
+    // 00:30 on 4 September in İstanbul is still 3 September where the API is
+    // standing, and the API is the one that decided this row was still on sale.
+    expect(todayIso(new Date("2026-09-03T21:30:00Z"))).toBe("2026-09-03");
+    // And it does roll over -- on UTC's midnight, not on nobody's.
+    expect(todayIso(new Date("2026-09-04T00:15:00Z"))).toBe("2026-09-04");
+  });
+
+  it("does not count down to a deadline the API has already passed", () => {
+    // The failure this closes, end to end: a sale closing on 3 September, read
+    // at 00:30 TRT on the 4th. The backend's day is still the 3rd, so the row
+    // is still ACTIVE_BOOKING and is still in the payload -- and the card, on
+    // the reader's local day, used to call it expired territory: "today" of
+    // 2026-09-04 makes `daysUntil` negative and the period filter drop it.
+    const atTrtMidnight = new Date("2026-09-03T21:30:00Z");
+    const today = todayIso(atTrtMidnight);
+    const closing = promotion({
+      id: "closing",
+      status: "ACTIVE_BOOKING",
+      sale_starts: "2026-09-01",
+      sale_ends: "2026-09-03",
+    });
+
+    expect(remainingDaysLabel("2026-09-03", today)).toBe("Bugün son gün");
+    expect(
+      filterCampaigns([closing], { ...EMPTY_CAMPAIGN_FILTERS, salePeriod: "now" }, today).map(
+        (row) => row.id,
+      ),
+    ).toEqual(["closing"]);
+
+    // The negative half: once UTC really has rolled over, the page agrees the
+    // window is shut rather than counting down for another three hours.
+    const nextDay = todayIso(new Date("2026-09-04T00:15:00Z"));
+    expect(
+      filterCampaigns([closing], { ...EMPTY_CAMPAIGN_FILTERS, salePeriod: "now" }, nextDay),
+    ).toEqual([]);
   });
 });
 

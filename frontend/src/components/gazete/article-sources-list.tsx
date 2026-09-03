@@ -4,21 +4,18 @@ import { ExternalLink, Newspaper } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { apiFetch } from "@/lib/api";
+import { DISPLAY_TIME_ZONE_TR, formatShortDateTr } from "@/lib/format";
 import { sourceTierLabelTr } from "@/lib/gazete";
 import type { ArticleSourceOut } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-const STAMP = new Intl.DateTimeFormat("tr-TR", {
-  day: "numeric",
-  month: "short",
-  hour: "2-digit",
-  minute: "2-digit",
-});
-
+/** The same pinned stamp the article card and the drawer around this list
+ * print. Built here with no `timeZone`, these rows followed the runtime while
+ * the drawer's own header did not -- two publication times for the same story,
+ * a centimetre apart. The zone is named once, in the section caption below,
+ * rather than on every one of N rows. */
 function stamp(iso: string | null): string {
-  if (!iso) return "Tarih yok";
-  const date = new Date(iso);
-  return Number.isNaN(date.getTime()) ? "Tarih yok" : STAMP.format(date);
+  return formatShortDateTr(iso) ?? "Tarih yok";
 }
 
 /** The list behind "Doğrulayan N kaynak".
@@ -81,7 +78,8 @@ export function ArticleSourcesList({ articleId }: { articleId: string }) {
             reason: a vertical list of timestamps reads as the event's own
             timeline unless it says otherwise, and this is publication order. */}
         <p className="text-[11px] leading-relaxed text-muted-foreground">
-          Haberlerin yayın sırası — olayın kendi zaman çizelgesi değildir.
+          Haberlerin yayın sırası ({DISPLAY_TIME_ZONE_TR}) — olayın kendi zaman çizelgesi
+          değildir.
         </p>
       </div>
 

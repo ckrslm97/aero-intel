@@ -8,6 +8,7 @@ import { ArticleCard } from "@/components/article-card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { API_BASE_URL, apiFetch } from "@/lib/api";
+import { DISPLAY_TIME_ZONE, formatDayMonthTr } from "@/lib/format";
 import type { ArticleListOut, ArticleOut, EditionSummaryOut } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -25,11 +26,34 @@ function lastDays(): string[] {
   return out;
 }
 
+const EDITION_DAY_FORMAT = new Intl.DateTimeFormat("tr-TR", {
+  timeZone: DISPLAY_TIME_ZONE,
+  weekday: "short",
+  year: "numeric",
+  month: "short",
+  day: "numeric",
+});
+
+/** One published edition's day. Date-only, so it is anchored at midday UTC --
+ * the /newspaper/[date] masthead this row links to reads the same day. */
+function editionDayLabel(iso: string): string {
+  const at = new Date(`${iso}T12:00:00Z`);
+  return Number.isNaN(at.getTime()) ? iso : EDITION_DAY_FORMAT.format(at);
+}
+
+const WEEKDAY_FORMAT = new Intl.DateTimeFormat("tr-TR", {
+  timeZone: DISPLAY_TIME_ZONE,
+  weekday: "short",
+});
+
+/** The day-picker's two lines. Both pinned to the display zone, and both fed
+ * the midday anchor `formatDayMonthTr` carries -- this used to open-code the
+ * anchor and then format in the runtime's zone. */
 function dayLabel(iso: string): { weekday: string; date: string } {
-  const d = new Date(iso + "T12:00:00Z");
+  const d = new Date(`${iso}T12:00:00Z`);
   return {
-    weekday: d.toLocaleDateString("tr-TR", { weekday: "short" }),
-    date: d.toLocaleDateString("tr-TR", { day: "numeric", month: "short" }),
+    weekday: WEEKDAY_FORMAT.format(d),
+    date: formatDayMonthTr(iso) ?? iso,
   };
 }
 
@@ -219,12 +243,7 @@ export function ArchiveClient() {
                   className="flex min-w-0 flex-1 flex-col gap-0.5 hover:text-primary"
                 >
                   <span className="text-xs font-medium text-muted-foreground">
-                    {new Date(e.edition_date + "T12:00:00Z").toLocaleDateString("tr-TR", {
-                      weekday: "short",
-                      year: "numeric",
-                      month: "short",
-                      day: "numeric",
-                    })}
+                    {editionDayLabel(e.edition_date)}
                   </span>
                   <span className="truncate text-sm font-medium text-card-foreground">
                     {e.headline}

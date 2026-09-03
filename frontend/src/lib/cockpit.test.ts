@@ -4,11 +4,13 @@ import {
   adjacentYearPair,
   ANNUAL_KIND_LABELS_TR,
   annualScopeLabel,
+  DAILY_CLOSE_LABEL_TR,
+  dailyCloseBadge,
   forecastBuckets,
   forecastSplitIndex,
   freshnessOf,
-  latestAsOf,
   LIVE_WINDOW_MINUTES,
+  oldestAsOf,
   MEDIAN_MIN_INSTITUTIONS,
   signalLevelStyle,
   splitForecast,
@@ -24,18 +26,38 @@ const minutesAgo = (minutes: number) =>
 describe("freshnessOf", () => {
   it("calls a reading inside the live window live", () => {
     const freshness = freshnessOf(minutesAgo(5), NOW);
-    expect(freshness.live).toBe(true);
+    expect(freshness.state).toBe("live");
     expect(freshness.label).toBe("Canlı");
   });
 
   it("stops claiming live the moment the window is exceeded", () => {
-    expect(freshnessOf(minutesAgo(LIVE_WINDOW_MINUTES), NOW).live).toBe(true);
-    expect(freshnessOf(minutesAgo(LIVE_WINDOW_MINUTES + 1), NOW).live).toBe(false);
+    expect(freshnessOf(minutesAgo(LIVE_WINDOW_MINUTES), NOW).state).toBe("live");
+    expect(freshnessOf(minutesAgo(LIVE_WINDOW_MINUTES + 1), NOW).state).toBe("stale");
+  });
+
+  it("makes NO freshness claim while there is no clock to make it against", () => {
+    // The bug this state exists for: Kokpit is pre-rendered with
+    // `revalidate: 60`, so a `now` defaulted to the render's own clock froze a
+    // verdict into cached HTML -- production served an 18:03 UTC reading under
+    // a lit "Canlı" dot at 18:41. A component with no client tick yet holds
+    // `null`, and `null` must produce the stamp and nothing else.
+    const freshness = freshnessOf(minutesAgo(5), null);
+    expect(freshness.state).toBe("pending");
+    expect(freshness.label).not.toContain("Canlı");
+    expect(freshness.timeLabel).toBe(freshnessOf(minutesAgo(5), NOW).timeLabel);
+    // And it must not swing the other way either: an unjudged reading is not a
+    // late one, so there is no delay to print and no warning to raise.
+    expect(freshness.delayLabel).toBeNull();
+  });
+
+  it("still refuses to invent a timestamp when there is no clock", () => {
+    expect(freshnessOf(null, null).state).toBe("missing");
+    expect(freshnessOf("not-a-date", null).state).toBe("missing");
   });
 
   it("says how late it is rather than going quiet", () => {
     const freshness = freshnessOf("2026-08-30T09:15:00Z", NOW);
-    expect(freshness.live).toBe(false);
+    expect(freshness.state).toBe("stale");
     expect(freshness.label).toContain("Gecikmeli");
     expect(freshness.label).toContain("09:15");
   });
@@ -58,25 +80,69 @@ describe("freshnessOf", () => {
     for (const value of [null, undefined, "not-a-date"]) {
       const freshness = freshnessOf(value, NOW);
       expect(freshness.label).toBe("Veri yok");
-      expect(freshness.live).toBe(false);
+      expect(freshness.state).toBe("missing");
       expect(freshness.timeLabel).toBeNull();
     }
   });
 });
 
-describe("latestAsOf", () => {
-  it("picks the newest reading across the board", () => {
-    expect(
-      latestAsOf([
-        { as_of: "2026-08-30T10:00:00Z" },
-        { as_of: "2026-08-30T11:45:00Z" },
-        { as_of: "2026-08-30T09:00:00Z" },
-      ]),
-    ).toBe("2026-08-30T11:45:00Z");
+describe("oldestAsOf", () => {
+  const BOARD = [
+    { as_of: "2026-08-30T10:00:00Z" },
+    { as_of: "2026-08-30T11:45:00Z" },
+    { as_of: "2026-08-30T09:00:00Z" },
+  ];
+
+  it("picks the oldest reading across the board", () => {
+    expect(oldestAsOf(BOARD)).toBe("2026-08-30T09:00:00Z");
+  });
+
+  it("is what a single collective badge is allowed to claim", () => {
+    // The header stamped itself with the FRESHEST pair, so one pair's cron
+    // succeeding covered for another's failing: "Canlı" over a row three hours
+    // behind it. A badge over a set of readings can only describe the worst.
+    // The newest reading is spelled out rather than taken from a helper --
+    // there is no `latestAsOf` any more, and this is why.
+    expect(freshnessOf("2026-08-30T11:45:00Z", NOW).state).toBe("live");
+    expect(freshnessOf(oldestAsOf(BOARD), NOW).state).toBe("stale");
+    expect(freshnessOf(oldestAsOf(BOARD), NOW).delayLabel).toBe("3 sa");
   });
 
   it("is null for an empty board", () => {
-    expect(latestAsOf([])).toBeNull();
+    expect(oldestAsOf([])).toBeNull();
+  });
+});
+
+describe("dailyCloseBadge", () => {
+  const daysAgo = (days: number) =>
+    new Date(NOW.getTime() - days * 24 * 60 * 60_000).toISOString();
+
+  it("measures a settled close in DAYS, not against the FX cron's window", () => {
+    // Brent is a daily settlement. Judged by `LIVE_WINDOW_MINUTES` -- the FX
+    // cron's period plus one missed run -- the fuel cell read "GECİKMELİ" from
+    // half an hour after the close until the next one, i.e. nearly all day,
+    // over a perfectly current number.
+    expect(dailyCloseBadge(daysAgo(0), NOW)).toBe(`${DAILY_CLOSE_LABEL_TR} · bugün`);
+    expect(dailyCloseBadge(daysAgo(1), NOW)).toBe(`${DAILY_CLOSE_LABEL_TR} · dün`);
+    expect(dailyCloseBadge(daysAgo(4), NOW)).toBe(`${DAILY_CLOSE_LABEL_TR} · 4 gün önce`);
+    // Two hours old is the SAME trading day, and a daily series has nothing to
+    // apologise for there.
+    expect(dailyCloseBadge(minutesAgo(120), NOW)).toBe(`${DAILY_CLOSE_LABEL_TR} · bugün`);
+  });
+
+  it("never borrows the live cell's word", () => {
+    for (const days of [0, 1, 9]) {
+      expect(dailyCloseBadge(daysAgo(days), NOW)).not.toContain("CANLI");
+    }
+  });
+
+  it("states the cadence but not the age while there is no clock", () => {
+    expect(dailyCloseBadge(daysAgo(3), null)).toBe(DAILY_CLOSE_LABEL_TR);
+  });
+
+  it("says VERİ YOK rather than dating a reading it does not have", () => {
+    expect(dailyCloseBadge(null, NOW)).toBe("VERİ YOK");
+    expect(dailyCloseBadge("not-a-date", NOW)).toBe("VERİ YOK");
   });
 });
 

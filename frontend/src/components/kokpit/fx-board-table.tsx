@@ -7,6 +7,8 @@ import { FxForecastChart } from "@/components/kokpit/fx-forecast-chart-lazy";
 import { Card } from "@/components/ui/card";
 import { Delta } from "@/components/ui/delta";
 import { DenseTable, DenseTd, DenseTh } from "@/components/ui/dense-table";
+import { useNow } from "@/hooks/use-now";
+import { freshnessOf } from "@/lib/cockpit";
 import { formatMetricValue, formatRate, formatUtcTime } from "@/lib/format";
 import type { FxForecastOut, KokpitFxBoardOut } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -58,6 +60,18 @@ export interface FxRow {
   weekPct: number | null;
   series: number[];
   asOfLabel: string | null;
+  /** HOW LATE this row's own reading is ("45 dk", "2 gün"), or null when it is
+   * inside the live window, when there is no clock to judge against yet, and
+   * for the peg.
+   *
+   * A per-ROW figure, because freshness is a per-row fact. The board shares one
+   * badge in the page header and that badge now describes the OLDEST reading
+   * (`oldestAsOf`), which is the only thing a single badge can honestly say
+   * about seven pairs -- but "the worst row is two hours old" still does not
+   * tell a reader WHICH row. Six pairs updating on schedule while one pair's
+   * cron fails is the normal shape of this outage, and without a mark on the
+   * row itself the failed pair is indistinguishable from the six. */
+  delayLabel: string | null;
   title: string;
   /** The peg's badge, verbatim from the backend. Non-null means "this row has
    * no deltas and no trend, and that is the correct rendering". */
@@ -144,7 +158,10 @@ export function nearestForecast(
 export function buildFxRows(
   board: KokpitFxBoardOut | null,
   forecasts: FxForecastOut[],
-  now?: number,
+  /** The reader's clock, or null before its first tick (hooks/use-now.ts).
+   * Null produces no staleness marks -- an unjudged row is drawn as an unjudged
+   * row, never as a fresh one. */
+  now: Date | null = null,
 ): FxRow[] {
   const byPair = new Map((board?.pairs ?? []).map((pair) => [pair.currency_pair, pair]));
 
@@ -152,6 +169,9 @@ export function buildFxRows(
     const pair = byPair.get(name);
     if (!pair) return null;
     const asOfLabel = formatUtcTime(pair.as_of);
+    // The header's own rule (lib/cockpit.ts), applied per row rather than once
+    // for the whole board.
+    const freshness = freshnessOf(pair.as_of, now);
     return {
       pair: name,
       metricKey: PAIR_METRIC_KEYS[name] ?? null,
@@ -164,6 +184,7 @@ export function buildFxRows(
       weekPct: pair.week_delta_pct,
       series: pair.sparkline ?? [],
       asOfLabel,
+      delayLabel: freshness.delayLabel,
       // The reading's OWN time, in the row's own tooltip. `asOfLabel` was
       // computed here and then never rendered anywhere -- so the table's nine
       // rows shared one collective freshness stamp in the page header, and a
@@ -171,7 +192,12 @@ export function buildFxRows(
       // had not.
       title: `${pair.source} · ${pair.frequency_label}${asOfLabel ? ` · ${asOfLabel} UTC` : ""}`,
       pegLabel: null,
-      forecast: nearestForecast(forecasts, name, now),
+      // The forecast column asks a DAY-scale question -- is this institution's
+      // target date already behind us -- so a clock that is up to a minute old,
+      // or the render's own when there is no tick yet, answers it identically.
+      // The staleness mark above is a MINUTE-scale claim and refuses to guess;
+      // these are different questions and get different treatment on purpose.
+      forecast: nearestForecast(forecasts, name, now?.getTime() ?? Date.now()),
     };
   };
 
@@ -197,6 +223,8 @@ export function buildFxRows(
       weekPct: null,
       series: [],
       asOfLabel: null,
+      // A rate that has not moved since 1986 cannot be late.
+      delayLabel: null,
       title: board.peg.source,
       pegLabel: board.peg.label,
       forecast: null,
@@ -232,7 +260,10 @@ export function FxBoardTable({
   board: KokpitFxBoardOut | null;
   forecasts: FxForecastOut[];
 }) {
-  const rows = useMemo(() => buildFxRows(board, forecasts), [board, forecasts]);
+  // Freshness is judged on the reader's clock, not the pre-render's: this table
+  // sits in a page cached for `revalidate: 60`.
+  const now = useNow();
+  const rows = useMemo(() => buildFxRows(board, forecasts, now), [board, forecasts, now]);
   const [selected, setSelected] = useState<string | null>(null);
 
   const chartPair = useMemo(() => {
@@ -295,7 +326,22 @@ export function FxBoardTable({
         )}
       >
         <DenseTd className="font-medium">{row.pair}</DenseTd>
-        <DenseTd numeric>{row.value}</DenseTd>
+        <DenseTd numeric>
+          {/* A late row is MUTED and says how late. Every row in this table used
+              to be drawn identically under one collective header stamp, so a
+              pair whose cron had failed two hours ago looked exactly as current
+              as the six beside it -- and the header, which read the FRESHEST
+              pair, actively vouched for it. */}
+          <span className={cn(row.delayLabel && "text-muted-foreground")}>{row.value}</span>
+          {row.delayLabel && (
+            <span
+              className="ml-1 whitespace-nowrap text-[10px] font-medium text-warning"
+              title={`Bu paritenin son okuması ${row.asOfLabel} UTC`}
+            >
+              {row.delayLabel} gecikmeli
+            </span>
+          )}
+        </DenseTd>
         {row.pegLabel ? (
           // The badge takes the three columns the peg has nothing to put in.
           <DenseTd colSpan={3} className="hidden sm:table-cell">

@@ -1,3 +1,5 @@
+import { LOCAL_TIME_ZONE } from "@/lib/clock";
+
 const compactFormatter = new Intl.NumberFormat("tr-TR", {
   notation: "compact",
   maximumFractionDigits: 1,
@@ -216,4 +218,171 @@ export function formatRelativeTr(iso: string, now: number = Date.now()): string 
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `${hours} sa önce`;
   return `${Math.floor(hours / 24)} gün önce`;
+}
+
+/* --- dates, in a zone the page NAMES ------------------------------------- */
+
+/** The zone every wall-clock date and time on this site is printed in.
+ *
+ * WHY THIS EXISTS
+ * ---------------
+ * `new Intl.DateTimeFormat("tr-TR", {...})` with no `timeZone` formats in
+ * whatever zone the RUNTIME happens to be in. On this app that is at least
+ * three different zones for one reading: the Vercel node that pre-renders a
+ * page (UTC), the reader's laptop, and the reader's phone in another country.
+ * The same article stamp was measured rendering three hours apart on two
+ * surfaces of the same site, and a date-only value -- an edition day, a
+ * campaign window -- could land on the wrong DAY entirely.
+ *
+ * It is `LOCAL_TIME_ZONE`, the topbar clock's zone, and not UTC: the header
+ * clock a reader is looking at says İstanbul, and a publication time they have
+ * to mentally shift three hours to compare against it is a subtraction the
+ * page should have done. UTC is still the right choice where the value is a
+ * RECORD rather than a wall-clock moment -- the risk drawer's chronology and
+ * Kokpit's `formatUtcTime` both pin UTC and both say so out loud, which is the
+ * other half of this rule: whichever zone a surface picks, it names it.
+ */
+export const DISPLAY_TIME_ZONE = LOCAL_TIME_ZONE;
+
+/** How that zone is written on the surface. "TSİ" (Türkiye Saati İstanbul) is
+ * what Turkish newsrooms print, and three characters is a price a dense card
+ * can pay. */
+export const DISPLAY_TIME_ZONE_TR = "TSİ";
+
+/** Midday UTC, as the anchor for a DATE-ONLY value.
+ *
+ * "2026-09-04" parses as UTC midnight, which is 3 September in every zone west
+ * of Greenwich: the newspaper masthead for the 4th read "3 Eylül" for a reader
+ * in New York. Anchoring the day at 12:00 UTC leaves no zone from UTC-11 to
+ * UTC+12 able to shift it. The pattern was already open-coded in
+ * archive-client.tsx and biz-client.tsx; this is that, named.
+ */
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+
+function instantOf(value: string | Date | null | undefined): Date | null {
+  if (value === null || value === undefined) return null;
+  const date =
+    value instanceof Date
+      ? value
+      : new Date(DATE_ONLY.test(value) ? `${value}T12:00:00Z` : value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+const DAY_FORMAT = new Intl.DateTimeFormat("tr-TR", {
+  timeZone: DISPLAY_TIME_ZONE,
+  weekday: "long",
+  year: "numeric",
+  month: "long",
+  day: "numeric",
+});
+
+const STAMP_FORMAT = new Intl.DateTimeFormat("tr-TR", {
+  timeZone: DISPLAY_TIME_ZONE,
+  dateStyle: "medium",
+  timeStyle: "short",
+});
+
+const SHORT_STAMP_FORMAT = new Intl.DateTimeFormat("tr-TR", {
+  timeZone: DISPLAY_TIME_ZONE,
+  day: "numeric",
+  month: "short",
+  hour: "2-digit",
+  minute: "2-digit",
+});
+
+const DATE_FORMAT = new Intl.DateTimeFormat("tr-TR", {
+  timeZone: DISPLAY_TIME_ZONE,
+  day: "numeric",
+  month: "short",
+  year: "numeric",
+});
+
+const MONTH_FORMAT = new Intl.DateTimeFormat("tr-TR", {
+  timeZone: DISPLAY_TIME_ZONE,
+  month: "short",
+  year: "numeric",
+});
+
+const DAY_MONTH_FORMAT = new Intl.DateTimeFormat("tr-TR", {
+  timeZone: DISPLAY_TIME_ZONE,
+  day: "numeric",
+  month: "short",
+});
+
+/** "4 Eylül 2026 Cuma" -- the whole day, for a masthead or a section header.
+ *
+ * Takes a date-only "YYYY-MM-DD" as happily as an instant, and anchors the
+ * former at midday UTC so the day cannot slide. */
+export function formatDayTr(value: string | Date | null | undefined): string | null {
+  const at = instantOf(value);
+  return at === null ? null : DAY_FORMAT.format(at);
+}
+
+/** "4 Eyl 2026 14:32" -- a full stamp, in `DISPLAY_TIME_ZONE`. The caller
+ * prints `DISPLAY_TIME_ZONE_TR` beside it. */
+export function formatStampTr(value: string | Date | null | undefined): string | null {
+  const at = instantOf(value);
+  return at === null ? null : STAMP_FORMAT.format(at);
+}
+
+/** "4 Eyl 14:32" -- the same stamp without the year, for a dense card or a
+ * table cell where the year is established by everything around it. */
+export function formatShortDateTr(value: string | Date | null | undefined): string | null {
+  const at = instantOf(value);
+  return at === null ? null : SHORT_STAMP_FORMAT.format(at);
+}
+
+/** "4 Eyl 2026" -- a DAY with no clock time and no weekday, for a stated
+ * window ("bilet dönemi 4 Eyl 2026 → 30 Eyl 2026") or a dated row in a list.
+ *
+ * The four call sites that open-coded this each carried their own copy of the
+ * midday anchor -- and campaign-drawer.tsx carried the anchor at UTC MIDNIGHT
+ * instead, which is the previous day in every zone west of Greenwich. That is
+ * the whole reason the anchor belongs in one place: it is easy to write, and
+ * just as easy to write an hour wrong. */
+export function formatDateTr(value: string | Date | null | undefined): string | null {
+  const at = instantOf(value);
+  return at === null ? null : DATE_FORMAT.format(at);
+}
+
+/** "Ara 2025" -- month and year, for a publication edition rather than a day. */
+export function formatMonthTr(value: string | Date | null | undefined): string | null {
+  const at = instantOf(value);
+  return at === null ? null : MONTH_FORMAT.format(at);
+}
+
+/** "4 Eyl" -- day and month, for a dense chip or a signal row whose year is
+ * established by the list around it. */
+export function formatDayMonthTr(value: string | Date | null | undefined): string | null {
+  const at = instantOf(value);
+  return at === null ? null : DAY_MONTH_FORMAT.format(at);
+}
+
+/* --- day keys ------------------------------------------------------------ */
+
+/** Today as "YYYY-MM-DD" in UTC.
+ *
+ * The DAY KEY is a different question from the DISPLAY zone above, and it has a
+ * different answer: a day key is compared against dates the BACKEND decided
+ * (`_today()` in backend/app/api/v1/promotions.py is explicitly UTC, "status
+ * buckets must not move because a cron ran at 23:40 local"). Deriving the key
+ * from the reader's own zone put the two clocks three hours apart, so between
+ * 00:00 and 03:00 TRT a campaign the API had already retired still rendered as
+ * running.
+ *
+ * A string, not a Date: every comparison against it is a lexicographic one
+ * between "YYYY-MM-DD" values -- exactly the comparison the backend makes
+ * between `date` objects, and one that cannot drift by a zone the way a
+ * Date-to-Date comparison can.
+ */
+export function utcDayIso(now: Date = new Date()): string {
+  return now.toISOString().slice(0, 10);
+}
+
+/** A day key, `days` whole days later. Arithmetic in UTC, like the keys
+ * themselves -- doing it on a local Date would skip or repeat a day across a
+ * DST boundary. */
+export function shiftDayIso(day: string, days: number): string {
+  const [y, m, d] = day.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
 }

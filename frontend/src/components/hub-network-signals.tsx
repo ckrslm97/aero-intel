@@ -10,6 +10,7 @@ import { MotionItem, MotionList } from "@/components/motion/motion-list";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDataSource } from "@/hooks/use-data-source";
 import { apiFetch } from "@/lib/api";
+import { formatDayMonthTr } from "@/lib/format";
 import { regionsOf } from "@/lib/network-signals";
 import { worldRegions } from "@/lib/nav";
 import type { NetworkSignalGroup, NetworkSignalsOut, RouteSignalArticle } from "@/lib/types";
@@ -25,9 +26,10 @@ const REGION_NAME: Record<string, string> = Object.fromEntries(
   worldRegions.map((r) => [r.slug, r.name]),
 );
 
+/** As in insights-client.tsx: `published_at` is an instant, so the day it
+ * prints on has to be read in a zone the site names, not in the runtime's. */
 function formatSignalDate(iso: string | null): string | null {
-  if (!iso) return null;
-  return new Date(iso).toLocaleDateString("tr-TR", { day: "numeric", month: "short" });
+  return formatDayMonthTr(iso);
 }
 
 /** New-route announcements, moved here from İçgörüler and now sourced from

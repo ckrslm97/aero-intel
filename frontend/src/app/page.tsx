@@ -222,9 +222,14 @@ export default async function KokpitPage() {
 
       {/* 5 --------------------------------------------------------------- */}
       <section className="flex flex-col gap-2">
+        {/* "Canlı spot", the caption used to open -- a static sentence two
+            lines above a footnote reading "~15 dk gecikmeli", over rows that
+            can be hours behind when a cron run fails. A caption states what the
+            column IS; whether a given row is current is a per-row claim, and it
+            is now made on the row (see FxRow.delayLabel). */}
         <SectionHeader
           title="Kur / FX"
-          caption="Canlı spot ve kurumların kendi tahminleri; asla ortalanmaz. Bir satır seçince sağdaki grafik o pariteye geçer."
+          caption="Spot kur ve kurumların kendi tahminleri; asla ortalanmaz. Bir satır seçince sağdaki grafik o pariteye geçer."
           glowVar="var(--primary)"
         />
         <FxBoardTable board={board} forecasts={forecasts} />

@@ -55,13 +55,35 @@ export function signalLevelStyle(level: string) {
  * missed before the header stops claiming "Canlı". */
 export const LIVE_WINDOW_MINUTES = 30;
 
+/** What can be said about a reading's age.
+ *
+ * `pending` is the state that makes the other three trustworthy. Kokpit is
+ * pre-rendered and cached (`revalidate: 60`), so a component that answered this
+ * question with the render-time clock answered it on the SERVER, minutes before
+ * anyone read the page -- production served an 18:03 UTC reading under a lit
+ * "Canlı" dot at 18:41. Freshness is now decided against the reader's own
+ * clock (hooks/use-now.ts), and until that clock has ticked there is no
+ * comparison to make and therefore nothing to claim: `pending` prints the
+ * reading's timestamp and stops there.
+ */
+export type FreshnessState =
+  /** Inside the live window, measured against a clock we actually have. */
+  | "live"
+  /** Outside it, by `delayLabel`. */
+  | "stale"
+  /** A real reading, no client clock yet -- age unknown, so age unstated. */
+  | "pending"
+  /** No reading at all, or one that will not parse. */
+  | "missing";
+
 export interface Freshness {
-  live: boolean;
+  state: FreshnessState;
   label: string;
   /** UTC HH:MM of the reading, or null when there is no reading at all. */
   timeLabel: string | null;
-  /** HOW FAR behind: "45 dk", "3 sa", "2 gün". Null inside the live window
-   * (there is nothing to confess) and null with no reading at all.
+  /** HOW FAR behind: "45 dk", "3 sa", "2 gün". Null in every state but
+   * `stale` -- inside the live window there is nothing to confess, and with no
+   * clock (or no reading) there is nothing to measure.
    *
    * The header used to print "Gecikmeli · son 16:50" beside "Veri: 16:50 UTC"
    * -- one timestamp, twice, and between them not a word about the size of
@@ -73,7 +95,7 @@ export interface Freshness {
 
 /** Coarse, honest units. Minutes below an hour, hours below two days, days
  * after that: a stale board is measured in the unit a reader would use to
- * describe it, not in 2 870 minutes. */
+ * describe it, not in 2 870 minutes. */
 function delayLabelOf(minutes: number): string {
   if (minutes < 60) return `${Math.round(minutes)} dk`;
   const hours = minutes / 60;
@@ -94,33 +116,107 @@ function utcTime(date: Date): string {
  * The header used to be able to say nothing at all about its own data. It must
  * not gain a decorative "%98,7 veri sağlığı" instead: this returns exactly what
  * the newest as_of supports, and says "Veri yok" when it supports nothing.
+ *
+ * `now` HAS NO DEFAULT, deliberately. A `= new Date()` here is what let three
+ * server-rendered components claim liveness against a clock that had stopped
+ * ticking the moment the page was cached; every caller must now name the clock
+ * it is judging against, and `null` -- "I have no clock yet" -- is a legal
+ * answer that produces no claim.
  */
-export function freshnessOf(asOf: string | null | undefined, now: Date = new Date()): Freshness {
-  if (!asOf) return { live: false, label: "Veri yok", timeLabel: null, delayLabel: null };
+export function freshnessOf(
+  asOf: string | null | undefined,
+  now: Date | null,
+): Freshness {
+  if (!asOf) return { state: "missing", label: "Veri yok", timeLabel: null, delayLabel: null };
   const then = new Date(asOf);
   if (Number.isNaN(then.getTime())) {
-    return { live: false, label: "Veri yok", timeLabel: null, delayLabel: null };
+    return { state: "missing", label: "Veri yok", timeLabel: null, delayLabel: null };
   }
   const time = utcTime(then);
+  if (now === null) {
+    return { state: "pending", label: `Son okuma ${time} UTC`, timeLabel: time, delayLabel: null };
+  }
   const minutes = (now.getTime() - then.getTime()) / 60_000;
   if (minutes <= LIVE_WINDOW_MINUTES) {
-    return { live: true, label: "Canlı", timeLabel: time, delayLabel: null };
+    return { state: "live", label: "Canlı", timeLabel: time, delayLabel: null };
   }
   return {
-    live: false,
+    state: "stale",
     label: `Gecikmeli · son ${time}`,
     timeLabel: time,
     delayLabel: delayLabelOf(minutes),
   };
 }
 
-/** The newest as_of across the FX board's pairs, or null for an empty board. */
-export function latestAsOf(pairs: { as_of: string }[]): string | null {
+/** The OLDEST as_of across the board -- what a single collective badge is
+ * allowed to claim, and the ONLY board-wide stamp this module offers.
+ *
+ * There was a `latestAsOf` beside this one and it is deliberately gone rather
+ * than merely unused: the header used to stamp itself with the freshest pair
+ * on the board, which says nothing about the other six. One pair's cron
+ * succeeding while another's had failed for two hours produced a "Canlı"
+ * header sitting directly on top of a two-hour-old row, with no mark anywhere
+ * to tell them apart. A badge over a set of readings can only honestly
+ * describe the worst of them; the per-pair detail is on the rows themselves
+ * (see `FxRow.delayLabel` in components/kokpit/fx-board-table.tsx).
+ */
+export function oldestAsOf(pairs: { as_of: string }[]): string | null {
   if (pairs.length === 0) return null;
   return pairs.reduce(
-    (newest, pair) => (new Date(pair.as_of) > new Date(newest) ? pair.as_of : newest),
+    (oldest, pair) => (new Date(pair.as_of) < new Date(oldest) ? pair.as_of : oldest),
     pairs[0].as_of,
   );
+}
+
+/* --- Daily-close cadence ------------------------------------------------- */
+
+/** What a daily series' badge says before it says anything about age. */
+export const DAILY_CLOSE_LABEL_TR = "GÜNLÜK KAPANIŞ";
+
+const MS_DAY = 86_400_000;
+
+/** Whole UTC calendar days between two instants. UTC because the closes are
+ * stamped and bucketed in UTC upstream (backend/app/services/energy_service.py
+ * works in daily closes), so "which day is this bar" must not depend on where
+ * the reader is sitting. */
+function utcDaysBetween(then: Date, now: Date): number {
+  const day = (date: Date) =>
+    Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate());
+  return Math.round((day(now) - day(then)) / MS_DAY);
+}
+
+/** A DAILY series' badge: cadence first, age in days after it.
+ *
+ * Brent is a daily settlement, not a quote. Judging it with
+ * `LIVE_WINDOW_MINUTES` -- which is the FX cron's period plus one missed run --
+ * meant the fuel cell read "GECİKMELİ" from half an hour after the close until
+ * the next one, i.e. for essentially the whole day, on a number that was
+ * perfectly current. That is not a late reading; it is the wrong question. And
+ * the opposite error is worse: a "CANLI" borrowed from the 15-minute FX cell
+ * would tell a reader that a settled close is a live price.
+ *
+ * So the two cadences speak different languages. This one names the cadence
+ * and then says how many days old the close is -- the unit the series actually
+ * moves in.
+ */
+export function dailyCloseBadge(
+  asOf: string | null | undefined,
+  now: Date | null,
+): string {
+  if (!asOf) return "VERİ YOK";
+  const then = new Date(asOf);
+  if (Number.isNaN(then.getTime())) return "VERİ YOK";
+  // No clock yet: the cadence is a fact about the SERIES and is safe to state;
+  // the age is a comparison and has to wait (see hooks/use-now.ts).
+  if (now === null) return DAILY_CLOSE_LABEL_TR;
+  const days = utcDaysBetween(then, now);
+  // A close stamped ahead of the reader's clock says nothing about age -- and
+  // guessing "bugün" for it would be inventing the one thing this label exists
+  // to report.
+  if (days < 0) return DAILY_CLOSE_LABEL_TR;
+  if (days === 0) return `${DAILY_CLOSE_LABEL_TR} · bugün`;
+  if (days === 1) return `${DAILY_CLOSE_LABEL_TR} · dün`;
+  return `${DAILY_CLOSE_LABEL_TR} · ${days} gün önce`;
 }
 
 /* --- Sector chart ------------------------------------------------------- */

@@ -9,7 +9,7 @@ import { useDataSource } from "@/hooks/use-data-source";
 import { apiFetch } from "@/lib/api";
 import { baseOption, lineGlow, useChartTheme, valueAxis, withAlpha } from "@/lib/chart-theme";
 import { forecastBuckets, MEDIAN_MIN_INSTITUTIONS } from "@/lib/cockpit";
-import { formatRate } from "@/lib/format";
+import { formatDateTr, formatRate } from "@/lib/format";
 import type { FxForecastOut, KpiDetailOut } from "@/lib/types";
 
 /** Turkish short month names for the time axis. `toLocaleDateString("tr-TR")`
@@ -45,14 +45,11 @@ const PAIR_METRIC_KEYS: Record<string, string> = {
   "USD/CNY": "fx_usd_cny",
 };
 
-const DATE_FORMAT: Intl.DateTimeFormatOptions = {
-  day: "numeric",
-  month: "short",
-  year: "numeric",
-};
-
+/** Tooltip dates, pinned to the same zone `charts/kpi-detail-chart.tsx` is --
+ * a target date and a publication date that shift with the reader's runtime are
+ * not facts about what an institution published. */
 function trDate(iso: string): string {
-  return new Date(iso).toLocaleDateString("tr-TR", DATE_FORMAT);
+  return formatDateTr(iso) ?? iso;
 }
 
 /**
