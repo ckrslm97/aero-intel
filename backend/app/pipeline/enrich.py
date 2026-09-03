@@ -129,6 +129,7 @@ async def _classify_risk(engine, title: str, content: str, entities) -> dict[str
         detect_aviation_relevance,
         detect_currency_flags,
         resolve_risk_location,
+        risk_veto,
     )
 
     result: dict[str, object | None] | None = None
@@ -145,6 +146,26 @@ async def _classify_risk(engine, title: str, content: str, entities) -> dict[str
 
     risk_type = result.get("risk_type")
     if not is_valid_risk_type(risk_type):
+        return dict(_NO_RISK)
+
+    # THE FALSE-POSITIVE GUARDS, APPLIED TO WHICHEVER PATH ANSWERED.
+    #
+    # Everything above this line prefers the model, and until now that meant
+    # the model's answer reached the database unexamined: the metaphor mask,
+    # the weather-named-aircraft discount and the retrospective rule all live
+    # inside detect_risk_type, which only runs when the model declines. The 14
+    # regression cases in test_risk_radar.py were therefore guarding the path
+    # production does NOT take -- "RAF Typhoons scrambled" is pinned as a false
+    # positive in CI and could still be published as a `storm` live.
+    #
+    # risk_veto returns a reason only when the article's own vocabulary carries
+    # the evidence that the label is wrong, and returns None when the keyword
+    # pass simply found nothing (see its section header: silence in an
+    # English/Turkish keyword list is not evidence about a Spanish article).
+    # So this narrows the model, it does not replace it.
+    veto = risk_veto(title, content)
+    if veto is not None:
+        logger.info("risk_classification_vetoed", reason=veto, risk_type=risk_type)
         return dict(_NO_RISK)
 
     # The model may name a place the gazetteer never would; keep it, but fall

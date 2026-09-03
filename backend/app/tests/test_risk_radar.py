@@ -2063,8 +2063,14 @@ async def test_the_funnel_report_counts_every_stage_and_why_each_gate_passed(db_
 
     report = await risk_quality_report(db_session, days=14)
     assert report.total_articles == 5
+    # `risk_adayi` is measured BEFORE the currency gate, so all five count
+    # here: from that stage down every number is over risk candidates only,
+    # which is what makes the rejection list exactly the union of the stages'
+    # drops rather than a subset of it.
+    assert report.risk_candidates == 5
+    assert report.in_window == 5
+    assert report.unique == 5
     assert report.current == 4
-    assert report.risk_candidates == 4
     assert report.confidence_passed == 3
     assert report.aviation_passed == 2
     assert report.location_passed == 1
@@ -2076,7 +2082,7 @@ async def test_the_funnel_report_counts_every_stage_and_why_each_gate_passed(db_
 
     rendered = render_report_tr(report)
     assert "Risk Radarı veri kalitesi hunisi" in rendered
-    assert "Konumu doğrulanan" in rendered
+    assert "Konum doğrulandı" in rendered
 
 
 async def test_the_funnel_report_clusters_articles_that_have_entity_links(db_session):
@@ -2189,3 +2195,268 @@ async def test_a_non_risk_article_clears_every_verification_column():
     )
     assert result == _NO_RISK
     assert set(result.values()) == {None}
+
+
+# ==========================================================================
+# The verification surface: GET /risks/quality and GET /risks/rejected
+# (spec §23-24). The 30-case round itself lives in
+# app/tests/test_risk_verification_cases.py.
+# ==========================================================================
+
+
+async def test_the_funnel_arithmetic_closes_at_every_stage(db_session):
+    """passed + dropped == the stage above's passed, all the way down.
+
+    The one property that makes the funnel a measurement rather than a picture.
+    A reader who cannot subtract their way from "toplam makale" to "sinyal" has
+    no way to tell a gate that removed forty rows from a query that never
+    returned them, which is the exact confusion this screen exists to end.
+    """
+    from app.services.risk_quality import risk_quality_report
+
+    source = await _source(db_session, "Arithmetic")
+    await _risk_article(
+        db_session, source, url="https://a.com/keep", risk_type="volcano",
+        severity="high", country="Italy", aviation_relevance_score=0.9,
+        location_confidence=0.9,
+    )
+    await _risk_article(
+        db_session, source, url="https://a.com/stale", risk_type="flood",
+        severity="low", country="France", is_current_event=False,
+    )
+    await _risk_article(
+        db_session, source, url="https://a.com/weak", risk_type="storm",
+        severity="low", country="Japan", confidence_score=0.55,
+    )
+    await _risk_article(
+        db_session, source, url="https://a.com/old", risk_type="earthquake",
+        severity="high", country="Chile", days_ago=40,
+    )
+    duplicate = await _risk_article(
+        db_session, source, url="https://a.com/dup", risk_type="volcano",
+        severity="high", country="Italy",
+    )
+    duplicate.is_duplicate = True
+    # A non-risk article, so `toplam` is genuinely larger than `risk_adayi`.
+    plain = Article(
+        source_id=source.id, url="https://a.com/plain", title="Route news",
+        raw_content="body", published_at=NOW - timedelta(days=1),
+        fetched_at=NOW - timedelta(days=1), content_hash="plain", status="enriched",
+    )
+    db_session.add(plain)
+    await db_session.flush()
+    db_session.add(ArticleEnrichment(article_id=plain.id, headline="Route news"))
+    await db_session.commit()
+
+    report = await risk_quality_report(db_session, days=5)
+    stages = report.stages
+    assert [s.key for s in stages] == [
+        "toplam", "risk_adayi", "pencere", "tekil", "guncel",
+        "guven", "havacilik", "konum", "kume",
+    ]
+    for previous, stage in zip(stages, stages[1:]):
+        assert stage.passed + stage.dropped == previous.passed, (
+            f"stage {stage.key} does not close: {stage.passed} + {stage.dropped} "
+            f"!= {previous.passed} ({previous.key})"
+        )
+        assert stage.dropped >= 0
+
+    # And every rejecting stage's per-reason split adds up to its own drop.
+    # The location stage is the one that splits (unresolved vs conflict), and
+    # this is what stops a filter chip labelled "3 elendi · location_unresolved"
+    # from returning one row when a reader clicks it.
+    for stage in stages:
+        if stage.drop_kind != "rejected":
+            assert stage.reason_counts == {}
+            continue
+        assert sum(stage.reason_counts.values()) == stage.dropped, (
+            f"stage {stage.key} claims {stage.dropped} rejections but its "
+            f"reasons add up to {sum(stage.reason_counts.values())}"
+        )
+        # The same numbers as the flat tally, not a second count of them.
+        for slug, count in stage.reason_counts.items():
+            assert report.rejected_counts.get(slug, 0) == count
+
+
+async def test_the_merge_stage_is_never_reported_as_a_rejection(db_session):
+    """Clustering removes rows from the count and none of them from the radar.
+    Labelling that as a rejection would have the screen tell a reader their
+    event was thrown away when it is on the page under another headline."""
+    from app.services.risk_quality import risk_quality_report
+
+    source = await _source(db_session, "Merge")
+    italy = await _entity(db_session, "country", "Italy")
+    for i in range(3):
+        await _risk_article(
+            db_session, source, url=f"https://m.com/{i}",
+            title="Etna eruption closes Catania Airport as 700 flights are cancelled",
+            risk_type="volcano", severity="high", country="Italy", city="Catania",
+            entities=(italy,),
+        )
+    await db_session.commit()
+
+    report = await risk_quality_report(db_session, days=14)
+    merge = next(s for s in report.stages if s.key == "kume")
+    assert merge.passed == 1
+    assert merge.dropped == 2
+    assert merge.drop_kind == "merged"
+    assert merge.reason is None
+    assert merge.reason_counts == {}
+    assert "BİRLEŞME" in (merge.note_tr or "")
+
+
+async def test_the_quality_endpoint_serves_the_funnel_and_the_reason_labels(db_session):
+    from fastapi import Response
+
+    from app.api.v1.risks import risk_quality
+
+    source = await _source(db_session, "QualityApi")
+    await _risk_article(
+        db_session, source, url="https://q.com/keep", risk_type="volcano",
+        severity="high", country="Italy",
+    )
+    await _risk_article(
+        db_session, source, url="https://q.com/irrelevant", risk_type="earthquake",
+        severity="high", country="Chile", aviation_relevance_score=0.1,
+    )
+    await db_session.commit()
+
+    out = await risk_quality(days=14, response=Response(), db=db_session)
+    assert [s.key for s in out.stages][0] == "toplam"
+    assert out.rejected_counts["aviation_relevance_low"] == 1
+    # Every reason a stage can carry has a Turkish label, or the screen renders
+    # a slug at a reader.
+    for stage in out.stages:
+        if stage.reason:
+            assert out.reason_labels_tr[stage.reason]
+    assert out.aviation_unscored == 1
+
+
+async def test_the_rejected_endpoint_filters_by_reason_and_carries_the_evidence(db_session):
+    from fastapi import Response
+
+    from app.api.v1.risks import risk_rejected
+
+    source = await _source(db_session, "RejectedApi")
+    await _risk_article(
+        db_session, source, url="https://r.com/irrelevant", risk_type="earthquake",
+        severity="high", country="Chile", aviation_relevance_score=0.1,
+        aviation_relevance_source="llm", location_confidence=0.9,
+    )
+    await _risk_article(
+        db_session, source, url="https://r.com/stale", risk_type="flood",
+        severity="low", country="France", is_current_event=False,
+    )
+    await db_session.commit()
+
+    everything = await risk_rejected(
+        days=14, limit=50, reason=None, response=Response(), db=db_session
+    )
+    assert {row.reason for row in everything} == {
+        "aviation_relevance_low",
+        "not_current_event",
+    }
+
+    only_aviation = await risk_rejected(
+        days=14, limit=50, reason="aviation_relevance_low", response=Response(), db=db_session
+    )
+    assert len(only_aviation) == 1
+    row = only_aviation[0]
+    assert row.aviation_relevance_score == 0.1
+    assert row.aviation_relevance_source == "llm"
+    assert row.detected_country == "Chile"
+    assert row.reason_label_tr == "Havacılıkla ilgisiz"
+
+
+async def test_a_rejected_row_names_every_other_gate_it_would_have_failed(db_session):
+    """`reason` is the FIRST gate that refused the row, which is an ordering
+    choice and not a claim the rest are fine. Without `also_failed` a reader
+    fixes one rule and the article stays hidden for a reason nothing told them
+    about."""
+    from fastapi import Response
+
+    from app.api.v1.risks import risk_rejected
+
+    source = await _source(db_session, "Cascade")
+    await _risk_article(
+        db_session, source, url="https://c.com/everything", risk_type="storm",
+        severity="low", country="Japan", is_current_event=False,
+        confidence_score=0.55, aviation_relevance_score=0.1, location_confidence=0.3,
+    )
+    await db_session.commit()
+
+    rows = await risk_rejected(
+        days=14, limit=50, reason=None, response=Response(), db=db_session
+    )
+    assert len(rows) == 1
+    assert rows[0].reason == "not_current_event"
+    assert rows[0].also_failed == [
+        "confidence_below_floor",
+        "aviation_relevance_low",
+        "location_unresolved",
+    ]
+
+
+async def test_an_unknown_reason_is_an_empty_list_not_an_error(db_session):
+    """The filter is a UI affordance over a set that grows as gates are added.
+    A screen that 422s because it remembered last week's slug is worse than one
+    that shows nothing."""
+    from fastapi import Response
+
+    from app.api.v1.risks import risk_rejected
+
+    source = await _source(db_session, "Unknown")
+    await _risk_article(
+        db_session, source, url="https://u.com/x", risk_type="volcano",
+        severity="high", country="Italy", is_current_event=False,
+    )
+    await db_session.commit()
+
+    assert await risk_rejected(
+        days=14, limit=50, reason="no_such_reason", response=Response(), db=db_session
+    ) == []
+
+
+async def test_an_empty_window_is_an_empty_funnel_not_a_missing_one(db_session):
+    """Nothing classified is a valid state and must render as zeroes with
+    labels, not as an absent section."""
+    from fastapi import Response
+
+    from app.api.v1.risks import risk_quality, risk_rejected
+
+    out = await risk_quality(days=5, response=Response(), db=db_session)
+    assert len(out.stages) == 9
+    assert all(stage.passed == 0 for stage in out.stages)
+    assert out.rejected_counts["outside_window"] == 0
+    assert await risk_rejected(
+        days=5, limit=50, reason=None, response=Response(), db=db_session
+    ) == []
+
+
+async def test_the_location_stage_splits_its_drop_into_both_reasons(db_session):
+    """The one stage that rejects for two different reasons, and the reason a
+    stage carries a per-reason tally at all.
+
+    Before it did, the funnel drew "3 elendi · location_unresolved" over a drop
+    that was one unresolved and two conflicts -- a filter chip that returns a
+    third of what its own label promises."""
+    from fastapi import Response
+
+    from app.api.v1.risks import risk_quality
+
+    source = await _source(db_session, "SplitLocation")
+    await _risk_article(
+        db_session, source, url="https://s.com/weak", risk_type="storm",
+        severity="low", country="Japan", location_confidence=0.4,
+    )
+    for i in range(2):
+        await _risk_article(
+            db_session, source, url=f"https://s.com/conflict{i}", risk_type="flood",
+            severity="low", country="Indonesia", location_confidence=0.5,
+        )
+    await db_session.commit()
+
+    out = await risk_quality(days=14, response=Response(), db=db_session)
+    stage = next(s for s in out.stages if s.key == "konum")
+    assert stage.dropped == 3
+    assert stage.reason_counts == {"location_unresolved": 1, "location_conflict": 2}

@@ -1080,3 +1080,191 @@ async def risk_trend(
     # the chart's job (it knows its own axis), and inventing rows here would
     # make an empty window look like 30 measured zeroes.
     return RiskTrendOut(days=days, points=points)
+
+
+# ===========================================================================
+# THE VERIFICATION SURFACE (spec §23-24)
+#
+# Everything above answers "what is on the radar". The two endpoints below
+# answer the two questions the radar itself cannot, and which an analyst has to
+# be able to answer before trusting any of it:
+#
+#   * "Why is this news NOT showing?"  -> GET /risks/rejected
+#   * "Is what I see six out of six, or six out of forty?" -> GET /risks/quality
+#
+# Both are strictly read-only and compute their answer from the same single
+# pass (app/services/risk_quality.py). Nothing is written down: the storage
+# decision and its cost are argued in that module's docstring.
+#
+# The import is deferred into the handlers because risk_quality imports the
+# gates from THIS module -- the dependency runs one way at module level and the
+# other way at call time, which is the smaller of the two evils compared with
+# moving four constants and two predicates into a third module nobody would
+# think to look in.
+# ===========================================================================
+
+
+class RiskFunnelStageOut(BaseModel):
+    """One line of the funnel."""
+
+    key: str
+    label_tr: str
+    passed: int
+    dropped: int
+    #: The rejection slug `dropped` rows carry, or None when the drop is not a
+    #: rejection. `GET /risks/rejected?reason=` takes exactly these values.
+    #: Only the FIRST when a stage carries several -- the location gate splits
+    #: into unresolved and conflict -- so a filter must be built from
+    #: `reason_counts`, never from this.
+    reason: str | None = None
+    #: reason -> how many of `dropped` carry it. Sums to `dropped`. Empty for a
+    #: stage whose drop is not a rejection.
+    reason_counts: dict[str, int] = {}
+    #: "rejected" | "merged" | None. A merged cluster is still on the radar and
+    #: a rejected article is not; the screen must never draw them alike.
+    drop_kind: str | None = None
+    note_tr: str | None = None
+
+
+class RiskRejectionOut(BaseModel):
+    """One risk candidate the page does not show, with the values the rule
+    actually read. A label without its inputs asks the reader to trust the
+    label, which is the failure this whole surface exists to fix."""
+
+    article_id: str
+    title: str
+    url: str
+    source_name: str
+    source_tier: str
+    published_at: datetime | None
+    reason: str
+    reason_label_tr: str
+    #: Every other gate this row would also have failed. Empty is the good
+    #: case: fix the one rule and the row appears.
+    also_failed: list[str] = []
+
+    risk_type: str | None = None
+    risk_severity: str | None = None
+    confidence_score: float | None = None
+    corroborating_source_count: int | None = None
+    aviation_relevance_score: float | None = None
+    aviation_relevance_source: str | None = None
+    location_confidence: float | None = None
+    #: What the resolver decided the event's place was, BEFORE the map gate
+    #: blanked it. GET /risks blanks a weak placement on purpose; this surface
+    #: is the one place the rejected answer has to remain visible, or a wrong
+    #: placement cannot be told from an absent one.
+    detected_country: str | None = None
+    detected_city: str | None = None
+    mentioned_locations: list[dict] = []
+
+
+class RiskQualityOut(BaseModel):
+    days: int
+    generated_at: datetime
+    since: datetime
+    stages: list[RiskFunnelStageOut]
+    #: Rejections per reason, UNCAPPED -- so a truncated list can still say how
+    #: much of the whole it is showing.
+    rejected_counts: dict[str, int]
+    reason_labels_tr: dict[str, str]
+    #: How much of each gate's yield is carried by rows nobody measured. A gate
+    #: passing everything unscored is a gate not yet doing anything, and the
+    #: screen has to be able to say so rather than flatter itself.
+    aviation_unscored: int
+    location_unscored: int
+    confidence_unscored: int
+    aviation_by_source: dict[str, int]
+
+
+def _rejection_out(row) -> "RiskRejectionOut":
+    from app.services.risk_quality import REJECTION_REASON_LABELS_TR
+
+    return RiskRejectionOut(
+        article_id=row.article_id,
+        title=row.title,
+        url=row.url,
+        source_name=row.source_name,
+        source_tier=row.source_tier,
+        published_at=row.published_at,
+        reason=row.reason,
+        reason_label_tr=REJECTION_REASON_LABELS_TR.get(row.reason, row.reason),
+        also_failed=list(row.also_failed),
+        risk_type=row.risk_type,
+        risk_severity=row.risk_severity,
+        confidence_score=row.confidence_score,
+        corroborating_source_count=row.corroborating_source_count,
+        aviation_relevance_score=row.aviation_relevance_score,
+        aviation_relevance_source=row.aviation_relevance_source,
+        location_confidence=row.location_confidence,
+        detected_country=row.detected_country,
+        detected_city=row.detected_city,
+        mentioned_locations=row.mentioned_locations,
+    )
+
+
+@router.get("/quality", response_model=RiskQualityOut)
+async def risk_quality(
+    days: int = Query(DEFAULT_WINDOW_DAYS, ge=1, le=90),
+    response: Response = None,  # type: ignore[assignment]
+    db: AsyncSession = Depends(get_db),
+) -> RiskQualityOut:
+    """The funnel behind GET /risks: what was found, and what each gate removed.
+
+    AGGREGATES, like every other rollup here: two counts and one pass over the
+    window's risk candidates, changing only when the enrichment cron
+    reclassifies something. Deliberately not `FRESH` -- this is a diagnostic
+    view, and a reader comparing it against the radar wants the same 5-minute
+    snapshot the radar is serving, not a newer one that disagrees with it.
+    """
+    public_cache(response, AGGREGATES)
+    from app.services.risk_quality import REJECTION_REASON_LABELS_TR, risk_quality_report
+
+    report = await risk_quality_report(db, days=days, with_rejections=False)
+    return RiskQualityOut(
+        days=days,
+        generated_at=report.generated_at,
+        since=report.since,
+        stages=[
+            RiskFunnelStageOut(
+                key=stage.key,
+                label_tr=stage.label_tr,
+                passed=stage.passed,
+                dropped=stage.dropped,
+                reason=stage.reason,
+                reason_counts=stage.reason_counts,
+                drop_kind=stage.drop_kind,
+                note_tr=stage.note_tr,
+            )
+            for stage in report.stages
+        ],
+        rejected_counts=report.rejected_counts,
+        reason_labels_tr=dict(REJECTION_REASON_LABELS_TR),
+        aviation_unscored=report.aviation_unscored,
+        location_unscored=report.location_unscored,
+        confidence_unscored=report.confidence_unscored,
+        aviation_by_source=report.aviation_by_source,
+    )
+
+
+@router.get("/rejected", response_model=list[RiskRejectionOut])
+async def risk_rejected(
+    days: int = Query(DEFAULT_WINDOW_DAYS, ge=1, le=90),
+    limit: int = Query(50, ge=1, le=200),
+    reason: str | None = Query(None),
+    response: Response = None,  # type: ignore[assignment]
+    db: AsyncSession = Depends(get_db),
+) -> list[RiskRejectionOut]:
+    """The risk candidates the gates removed, newest first.
+
+    `reason` takes any slug from RiskFunnelStageOut.reason. An unknown one
+    returns an empty list rather than a 422: the filter is a UI affordance over
+    a set that changes as gates are added, and a screen that 422s because it
+    remembered last week's slug is worse than one that shows nothing and says
+    so.
+    """
+    public_cache(response, AGGREGATES)
+    from app.services.risk_quality import rejected_candidates
+
+    rows = await rejected_candidates(db, days=days, reason=reason, limit=limit)
+    return [_rejection_out(row) for row in rows]

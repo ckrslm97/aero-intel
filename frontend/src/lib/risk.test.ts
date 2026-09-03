@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { riskCountry, riskItem } from "@/lib/__fixtures__/risk";
+import { riskCountry, riskFunnel, riskItem, riskQuality } from "@/lib/__fixtures__/risk";
 import {
   aviationLinkLabel,
+  buildRiskFunnel,
   buildRiskTrendSeries,
   confidenceBand,
   coverageBadge,
@@ -11,8 +12,11 @@ import {
   headlinePresentation,
   liveFeedItems,
   partitionByVisibility,
+  rejectionFilterOptions,
+  rejectionPlaceLabel,
   riskSourceTierLabel,
   riskTypeBreakdown,
+  scoreOrUnscored,
   staleBadge,
   UNKNOWN_COUNTRY,
 } from "@/lib/risk";
@@ -368,5 +372,144 @@ describe("buildRiskTrendSeries", () => {
       today,
     );
     expect(series.natural).toEqual([0, 0]);
+  });
+});
+
+describe("buildRiskFunnel", () => {
+  const stages = riskFunnel([
+    { key: "toplam", label: "Toplam makale", passed: 1000 },
+    { key: "risk_adayi", label: "Risk adayı", passed: 100, dropKind: null },
+    { key: "guven", label: "Güven kapısı", passed: 50, reason: "confidence_below_floor" },
+  ]);
+
+  it("scales every bar against the FIRST stage, not the previous one", () => {
+    // A bar scaled to its predecessor makes every stage look like it kept most
+    // of what reached it -- which is exactly the impression the funnel exists
+    // to correct when 13.906 articles become 9 signals.
+    const bars = buildRiskFunnel(stages);
+    expect(bars.map((b) => Math.round(b.widthPct))).toEqual([100, 10, 5]);
+  });
+
+  it("reports what share of the stage above survived, separately from the width", () => {
+    const bars = buildRiskFunnel(stages);
+    expect(bars[0].keptPct).toBeNull(); // nothing above the first stage
+    expect(bars[1].keptPct).toBe(10);
+    expect(bars[2].keptPct).toBe(50);
+  });
+
+  it("gives a non-zero stage a visible sliver and a zero stage nothing", () => {
+    const bars = buildRiskFunnel(
+      riskFunnel([
+        { key: "toplam", label: "Toplam", passed: 100000 },
+        { key: "kalan", label: "Kalan", passed: 1 },
+        { key: "hic", label: "Hiç", passed: 0 },
+      ]),
+    );
+    expect(bars[1].widthPct).toBeGreaterThan(0);
+    expect(bars[2].widthPct).toBe(0);
+  });
+
+  it("survives an entirely empty window without dividing by zero", () => {
+    const bars = buildRiskFunnel(
+      riskFunnel([
+        { key: "toplam", label: "Toplam", passed: 0 },
+        { key: "risk_adayi", label: "Risk adayı", passed: 0, dropKind: null },
+      ]),
+    );
+    expect(bars.map((b) => b.widthPct)).toEqual([0, 0]);
+    expect(bars[1].keptPct).toBeNull();
+  });
+});
+
+describe("rejectionFilterOptions", () => {
+  it("orders the reasons the way the rules run, not the way the counts sort", () => {
+    // A filter whose options come and go with the data cannot be learned.
+    const quality = riskQuality(
+      riskFunnel([
+        { key: "toplam", label: "Toplam makale", passed: 100 },
+        { key: "risk_adayi", label: "Risk adayı", passed: 40, dropKind: null },
+        { key: "pencere", label: "Pencere içinde", passed: 30, reason: "outside_window" },
+        { key: "guncel", label: "Güncel olay", passed: 20, reason: "not_current_event" },
+        { key: "guven", label: "Güven kapısı", passed: 5, reason: "confidence_below_floor" },
+      ]),
+    );
+    expect(rejectionFilterOptions(quality).map((o) => o.reason)).toEqual([
+      "outside_window",
+      "not_current_event",
+      "confidence_below_floor",
+    ]);
+  });
+
+  it("keeps a reason with zero rejections rather than dropping the chip", () => {
+    const quality = riskQuality(
+      riskFunnel([
+        { key: "toplam", label: "Toplam makale", passed: 10 },
+        { key: "guncel", label: "Güncel olay", passed: 10, reason: "not_current_event" },
+      ]),
+    );
+    const option = rejectionFilterOptions(quality).find(
+      (o) => o.reason === "not_current_event",
+    );
+    expect(option?.count).toBe(0);
+  });
+
+  it("reaches a reason that only exists in the counts, never in a stage", () => {
+    // The location stage carries one of its two reasons; leaving the other out
+    // would make a whole class of rejection unreachable from the filter.
+    const quality = riskQuality(
+      riskFunnel([
+        { key: "toplam", label: "Toplam makale", passed: 10 },
+        { key: "konum", label: "Konum doğrulandı", passed: 8, reason: "location_unresolved" },
+      ]),
+      { rejected_counts: { location_unresolved: 1, location_conflict: 1 } },
+    );
+    const reasons = rejectionFilterOptions(quality).map((o) => o.reason);
+    expect(reasons).toContain("location_conflict");
+  });
+
+  it("labels a reason the backend sent no Turkish for with its own slug", () => {
+    const quality = riskQuality(
+      riskFunnel([
+        { key: "toplam", label: "Toplam makale", passed: 10 },
+        { key: "yeni", label: "Yeni kapı", passed: 9, reason: "brand_new_gate" },
+      ]),
+    );
+    const option = rejectionFilterOptions(quality).find((o) => o.reason === "brand_new_gate");
+    expect(option?.label).toBe("brand_new_gate");
+  });
+});
+
+describe("rejectionPlaceLabel and scoreOrUnscored", () => {
+  it("never renders a place without saying what it is worth", () => {
+    expect(
+      rejectionPlaceLabel({
+        detected_country: "Japan",
+        detected_city: "Tokyo",
+        location_confidence: 0.9,
+      }),
+    ).toBe("Tokyo, Japan (0.90)");
+  });
+
+  it("distinguishes an unmeasured placement from a weak one", () => {
+    expect(
+      rejectionPlaceLabel({
+        detected_country: "Japan",
+        detected_city: null,
+        location_confidence: null,
+      }),
+    ).toBe("Japan (ölçülmedi)");
+    expect(
+      rejectionPlaceLabel({
+        detected_country: null,
+        detected_city: null,
+        location_confidence: null,
+      }),
+    ).toBe("Konum çözülemedi");
+  });
+
+  it("renders a null score as a word and a real zero as a number", () => {
+    expect(scoreOrUnscored(null)).toBe("ölçülmedi");
+    expect(scoreOrUnscored(undefined)).toBe("ölçülmedi");
+    expect(scoreOrUnscored(0)).toBe("0.00");
   });
 });

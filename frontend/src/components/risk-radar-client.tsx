@@ -2,6 +2,7 @@
 
 import { Search, X } from "lucide-react";
 import dynamic from "next/dynamic";
+import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
 
@@ -247,13 +248,27 @@ export function RiskRadarClient() {
           </div>
           <div className="flex shrink-0 flex-col items-end gap-1">
             <LastUpdatedStamp date={generatedAt} />
-            <button
-              type="button"
-              onClick={radar.retry}
-              className="text-[11px] font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-            >
-              Yenile
-            </button>
+            <span className="flex items-center gap-2">
+              {/* The audit view lives on its own route and is reached from
+                  here rather than rendered here: this page is read by someone
+                  deciding something, and a nine-stage funnel plus an
+                  eight-column rejection table would cost every reader
+                  attention to serve the few who came to check the pipeline.
+                  One quiet link is the whole footprint it gets. */}
+              <Link
+                href="/risk-radari/dogrulama"
+                className="text-[11px] font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+              >
+                Veri doğrulama
+              </Link>
+              <button
+                type="button"
+                onClick={radar.retry}
+                className="text-[11px] font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+              >
+                Yenile
+              </button>
+            </span>
           </div>
         </div>
 
