@@ -141,6 +141,17 @@ async def _translate_backlog(limit: int) -> None:
         print(f"Translated {translated} previously-untranslated articles")
 
 
+async def _clean_content() -> None:
+    from app.pipeline.enrich import clean_stored_content
+
+    async with AsyncSessionLocal() as db:
+        stats = await clean_stored_content(db)
+        print(
+            f"Cleaned {stats['cleaned']} of {stats['scanned']} articles: "
+            f"{stats['removed_chars']} characters of feed furniture removed"
+        )
+
+
 async def _backfill_risks(limit: int | None) -> None:
     from app.pipeline.enrich import backfill_risk_classification
 
@@ -894,6 +905,7 @@ def main() -> None:
             "build-insight",
             "repair-translations",
             "clean-headlines",
+            "clean-content",
             "translate-backlog",
             "select-critical",
             "build-edition",
@@ -1033,6 +1045,8 @@ def main() -> None:
         asyncio.run(_repair_translations())
     elif args.command == "clean-headlines":
         asyncio.run(_clean_headlines())
+    elif args.command == "clean-content":
+        asyncio.run(_clean_content())
     elif args.command == "select-critical":
         # No --limit means the per-category quotas are the only ceiling,
         # which is the intended steady state; --limit is the hard cap for

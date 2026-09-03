@@ -1031,6 +1031,48 @@ async def clean_stored_headlines(db: AsyncSession, batch_size: int = 200) -> dic
     return {"cleaned": cleaned, "scanned": len(articles)}
 
 
+async def clean_stored_content(db: AsyncSession, batch_size: int = 200) -> dict[str, int]:
+    """Strip feed furniture out of `raw_content` already in the archive.
+
+    The structural fix lives at ingest (app/ingest/boilerplate.py), where the
+    rail is still an <aside> and can be removed without guessing. It cannot
+    reach what is already stored: the HTML is long gone and feeds only carry
+    their newest items, so re-fetching the archive is not on the table.
+
+    What survives in the flattened text is the WordPress footer sentence and,
+    at the very end, the rail marker -- and only those two are touched here.
+    A rail spliced between two paragraphs keeps no boundary a regex could find,
+    and inventing one would delete reporting (measured: up to 65% of a body),
+    so those rows stay as they are until the item is ingested again.
+
+    Commits per batch, for the same reason clean_stored_headlines does: one
+    end-of-run commit over a pooled remote database has lost whole runs to
+    idle timeouts here before.
+    """
+    from app.ingest.boilerplate import strip_boilerplate_text
+
+    result = await db.execute(select(Article).where(Article.raw_content.is_not(None)))
+    articles = list(result.scalars().all())
+
+    cleaned = 0
+    removed_chars = 0
+    for index, article in enumerate(articles, start=1):
+        original = article.raw_content or ""
+        stripped = strip_boilerplate_text(original)
+        if stripped != original:
+            article.raw_content = stripped
+            cleaned += 1
+            removed_chars += len(original) - len(stripped)
+        if index % batch_size == 0:
+            await db.commit()
+
+    await db.commit()
+    logger.info(
+        "content_cleaned", cleaned=cleaned, scanned=len(articles), removed=removed_chars
+    )
+    return {"cleaned": cleaned, "scanned": len(articles), "removed_chars": removed_chars}
+
+
 async def backfill_risk_classification(
     db: AsyncSession, limit: int | None = None, batch_size: int = 100
 ) -> dict[str, int]:

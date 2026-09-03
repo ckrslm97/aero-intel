@@ -12,6 +12,7 @@ from bs4 import BeautifulSoup
 from app.core.logging import get_logger
 from app.ingest.base import FetchHealth, RawArticle
 from app.ingest.blacklist import blacklisted_domain
+from app.ingest.boilerplate import strip_boilerplate_html, strip_boilerplate_text
 
 logger = get_logger(__name__)
 
@@ -43,10 +44,16 @@ def _strip_html(raw_html: str) -> str:
     for _ in range(_MAX_UNESCAPE_PASSES):
         if not text:
             return ""
-        text = BeautifulSoup(text, "lxml").get_text(separator=" ", strip=True)
+        # Structure first, text second. The related-articles rail and the photo
+        # credit are separate ELEMENTS in the feed's HTML and unambiguous while
+        # they still are; once get_text() has flattened them into the prose
+        # there is no seam left to find. See app/ingest/boilerplate.py.
+        text = BeautifulSoup(strip_boilerplate_html(text), "lxml").get_text(
+            separator=" ", strip=True
+        )
         if not _LOOKS_LIKE_MARKUP.search(text):
             break
-    return text
+    return strip_boilerplate_text(text)
 
 
 def _entry_content(entry: feedparser.FeedParserDict) -> str:
