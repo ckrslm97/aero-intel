@@ -22,6 +22,7 @@ from app.llm.heuristic import (
     LOCATION_CONFIDENCE_CITY_CONFIRMED,
     LOCATION_CONFIDENCE_CONFLICT,
     LOCATION_CONFIDENCE_SOURCE_ONLY,
+    RISK_VETO_AIRCRAFT_OCCURRENCE,
     _RISK_CONTEXT,
     _RISK_RULES,
     _keyword_pattern,
@@ -31,9 +32,11 @@ from app.llm.heuristic import (
     detect_risk_place,
     detect_risk_severity,
     detect_risk_type,
+    extract_entity_mentions,
     fold_text,
     is_retrospective,
     resolve_risk_location,
+    risk_veto,
 )
 from app.models.article import Article, ArticleEnrichment
 from app.models.entity import ArticleEntity, Entity
@@ -2621,3 +2624,103 @@ def test_the_earthquake_region_is_a_place_and_a_quake_in_it_is_still_an_event():
         )
         == "earthquake"
     )
+
+
+def test_a_runway_excursion_in_bad_weather_is_not_a_natural_hazard():
+    """The production case this guard was written for.
+
+    "heavy rain" is a weak `flood` keyword, and the model read it as the event.
+    It is the conditions: the event is the aircraft leaving the runway, which
+    belongs to the safety feed and not to a map of hazards threatening the
+    network. The veto is asserted rather than the classifier, because the
+    classifier here was the LLM -- risk_veto is what stands between whoever
+    produced a label and the radar.
+    """
+    title = "LATAM Airbus A320 runs off runway during landing in heavy rain in Brazil"
+    content = (
+        "A LATAM Airlines Brasil Airbus A320 carrying 151 people ran off the "
+        "runway while landing in heavy rain at Cascavel Airport in southern "
+        "Brazil. Passengers were evacuated and rescue crews reached the aircraft."
+    )
+    assert risk_veto(title, content) == RISK_VETO_AIRCRAFT_OCCURRENCE
+
+
+@pytest.mark.parametrize(
+    ("title", "content", "expected"),
+    [
+        pytest.param(
+            "Plane skids off the runway as typhoon closes Manila airport",
+            "Typhoon Noul made landfall; the airport suspended operations and "
+            "thousands were evacuated.",
+            "storm",
+            id="typhoon_named_in_the_headline",
+        ),
+        pytest.param(
+            "Volcanic ash forces hard landing at Catania",
+            "Mount Etna erupted, sending an ash cloud over Sicily; flights were "
+            "suspended and passengers evacuated.",
+            "volcano",
+            id="eruption_named_in_the_headline",
+        ),
+    ],
+)
+def test_the_aircraft_guard_stands_down_when_a_real_hazard_is_named(title, content, expected):
+    """Half of this guard is the condition that switches it off. A hazard
+    strong enough to name itself in the headline keeps its classification even
+    though the same headline describes what happened to the aircraft --
+    otherwise the guard would delete exactly the stories the radar exists for."""
+    assert risk_veto(title, content) is None
+    assert detect_risk_type(title, content) == expected
+
+
+def test_an_ambiguous_country_is_reachable_through_its_demonym():
+    """Bare "Jordan" stays excluded -- it is a given name -- but "Jordanian" is
+    only ever the country. Before this, "EASA eases Jordan warning on day
+    military intercepts eight missiles" was published under LEBANON: Lebanon
+    was the only country in the article the gazetteer was allowed to name.
+
+    The wording follows the article: Jordan is named first and neither country
+    carries a locative marker, so document order decides -- which is the
+    resolver's documented fallback and is correct here.
+    """
+    title = "EASA eases Jordan warning on day military intercepts eight missiles"
+    content = (
+        "The European Union Aviation Safety Agency eased its airspace warnings "
+        "for Jordan and Lebanon, the same day Jordan's military said air "
+        "defences intercepted eight missiles over the kingdom. Jordanian "
+        "authorities have published no conflict-related airspace restrictions."
+    )
+    resolved = resolve_risk_location(title, content, extract_entity_mentions(title, content))
+    assert resolved.country == "Jordan"
+
+    # And the reason the bare name is excluded still holds.
+    basketball = extract_entity_mentions(
+        "Michael Jordan invests in a private jet operator",
+        "The former Chicago Bulls guard took a stake in the charter company.",
+    )
+    assert not [e for e in basketball if e.entity_type == "country"]
+
+
+def test_the_country_tie_break_follows_the_article_not_the_alias_table():
+    """Two event-role countries, no locative marker between them: the winner
+    must change when the article's wording changes and nothing else does.
+
+    Written as a pair because a single assertion here proves nothing -- the old
+    behaviour returned a stable answer too, it just wasn't reading the article
+    to get it.
+    """
+
+    def resolve(text: str) -> str | None:
+        title = "Airspace warnings eased after missiles intercepted"
+        return resolve_risk_location(title, text, extract_entity_mentions(title, text)).country
+
+    jordan_first = (
+        "Regulators eased warnings for Jordan and Lebanon. Jordanian and "
+        "Lebanese officials confirmed the change."
+    )
+    lebanon_first = (
+        "Regulators eased warnings for Lebanon and Jordan. Lebanese and "
+        "Jordanian officials confirmed the change."
+    )
+    assert resolve(jordan_first) == "Jordan"
+    assert resolve(lebanon_first) == "Lebanon"
