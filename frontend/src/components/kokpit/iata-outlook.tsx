@@ -1,4 +1,4 @@
-import { ExternalLink } from "lucide-react";
+import { ExternalLink, TriangleAlert } from "lucide-react";
 
 import { AnnualTrendChart } from "@/components/kokpit/annual-trend-chart-lazy";
 import { ANNUAL_KIND_LABELS_TR, ANNUAL_KIND_SUFFIX } from "@/lib/cockpit";
@@ -177,13 +177,30 @@ function MetricTile({ row }: { row: IataIndicatorOut }) {
  * all rows and `curated_seed.py` never sets it, so a GLOBAL/EUROPE/ASIA switch
  * would offer five choices that all return nothing -- which reads as a broken
  * product, not as absent data. The section byline says it in words.
+ *
+ * TWO SOURCES, TWO UNAVAILABILITY FLAGS. `/kokpit/annual-series` and
+ * `/kokpit/iata` fail independently, and each failure arrives here as the same
+ * empty prop a genuinely empty database would produce. Without the flags this
+ * panel answered an outage with "IATA gelir serisi yüklenmedi" and "Kâr
+ * göstergeleri henüz seed edilmedi" -- statements about what has been SEEDED,
+ * which a reader can act on and which are simply false when the request never
+ * returned. Same shape as `KpiStrip`'s `unavailable` and `SectorBalance`'s
+ * `reason`, for the same reason.
  */
 export function IataOutlook({
   series,
+  /** The annual-series endpoint did not answer, as opposed to answering with
+   * an empty series. */
+  seriesUnavailable = false,
   indicators,
+  /** The indicators endpoint did not answer, as opposed to answering with no
+   * profit rows. */
+  indicatorsUnavailable = false,
 }: {
   series: AnnualSeries[];
+  seriesUnavailable?: boolean;
   indicators: IataIndicatorOut[];
+  indicatorsUnavailable?: boolean;
 }) {
   const byMetric = new Map(indicators.map((row) => [row.metric, row]));
   const levels = METRICS.map((metric) => byMetric.get(metric)).filter(
@@ -206,6 +223,11 @@ export function IataOutlook({
           >
             <AnnualTrendChart series={series} />
           </div>
+        ) : seriesUnavailable ? (
+          <p className="flex h-[240px] flex-wrap items-center justify-center gap-1.5 rounded-lg border border-dashed border-warning/40 bg-warning/5 p-4 text-center text-xs text-warning">
+            <TriangleAlert className="size-4 shrink-0" aria-hidden />
+            IATA gelir serisi okunamadı; seri olmadığı anlamına gelmez.
+          </p>
         ) : (
           <p className="flex h-[240px] items-center justify-center rounded-lg border border-dashed border-border p-4 text-center text-xs text-muted-foreground">
             IATA gelir serisi yüklenmedi.
@@ -227,11 +249,17 @@ export function IataOutlook({
         </div>
       )}
 
-      {tileCount === 0 && (
-        <p className="rounded-lg border border-dashed border-border px-3 py-2 text-xs text-muted-foreground xl:col-span-12">
-          Kâr göstergeleri henüz seed edilmedi.
-        </p>
-      )}
+      {tileCount === 0 &&
+        (indicatorsUnavailable ? (
+          <p className="flex flex-wrap items-center gap-1.5 rounded-lg border border-dashed border-warning/40 bg-warning/5 px-3 py-2 text-xs text-warning xl:col-span-12">
+            <TriangleAlert className="size-3.5 shrink-0" aria-hidden />
+            Kâr göstergeleri okunamadı; seed edilmedikleri anlamına gelmez.
+          </p>
+        ) : (
+          <p className="rounded-lg border border-dashed border-border px-3 py-2 text-xs text-muted-foreground xl:col-span-12">
+            Kâr göstergeleri henüz seed edilmedi.
+          </p>
+        ))}
     </div>
   );
 }

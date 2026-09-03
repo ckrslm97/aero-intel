@@ -246,4 +246,52 @@ describe("RiskVerificationClient", () => {
     );
     expect(currentParams().get("reason")).toBe("not_current_event");
   });
+  // --- A FAILED REQUEST IS NOT AN ANSWER TO THE NEW QUESTION ---------------
+
+  it("does not leave the previous reason's rows under the newly lit chip", async () => {
+    serve([stale, irrelevant]);
+    render(<RiskVerificationClient />);
+    await screen.findByText(/Southend Airport crash tragedy/);
+
+    // The funnel keeps answering; only the table's endpoint goes down, which
+    // is the normal shape of this outage.
+    apiFetch.mockImplementation((path: string) =>
+      path.startsWith("/risks/quality")
+        ? Promise.resolve(riskQuality(STAGES))
+        : Promise.reject(new Error("okunamadı")),
+    );
+    await userEvent.click(screen.getByRole("button", { name: /Havacılıkla ilgisiz/ }));
+
+    // "Okunamadı" with a retry. NOT the rows fetched for "Güncel olay değil",
+    // which are a true list for a question the reader has stopped asking, and
+    // NOT "bu sebeple elenen aday yok", which would report a measurement that
+    // was never taken.
+    expect(await screen.findByText("Veri geçici olarak kullanılamıyor.")).toBeInTheDocument();
+    expect(screen.queryByText(/Southend Airport crash tragedy/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/elenen aday yok/)).not.toBeInTheDocument();
+    // Nor a stale badge: there is no old reading of THIS filter to be stale.
+    expect(screen.queryByText(/Güncellenemedi/)).not.toBeInTheDocument();
+  });
+
+  it("stamps a stale table with the table's own last success, not the funnel's", async () => {
+    serve([stale, irrelevant]);
+    render(<RiskVerificationClient />);
+    await screen.findByText(/Southend Airport crash tragedy/);
+
+    apiFetch.mockImplementation((path: string) =>
+      path.startsWith("/risks/quality")
+        ? Promise.resolve(riskQuality(STAGES))
+        : Promise.reject(new Error("okunamadı")),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Yenile" }));
+
+    // Same filter, so the rows on screen are still an answer -- they stay,
+    // marked stale.
+    expect(await screen.findByText(/Güncellenemedi/)).toBeInTheDocument();
+    expect(screen.getByText(/Southend Airport crash tragedy/)).toBeInTheDocument();
+    // But the funnel's 09:00 stamp (its `generated_at`, still refreshing fine)
+    // is not what this source last succeeded at, and one banner carrying the
+    // other endpoint's time is the wrong-window claim in miniature.
+    expect(screen.queryByText(/son başarılı: 09:00 UTC/)).not.toBeInTheDocument();
+  });
 });

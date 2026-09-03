@@ -53,7 +53,14 @@ export interface BalanceRow {
  * Computed here, in the client, from a prop the page already fetched. No new
  * request.
  */
-export function buildBalanceRows(annual: AnnualSeriesBoardOut | null): BalanceRow[] {
+export function buildBalanceRows(
+  annual: AnnualSeriesBoardOut | null,
+  /** `/kokpit/annual-series` did not answer. Distinct from it answering with
+   * no RASK/CASK: the row's `title` is the reader's only explanation for the
+   * dash, and an outage explained as "these two series share no year" is a
+   * confident, checkable, wrong statement about the data. */
+  unavailable = false,
+): BalanceRow[] {
   const byKey = new Map((annual?.series ?? []).map((entry) => [entry.metric_key, entry]));
   const rask = byKey.get("rask");
   const cask = byKey.get("cask");
@@ -109,6 +116,21 @@ export function buildBalanceRows(annual: AnnualSeriesBoardOut | null): BalanceRo
     ];
   }
 
+  // Three ways to end up with a dash, three different sentences. They used to
+  // be one -- "RASK ve CASK'ın ortak bir yılı yok" -- printed over all of
+  // them, including the case where neither series had arrived at all. That is
+  // the failure mode this whole round is about: an outage rendered as a
+  // finding about the data, specific enough that a reader would believe it.
+  const reason = unavailable
+    ? "IATA yıllık serisi okunamadı; birim marj hesaplanamadı"
+    : !rask && !cask
+      ? "RASK ve CASK serileri bu yanıtta yok"
+      : !rask
+        ? "RASK serisi bu yanıtta yok"
+        : !cask
+          ? "CASK serisi bu yanıtta yok"
+          : "RASK ve CASK'ın ortak bir yılı yok";
+
   return [
     {
       key: "unit_margin",
@@ -117,15 +139,21 @@ export function buildBalanceRows(annual: AnnualSeriesBoardOut | null): BalanceRo
       unit: null,
       pct: null,
       chip: "IATA · yıllık",
-      title: "RASK ve CASK'ın ortak bir yılı yok",
+      title: reason,
     },
   ];
 }
 
 /** The margin cell, shaped like the five KPI cells it sits beside so the row
  * reads as one strip rather than as a strip plus a panel. */
-export function SectorBalance({ annual }: { annual: AnnualSeriesBoardOut | null }) {
-  const row = buildBalanceRows(annual)[0];
+export function SectorBalance({
+  annual,
+  unavailable = false,
+}: {
+  annual: AnnualSeriesBoardOut | null;
+  unavailable?: boolean;
+}) {
+  const row = buildBalanceRows(annual, unavailable)[0];
 
   return (
     <div

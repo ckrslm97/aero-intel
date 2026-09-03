@@ -46,12 +46,16 @@ describe("EventTimeline", () => {
     await waitFor(() => expect(container).toBeEmptyDOMElement());
   });
 
-  it("keeps the heading and says so when the request fails", async () => {
-    // "Nothing is coming" and "we could not ask" are different statements.
+  it("keeps the heading, says so, and offers a way back when the request fails", async () => {
+    // "Nothing is coming" and "we could not ask" are different statements --
+    // and only the second one can be re-asked, which is why the line carries a
+    // retry rather than leaving a page reload as the reader's only move.
     apiFetch.mockRejectedValue(new Error("boom"));
     render(<EventTimeline />);
 
-    expect(await screen.findByText(/yüklenemedi/)).toBeInTheDocument();
+    expect(await screen.findByText(/zaman çizelgesi okunamadı/)).toBeInTheDocument();
+    expect(screen.getByText("EVENT TIMELINE")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Yeniden dene/ })).toBeInTheDocument();
   });
 
   it("names every event it places, and counts them in the caption", async () => {

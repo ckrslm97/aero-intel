@@ -4,9 +4,10 @@ import { Archive as ArchiveIcon, Download, Map as MapIcon, SlidersHorizontal } f
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import { AirlineLogo } from "@/components/airline-logo";
+import { InlineSourceError } from "@/components/data-source-error";
 import { CategoryChipRow } from "@/components/filters/category-chip-row";
 import { EventDetailDrawer } from "@/components/gazete/event-detail-drawer";
 import { EventRadarStrip } from "@/components/gazete/event-radar-strip";
@@ -15,6 +16,7 @@ import { NewsSection } from "@/components/gazete/news-section";
 import { TodayIntelligence } from "@/components/gazete/today-intelligence";
 import { Collapse } from "@/components/ui/collapse";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useDataSource } from "@/hooks/use-data-source";
 import { apiFetch } from "@/lib/api";
 import {
   type GazeteFilters,
@@ -92,7 +94,6 @@ export function NewspaperBrowser() {
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [showMap, setShowMap] = useState(false);
   const [openEvent, setOpenEvent] = useState<EventOut | null>(null);
-  const [countries, setCountries] = useState<CountryOut[]>([]);
 
   /** Apply a patch to the URL.
    *
@@ -111,18 +112,20 @@ export function NewspaperBrowser() {
   // The country picker's options. Counted server-side, busiest first, and only
   // countries with at least one article -- a dropdown of 51 gazetteer names
   // where 40 are empty teaches the reader not to trust the control.
-  useEffect(() => {
-    const controller = new AbortController();
-    apiFetch<CountryOut[]>("/taxonomy/countries?days=90", {
-      cache: "default",
-      signal: controller.signal,
-    })
-      .then(setCountries)
-      .catch(() => {
-        /* no list -> no picker, rather than an empty one */
-      });
-    return () => controller.abort();
-  }, []);
+  //
+  // A FAILURE USED TO REMOVE THE CONTROL. "no list -> no picker, rather than
+  // an empty one" is right about the empty case and wrong about the failed
+  // one: a region whose picker is simply absent reads as a region that
+  // produced no countries, which is a claim about the archive built out of an
+  // HTTP error. The list and the reason it is missing are now both kept --
+  // same shape as hubs-client.tsx's country select.
+  const countriesFetcher = useCallback(
+    (signal: AbortSignal) =>
+      apiFetch<CountryOut[]>("/taxonomy/countries?days=90", { cache: "default", signal }),
+    [],
+  );
+  const countriesSource = useDataSource(countriesFetcher, []);
+  const countries = useMemo(() => countriesSource.data ?? [], [countriesSource.data]);
 
   // Only the countries the chosen region actually produced -- the endpoint
   // already carries each country's region, so this is a filter rather than a
@@ -280,6 +283,14 @@ export function NewspaperBrowser() {
                   in the archive is 60 options a reader scrolls; scoped to the
                   region they just chose it is the handful that region actually
                   produced. */}
+              {regionSlug && countriesSource.error && countriesSource.data === null && (
+                <InlineSourceError
+                  message="Ülke listesi okunamadı."
+                  onRetry={countriesSource.retry}
+                  pending={countriesSource.pending}
+                  className="ml-1"
+                />
+              )}
               {regionSlug && countriesInRegion.length > 0 && (
                 <label className="ml-1 flex items-center gap-1.5 text-xs text-muted-foreground">
                   <span className="sr-only">Ülke</span>

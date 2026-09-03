@@ -230,4 +230,104 @@ describe("HubsClient", () => {
       expect(screen.queryByRole("heading", { name: "IST Havalimanı" })).not.toBeInTheDocument(),
     );
   });
+
+  it("never shows one hub's evidence under another hub's heading", async () => {
+    // IST -> CDG. The panel and the story list used to keep the OLD hub's rows
+    // until the new requests landed, so for a round trip the page showed DXB's
+    // heading over IST's carriers -- true numbers, wrong instrument, which is
+    // the failure the whole error-contract round exists to close.
+    const user = userEvent.setup();
+    const held: Array<() => void> = [];
+    apiFetch.mockImplementation((path: string) => {
+      requested.push(path);
+      if (path.startsWith("/hubs/DXB")) {
+        return new Promise((resolve) => held.push(() => resolve(detail("DXB", 90))));
+      }
+      if (path.startsWith("/hubs/IST")) return Promise.resolve(detail("IST", 90));
+      if (path.startsWith("/hubs")) return Promise.resolve(overview);
+      if (path.startsWith("/taxonomy/countries")) return Promise.resolve([]);
+      if (path.startsWith("/articles")) return Promise.resolve({ total: 0, items: [] });
+      return Promise.reject(new Error(`unexpected ${path}`));
+    });
+
+    render(<HubsClient />);
+    await screen.findByRole("heading", { name: "IST Havalimanı" });
+
+    await user.click(screen.getByRole("button", { name: /^DXB/ }));
+
+    // While DXB is in flight, IST's panel is GONE -- not left behind under a
+    // heading that has already moved.
+    await waitFor(() =>
+      expect(screen.queryByRole("heading", { name: "IST Havalimanı" })).not.toBeInTheDocument(),
+    );
+
+    held.forEach((resolve) => resolve());
+    expect(await screen.findByRole("heading", { name: "DXB Havalimanı" })).toBeInTheDocument();
+  });
+
+  it("says the map could not be read instead of shimmering forever", async () => {
+    // A failed overview left `overview` null with nothing on the way, so the
+    // 380px skeleton animated indefinitely: the page's most prominent element
+    // promising a load that was never coming.
+    const user = userEvent.setup();
+    apiFetch.mockImplementation((path: string) => {
+      requested.push(path);
+      if (path.startsWith("/taxonomy/countries")) return Promise.resolve([]);
+      if (path.startsWith("/articles")) return Promise.resolve({ total: 0, items: [] });
+      if (path.startsWith("/hubs")) return Promise.reject(new Error("API request failed: 500"));
+      return Promise.reject(new Error(`unexpected ${path}`));
+    });
+
+    render(<HubsClient />);
+
+    expect(
+      await screen.findByText("Veri geçici olarak kullanılamıyor."),
+    ).toBeInTheDocument();
+    expect(screen.queryByTestId("hub-map")).not.toBeInTheDocument();
+
+    serve();
+    await user.click(screen.getByRole("button", { name: /Yeniden dene/ }));
+    expect(await screen.findByTestId("hub-map")).toBeInTheDocument();
+  });
+
+  it("keeps 'bu seçim için haber yok' for a selection that genuinely has none", async () => {
+    // The negative half. An answered `/articles` with no rows is a measurement
+    // about the archive and keeps its own sentence; only a failed request gets
+    // the error block.
+    render(<HubsClient />);
+
+    expect(
+      await screen.findByText(/Bu seçim için haber yok/),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("Veri geçici olarak kullanılamıyor."),
+    ).not.toBeInTheDocument();
+  });
+
+  it("blames the story list, not the whole page, when only it fails", async () => {
+    apiFetch.mockImplementation((path: string) => {
+      requested.push(path);
+      if (path.startsWith("/articles")) {
+        return Promise.reject(new Error("API request failed: 500"));
+      }
+      if (path.startsWith("/hubs/IST")) return Promise.resolve(detail("IST", 90));
+      if (path.startsWith("/hubs")) return Promise.resolve(overview);
+      if (path.startsWith("/taxonomy/countries")) return Promise.resolve([]);
+      return Promise.reject(new Error(`unexpected ${path}`));
+    });
+
+    render(<HubsClient />);
+
+    expect(
+      await screen.findByText("Veri geçici olarak kullanılamıyor."),
+    ).toBeInTheDocument();
+    // The hub panel and the map are untouched: one source down thins the page.
+    // Awaited, because the list's failure lands before the panel's success --
+    // which is the point: the two sources settle independently now.
+    expect(
+      await screen.findByRole("heading", { name: "IST Havalimanı" }),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("hub-map")).toBeInTheDocument();
+    expect(screen.queryByText(/Bu seçim için haber yok/)).not.toBeInTheDocument();
+  });
 });

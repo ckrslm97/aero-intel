@@ -1,4 +1,5 @@
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { BizClient } from "./biz-client";
@@ -65,5 +66,78 @@ describe("BizClient: son toplama tarihi okuyucuya göre değişmez", () => {
       expect(screen.getByText(/dağılım bulunan yorumların gerçek dağılımıdır/)).toBeInTheDocument(),
     );
     expect(screen.queryByText(/Son toplama/)).not.toBeInTheDocument();
+  });
+});
+
+/** THE SIXTY-DAY CLAIM. "Son 60 günde TK ile ilişkilendirilmiş haber yok" is a
+ * statement about the archive that a competitive analyst acts on. It used to be
+ * manufactured by `.catch(() => setArticles([]))` -- one HTTP error, rendered as
+ * two months of silence. */
+describe("BizClient: haber akışı", () => {
+  function serveTk() {
+    return {
+      review_count: 3,
+      collected_through: null,
+      rating: { average: 7.5, count: 3 },
+      sentiment: { positive: 2, neutral: 1, negative: 0 },
+      themes: [],
+      sources: [],
+      quotes: [],
+      digest: null,
+    };
+  }
+
+  it("says the news feed could not be read instead of claiming 60 empty days", async () => {
+    const user = userEvent.setup();
+    apiFetch.mockImplementation((path: string) =>
+      path.startsWith("/articles")
+        ? Promise.reject(new Error("API request failed: 500"))
+        : Promise.resolve(serveTk()),
+    );
+
+    render(<BizClient />);
+
+    expect(
+      await screen.findByText("Veri geçici olarak kullanılamıyor."),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("Son 60 günde TK ile ilişkilendirilmiş haber yok."),
+    ).not.toBeInTheDocument();
+    // The rest of the desk is untouched -- the review corpus answered.
+    expect(screen.getByText("Toplanan Yorum")).toBeInTheDocument();
+
+    apiFetch.mockImplementation((path: string) =>
+      path.startsWith("/articles")
+        ? Promise.resolve({ total: 0, items: [] })
+        : Promise.resolve(serveTk()),
+    );
+    await user.click(screen.getByRole("button", { name: /Yeniden dene/ }));
+
+    // ...and once it answers with nothing, the sixty-day sentence is earned.
+    expect(
+      await screen.findByText("Son 60 günde TK ile ilişkilendirilmiş haber yok."),
+    ).toBeInTheDocument();
+  });
+
+  it("offers a retry when the review corpus itself is unreadable", async () => {
+    // The whole-page failure branch was a dead-end sentence: a five-second
+    // outage could only be answered by reloading the route.
+    const user = userEvent.setup();
+    apiFetch.mockRejectedValue(new Error("API request failed: 500"));
+
+    render(<BizClient />);
+
+    expect(
+      await screen.findByText("Veri geçici olarak kullanılamıyor."),
+    ).toBeInTheDocument();
+
+    apiFetch.mockImplementation((path: string) =>
+      path.startsWith("/articles")
+        ? Promise.resolve({ total: 0, items: [] })
+        : Promise.resolve(serveTk()),
+    );
+    await user.click(screen.getAllByRole("button", { name: /Yeniden dene/ })[0]);
+
+    expect(await screen.findByText("Toplanan Yorum")).toBeInTheDocument();
   });
 });

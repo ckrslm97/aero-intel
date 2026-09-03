@@ -125,4 +125,36 @@ describe("IataOutlook", () => {
     render(<IataOutlook series={[]} indicators={[]} />);
     expect(screen.getByText("Kâr göstergeleri henüz seed edilmedi.")).toBeInTheDocument();
   });
+
+  it("separates indicators that were not read from ones that are genuinely absent", () => {
+    // Same empty `indicators` prop, opposite facts. "henüz seed edilmedi" is a
+    // statement about the DATABASE; when `/kokpit/iata` never answered, this
+    // panel knows nothing about the database, and it used to print the claim
+    // anyway -- directly beneath a ServerSourceError line saying the source
+    // was not read.
+    const { unmount } = render(<IataOutlook series={[]} indicators={[]} indicatorsUnavailable />);
+    expect(screen.getByText(/Kâr göstergeleri okunamadı/)).toBeInTheDocument();
+    expect(screen.queryByText(/seed edilmedi\./)).not.toBeInTheDocument();
+    unmount();
+
+    render(<IataOutlook series={[]} indicators={[]} />);
+    expect(screen.getByText("Kâr göstergeleri henüz seed edilmedi.")).toBeInTheDocument();
+    expect(screen.queryByText(/okunamadı/)).not.toBeInTheDocument();
+  });
+
+  it("separates a revenue series that was not read from one that is genuinely empty", () => {
+    // The other source, failing on its own: `/kokpit/annual-series` down while
+    // `/kokpit/iata` answers still draws this panel, and the chart slot said
+    // "IATA gelir serisi yüklenmedi" over an outage.
+    const { unmount } = render(
+      <IataOutlook series={[]} seriesUnavailable indicators={[indicator()]} />,
+    );
+    expect(screen.getByText(/IATA gelir serisi okunamadı/)).toBeInTheDocument();
+    expect(screen.queryByText(/yüklenmedi/)).not.toBeInTheDocument();
+    unmount();
+
+    render(<IataOutlook series={[]} indicators={[indicator()]} />);
+    expect(screen.getByText(/IATA gelir serisi yüklenmedi/)).toBeInTheDocument();
+    expect(screen.queryByText(/okunamadı/)).not.toBeInTheDocument();
+  });
 });

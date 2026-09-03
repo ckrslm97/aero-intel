@@ -1,9 +1,11 @@
 "use client";
 
 import { CalendarDays, ChevronDown, MapPin } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { InlineSourceError } from "@/components/data-source-error";
 import { Collapse } from "@/components/ui/collapse";
+import { useDataSource } from "@/hooks/use-data-source";
 import { apiFetch } from "@/lib/api";
 import { daysUntilTr } from "@/lib/event-timeline";
 import { shiftDayIso, utcDayIso } from "@/lib/format";
@@ -83,6 +85,15 @@ function isoDay(offsetDays: number): string {
  * event into a station a desk actually sells, and `importance_score`, which is
  * null far more often than not and therefore renders as nothing at all rather
  * than as a zero.
+ *
+ * AN UNREAD CALENDAR IS NOT AN EMPTY ONE. `/events` failing used to be caught
+ * into the comment "the radar is an addition to the paper, never a
+ * precondition", and the strip then hid itself on `events.length === 0` -- so
+ * "no event is coming in the next sixty days" and "we could not find out"
+ * were, on screen, the same thing: nothing. Silence is the right answer to an
+ * empty calendar, because that is a measurement; it is the wrong answer to an
+ * outage on the one surface that carries FORWARD-LOOKING urgency. Same
+ * reasoning as CampaignExpiring's, and the same shape.
  */
 export function EventRadarStrip({
   onSelect,
@@ -94,7 +105,6 @@ export function EventRadarStrip({
   /** True on the Etkinlik view: the strip opens itself, once, on arrival. */
   autoExpand?: boolean;
 }) {
-  const [events, setEvents] = useState<EventOut[]>([]);
   const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {
@@ -110,34 +120,46 @@ export function EventRadarStrip({
     setExpanded(true);
   }, [autoExpand]);
 
-  useEffect(() => {
-    const controller = new AbortController();
+  const fetcher = useCallback((signal: AbortSignal) => {
     const params = new URLSearchParams({
       date_from: isoDay(0),
       date_to: isoDay(HORIZON_DAYS),
     });
-    apiFetch<EventOut[]>(`/events?${params.toString()}`, {
+    return apiFetch<EventOut[]>(`/events?${params.toString()}`, {
       cache: "default",
-      signal: controller.signal,
-    })
-      .then((rows) =>
-        setEvents(
-          [...rows]
-            .sort(
-              (a, b) =>
-                EVENT_IMPACT_META[a.impact_level].rank -
-                  EVENT_IMPACT_META[b.impact_level].rank ||
-                a.starts.localeCompare(b.starts),
-            )
-            .slice(0, MAX_EVENTS),
-        ),
-      )
-      .catch(() => {
-        /* the radar is an addition to the paper, never a precondition */
-      });
-    return () => controller.abort();
+      signal,
+    });
   }, []);
+  const source = useDataSource(fetcher, []);
 
+  const events = useMemo(
+    () =>
+      [...(source.data ?? [])]
+        .sort(
+          (a, b) =>
+            EVENT_IMPACT_META[a.impact_level].rank - EVENT_IMPACT_META[b.impact_level].rank ||
+            a.starts.localeCompare(b.starts),
+        )
+        .slice(0, MAX_EVENTS),
+    [source.data],
+  );
+
+  // The one line the silence rule does not cover. `error && !data` is the
+  // branch where this component knows nothing about the next sixty days, and
+  // hiding itself there would state that nothing is coming.
+  if (source.error && source.data === null) {
+    return (
+      <InlineSourceError
+        message={`Etkinlik radarı okunamadı; önümüzdeki ${HORIZON_DAYS} günde etkinlik olmadığı anlamına gelmez.`}
+        onRetry={source.retry}
+        pending={source.pending}
+      />
+    );
+  }
+
+  // An answered request with nothing in it keeps the strip's silence: the
+  // radar is an addition to the paper, and an empty labelled row is a heading
+  // over nothing.
   if (events.length === 0) return null;
 
   function toggle() {

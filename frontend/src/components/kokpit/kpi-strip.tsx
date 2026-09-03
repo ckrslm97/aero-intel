@@ -1,5 +1,7 @@
 "use client";
 
+import { TriangleAlert } from "lucide-react";
+
 import { YearDots } from "@/components/charts/year-dots";
 import { CountUp } from "@/components/motion/count-up";
 import { MotionItem, MotionList } from "@/components/motion/motion-list";
@@ -109,9 +111,14 @@ export function KpiStrip({
    * figure in the same shape as the five beside it, and giving it a whole
    * four-column panel cost 287px of the fold to say one thing. */
   trailing,
+  /** The series endpoint did not answer, as opposed to answering with nothing.
+   * Two different facts that produce the same empty `series` prop, and the
+   * strip has to say which -- see the two branches below. */
+  unavailable = false,
 }: {
   series: AnnualSeries[];
   trailing?: React.ReactNode;
+  unavailable?: boolean;
 }) {
   const byKey = new Map(series.map((s) => [s.metric_key, s]));
   const cells = STRIP_KEYS.map((key) => byKey.get(key)).filter(
@@ -119,9 +126,24 @@ export function KpiStrip({
   );
 
   if (cells.length === 0) {
-    return (
+    // A SOURCE THAT DID NOT ANSWER IS NOT AN UNSEEDED DATABASE. The single
+    // sentence here used to cover both, and it named the operator's fix:
+    // "IATA serisi henüz yüklenmedi. make seed-ingest". On the running product
+    // that is a build command printed inside an executive dashboard -- it
+    // tells the reader nothing they can act on, and it asserts an empty
+    // database over what is far more often a five-second outage. The empty
+    // branch keeps the (true, seeded-or-not) sentence without the command; the
+    // unread branch says the source was not read, which is the only thing this
+    // component knows in that case.
+    return unavailable ? (
+      <p className="flex flex-wrap items-center gap-1.5 rounded-lg border border-dashed border-warning/40 bg-warning/5 p-4 text-sm text-warning">
+        <TriangleAlert className="size-4 shrink-0" aria-hidden />
+        IATA yıllık serisi okunamadı; bu satırdaki sayılar eksik. Sayfayı yenilemeyi
+        deneyin.
+      </p>
+    ) : (
       <p className="rounded-lg border border-dashed border-border p-4 text-sm text-muted-foreground">
-        IATA serisi henüz yüklenmedi. <code className="rounded bg-muted px-1">make seed-ingest</code>
+        IATA serisi henüz yüklenmedi.
       </p>
     );
   }

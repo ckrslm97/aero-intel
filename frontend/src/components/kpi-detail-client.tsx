@@ -1,11 +1,18 @@
 "use client";
 
 import { ArrowDownRight, ArrowUpRight, CircleDashed, Download, ExternalLink, Minus } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 
 import { KpiDetailChart } from "@/components/charts/kpi-detail-chart";
+import {
+  DataSourceError,
+  InlineSourceError,
+  StaleDataBanner,
+} from "@/components/data-source-error";
 import { Badge } from "@/components/ui/badge";
-import { API_BASE_URL, apiFetch } from "@/lib/api";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useDataSource } from "@/hooks/use-data-source";
+import { API_BASE_URL, ApiError, apiFetch } from "@/lib/api";
 import {
   DISPLAY_TIME_ZONE_TR,
   formatMetricValue,
@@ -25,47 +32,104 @@ const PERIODS: { value: KpiPeriod; label: string }[] = [
   { value: "1y", label: "12M" },
 ];
 
+/** What one request to `/kpis/{key}` can settle into.
+ *
+ * A 404 IS AN ANSWER, NOT A FAILURE. The endpoint raises it for a metric this
+ * system does not track ("Unknown KPI") and for one with no observations
+ * recorded yet -- both in `get_kpi_detail`, backend/app/api/v1/kpis.py, cited
+ * by name rather than by line so the reference cannot drift off the raises it
+ * describes. Both are statements about what has been measured, and neither is
+ * a reason to tell the reader the server might be down. It is caught in the fetcher and carried through as data so the
+ * error branch below is left holding only real transport failures. */
+type KpiDetailResult =
+  | { detail: KpiDetailOut; missing: false }
+  | { detail: null; missing: true };
+
 export function KpiDetailClient({ metricKey }: { metricKey: string }) {
   const [period, setPeriod] = useState<KpiPeriod>("1m");
-  const [detail, setDetail] = useState<KpiDetailOut | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    let cancelled = false;
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- data fetch driven by metricKey/period; loading must flip synchronously with the dependency change
-    setLoading(true);
-    apiFetch<KpiDetailOut>(`/kpis/${metricKey}?period=${period}`)
-      .then((data) => {
-        if (!cancelled) {
-          setDetail(data);
-          setError(null);
+  const fetcher = useCallback(
+    async (signal: AbortSignal): Promise<KpiDetailResult> => {
+      try {
+        return {
+          detail: await apiFetch<KpiDetailOut>(`/kpis/${metricKey}?period=${period}`, {
+            signal,
+          }),
+          missing: false,
+        };
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 404) {
+          return { detail: null, missing: true };
         }
-      })
-      .catch(() => {
-        if (!cancelled) setError("Bu KPI yüklenemedi. Sunucu çalışıyor mu?");
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [metricKey, period]);
+        throw error;
+      }
+    },
+    [metricKey, period],
+  );
+  const source = useDataSource(fetcher, [metricKey, period]);
+  const result = source.data;
+  const fresh = result?.detail ?? null;
 
-  if (error) {
+  /** The last payload read successfully FOR THIS METRIC, whatever period it
+   * carried.
+   *
+   * ONLY THE PERIOD-INDEPENDENT HALF IS EVER DRAWN FROM IT. The endpoint's
+   * `period` argument selects `history` and nothing else -- the value, the
+   * delta, the timestamp, the source and the corroborations are the metric's
+   * latest reading either way (see get_kpi_detail). So a failed 12M click has
+   * no business demolishing a loaded page: the figures at the top were read
+   * and are still true, and only the trend and the table are about the window
+   * that failed. This page used to fall to one grey paragraph, with no retry,
+   * on exactly that click.
+   *
+   * Adjusted during render rather than in an effect -- React's own documented
+   * "store a previous value" pattern, the same one SearchClient uses for its
+   * input box. An effect would paint one frame of the collapsed page first,
+   * which is the frame this exists to prevent. */
+  const [kept, setKept] = useState<{ key: string; detail: KpiDetailOut } | null>(null);
+  if (fresh && kept?.detail !== fresh) setKept({ key: metricKey, detail: fresh });
+
+  const detail = fresh ?? (kept?.key === metricKey ? kept.detail : null);
+  /** The trend and the data table belong to the SELECTED PERIOD, so they read
+   * `fresh` and never `kept`: a 12M heading over 1M points would be the exact
+   * mislabelling the fx forecast chart was fixed for. */
+  const historyFailed = source.error !== null && fresh === null && !result?.missing;
+  const historyPending = source.pending && fresh === null;
+
+  // A metric with nothing recorded, said as the measurement it is. There is no
+  // retry here on purpose: asking again cannot make an unrecorded observation
+  // exist, and a retry button would suggest it might.
+  if (result?.missing) {
     return (
-      <p className="rounded-lg border border-dashed border-border p-6 text-sm text-muted-foreground">
-        {error}
-      </p>
+      <div className="flex flex-col gap-2 rounded-lg border border-dashed border-border p-6">
+        <p className="text-sm font-medium text-foreground">Bu metrik için ölçüm yok</p>
+        <p className="text-sm text-muted-foreground">
+          <span className="font-mono">{metricKey}</span> için bu sistemde kayıtlı bir
+          gözlem bulunmuyor — adres izlenmeyen bir metriği gösteriyor ya da bu metriğin
+          ilk ölçümü henüz alınmadı.
+        </p>
+      </div>
     );
   }
 
-  if (!detail && loading) {
-    return <p className="text-sm text-muted-foreground">Yükleniyor…</p>;
+  if (!detail) {
+    // The two remaining branches, which used to be one grey sentence apiece:
+    // nothing read yet and on its way, versus a source that answered with a
+    // failure and can be asked again.
+    return source.error ? (
+      <DataSourceError
+        onRetry={source.retry}
+        lastUpdated={source.lastUpdated}
+        pending={source.pending}
+      />
+    ) : (
+      <div className="flex flex-col gap-4">
+        <Skeleton className="h-24 w-full rounded-xl" />
+        <Skeleton className="h-40 w-full rounded-xl" />
+        <Skeleton className="h-56 w-full rounded-xl" />
+      </div>
+    );
   }
-
-  if (!detail) return null;
 
   // Exactly one of the two is a number -- points for a metric already
   // denominated in points, percent for everything else. See KpiOut in
@@ -83,12 +147,27 @@ export function KpiDetailClient({ metricKey }: { metricKey: string }) {
   const isGoodDirection = isPositive === detail.up_is_good;
   const deltaColor = isFlat ? "text-muted-foreground" : isGoodDirection ? "text-good" : "text-critical";
   const Icon = KPI_ICONS[detail.metric_key] ?? CircleDashed;
-  const historyNewestFirst = [...detail.history].sort(
+  // `fresh`, not `detail`: the table lists the SELECTED period's observations,
+  // and the kept payload's rows belong to whichever period was last read.
+  const historyNewestFirst = [...(fresh?.history ?? [])].sort(
     (a, b) => new Date(b.as_of).getTime() - new Date(a.as_of).getTime(),
   );
 
   return (
     <div className="flex flex-col gap-6">
+      {/* The demotion the whole rewrite is for: a failed refresh is a banner
+          over a page that still stands, not a replacement for it. `lastUpdated`
+          is this metric's own last successful read -- never another metric's,
+          because `useDataSource` tags every settled record with the selection
+          that produced it. */}
+      {(source.stale || historyFailed) && (
+        <StaleDataBanner
+          onRetry={source.retry}
+          lastUpdated={source.lastUpdated}
+          pending={source.pending}
+        />
+      )}
+
       <div className="flex flex-col gap-1">
         <div className="flex items-center gap-2">
           <span className="flex size-11 shrink-0 items-center justify-center rounded-md bg-accent text-accent-foreground">
@@ -246,12 +325,24 @@ export function KpiDetailClient({ metricKey }: { metricKey: string }) {
           </div>
         </div>
 
-        {detail.history.length > 1 ? (
+        {/* Three branches, and only the last of them is allowed to say the
+            archive is thin: "henüz yeterli geçmiş veri kaydedilmedi" is a
+            claim about the database, and it used to be the sentence a reader
+            got when the request for this window never came back. */}
+        {historyPending ? (
+          <Skeleton className="h-56 w-full rounded-lg" />
+        ) : historyFailed ? (
+          <InlineSourceError
+            message="Bu dönemin geçmişi okunamadı; kayıtlı veri olmadığı anlamına gelmez."
+            onRetry={source.retry}
+            pending={source.pending}
+          />
+        ) : fresh && fresh.history.length > 1 ? (
           <KpiDetailChart
-            history={detail.history}
-            period={detail.period}
-            unit={detail.unit}
-            metricKey={detail.metric_key}
+            history={fresh.history}
+            period={fresh.period}
+            unit={fresh.unit}
+            metricKey={fresh.metric_key}
           />
         ) : (
           <p className="rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
@@ -263,8 +354,11 @@ export function KpiDetailClient({ metricKey }: { metricKey: string }) {
             plus a stated crack spread, and the boolean above could only call
             that "the source's own archive" -- asserting a published jet-fuel
             history that exists nowhere. The sentence is written where the
-            derivation is known. */}
-        <p className="text-xs text-muted-foreground">{detail.history_provenance_tr}</p>
+            derivation is known. It describes the series drawn above it, so it
+            appears only when one was. */}
+        {fresh && (
+          <p className="text-xs text-muted-foreground">{fresh.history_provenance_tr}</p>
+        )}
       </div>
 
       <div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-5">
@@ -281,7 +375,15 @@ export function KpiDetailClient({ metricKey }: { metricKey: string }) {
           </a>
         </div>
 
-        {historyNewestFirst.length > 0 ? (
+        {historyPending ? (
+          <Skeleton className="h-40 w-full rounded-lg" />
+        ) : historyFailed ? (
+          <InlineSourceError
+            message="Bu dönemin gözlem tablosu okunamadı."
+            onRetry={source.retry}
+            pending={source.pending}
+          />
+        ) : historyNewestFirst.length > 0 ? (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>

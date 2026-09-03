@@ -63,7 +63,7 @@ export function SignalStream() {
       apiFetch<SignalsOut>("/signals?days=30", { cache: "default", signal }),
     [],
   );
-  const { data, error, loaded, lastUpdated, retry } = useDataSource(fetcher, []);
+  const { data, error, loaded, lastUpdated, pending, retry } = useDataSource(fetcher, []);
 
   const rows = useMemo(() => selectStreamSignals(data?.signals ?? []), [data]);
 
@@ -71,7 +71,7 @@ export function SignalStream() {
   // 180px against an empty section of 50, so every load on a quiet day ended
   // with the page jumping 130px upward under the reader's eyes.
   if (!loaded) return <Skeleton className="h-[42px] w-full rounded-xl" />;
-  if (error && !data) return <DataSourceError onRetry={retry} lastUpdated={lastUpdated} />;
+  if (error && !data) return <DataSourceError onRetry={retry} lastUpdated={lastUpdated} pending={pending} />;
 
   if (rows.length === 0) {
     return (

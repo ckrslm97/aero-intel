@@ -38,6 +38,19 @@ export default defineConfig({
       include: [
         "src/components/pagination.tsx",
         "src/components/data-source-error.tsx",
+        // The error contract's own two components. `server-source-error.tsx`
+        // is data-source-error's server-rendered counterpart -- Kokpit has no
+        // per-source `retry()` to call, so the retry there is a
+        // `router.refresh()` -- and it is checked by the same kind of suite.
+        "src/components/server-source-error.tsx",
+        // The two search surfaces. What is asserted in their suites is not
+        // pixels but a correctness rule with no other way to catch it: which
+        // QUERY the list on screen answers when replies arrive out of the
+        // order they were asked in. A lit chip labelling another query's
+        // articles is a true list under a false heading, and only a test that
+        // holds one response open can pin it down.
+        "src/components/search-client.tsx",
+        "src/components/layout/quick-search.tsx",
         // Kampanya v2: the page's filtering/ordering/URL rules and every
         // surface built on them. The swimlane that used to be excluded here as
         // "a pixel-geometry surface" is gone entirely -- see
@@ -60,18 +73,33 @@ export default defineConfig({
         // level styling) plus every surface that carries real mapping,
         // ordering or arithmetic logic, plus the two chart primitives whose
         // whole job is to refuse to draw something untrue. The composition
-        // (page.tsx, section-header, cockpit-header) and the two echarts
-        // wrappers are checked in a browser instead.
+        // (page.tsx, section-header) and the annual-trend echarts wrapper are
+        // checked in a browser instead.
+        //
+        // cockpit-header.tsx used to be listed here as composition, and it is
+        // not: its badge decides, from data, whether the page may claim
+        // liveness -- and whether "Veri yok" is a measurement or an outage.
+        // Those are exactly the verdicts a unit test can pin and a screenshot
+        // cannot.
+        //
+        // fx-forecast-chart.tsx IS counted, though its pixels are still a
+        // browser question: what it is tested for is WHICH SERIES it hands to
+        // ECharts. The chart draws measured rates, so drawing the previous
+        // pair's line under the newly selected pair's heading is not a stale
+        // number but a true number labelled as a different instrument -- the
+        // one thing on this screen a unit test can pin down exactly.
         //
         // KEEP THIS LIST IN SYNC WITH THE FILES. The v8 provider does NOT
         // error on an `include` entry that no longer exists -- it silently
         // stops counting it, and coverage drops with no failure anywhere.
         "src/components/kokpit/alert-center.tsx",
+        "src/components/kokpit/cockpit-header.tsx",
         "src/components/kokpit/competitive-pulse.tsx",
         "src/components/kokpit/daily-summary.tsx",
         "src/components/kokpit/kpi-strip.tsx",
         "src/components/kokpit/market-pulse-row.tsx",
         "src/components/kokpit/fx-board-table.tsx",
+        "src/components/kokpit/fx-forecast-chart.tsx",
         "src/components/kokpit/iata-outlook.tsx",
         "src/components/kokpit/sector-balance.tsx",
         "src/components/kokpit/signal-stream.tsx",

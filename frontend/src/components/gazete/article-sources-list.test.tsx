@@ -1,4 +1,5 @@
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ArticleSourcesList } from "./article-sources-list";
@@ -22,13 +23,17 @@ describe("ArticleSourcesList", () => {
     apiFetch.mockReset();
   });
 
-  it("fetches the group lazily, per article", async () => {
+  it("fetches the group lazily, per article, and abortably", async () => {
     apiFetch.mockResolvedValue([row()]);
     render(<ArticleSourcesList articleId="abc-123" />);
 
     await waitFor(() =>
       expect(apiFetch).toHaveBeenCalledWith("/articles/abc-123/sources", {
         cache: "default",
+        // The signal arrived with `useDataSource`: opening three stories in a
+        // row no longer leaves two abandoned requests queued ahead of the one
+        // the reader is waiting for.
+        signal: expect.any(AbortSignal),
       }),
     );
   });
@@ -75,11 +80,57 @@ describe("ArticleSourcesList", () => {
 
   it("degrades to a line of text when the request fails", async () => {
     // The article is already on screen; the corroboration is an elaboration
-    // on it and must never take the drawer down.
+    // on it and must never take the drawer down. The line says the list was
+    // not READ -- "yüklenemedi" over an empty section reads as "no other
+    // outlet carried this", which is a claim about the press, not about us.
     apiFetch.mockRejectedValue(new Error("boom"));
     render(<ArticleSourcesList articleId="abc-123" />);
 
-    expect(await screen.findByText("Kaynak listesi yüklenemedi.")).toBeInTheDocument();
+    expect(await screen.findByText(/Kaynak listesi okunamadı/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Yeniden dene/ })).toBeInTheDocument();
+  });
+
+  it("does not hide one article's sources behind another article's failure", async () => {
+    // THE UNKEYED FLAG. `failed` was a bare boolean, set on any rejection and
+    // never cleared, while `rows` was keyed by article id. So after one story's
+    // sources failed, every story the reader opened next showed the error --
+    // its own rows fetched, parsed and held in state, sitting behind a verdict
+    // that belonged to a different question.
+    apiFetch.mockRejectedValue(new Error("boom"));
+    const { rerender } = render(<ArticleSourcesList articleId="abc-123" />);
+    expect(await screen.findByText(/Kaynak listesi okunamadı/)).toBeInTheDocument();
+
+    apiFetch.mockResolvedValue([row()]);
+    rerender(<ArticleSourcesList articleId="def-456" />);
+
+    expect(await screen.findByText("Reuters")).toBeInTheDocument();
+    expect(screen.queryByText(/okunamadı/)).not.toBeInTheDocument();
+  });
+
+  it("re-asks for the same article, and says so while it is asking", async () => {
+    const user = userEvent.setup();
+    apiFetch.mockRejectedValue(new Error("boom"));
+    render(<ArticleSourcesList articleId="abc-123" />);
+    const retry = await screen.findByRole("button", { name: /Yeniden dene/ });
+
+    let answer: (rows: unknown[]) => void = () => {};
+    apiFetch.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+    );
+    await user.click(retry);
+
+    expect(await screen.findByRole("button", { name: /Deneniyor…/ })).toBeDisabled();
+
+    answer([row()]);
+    expect(await screen.findByText("Reuters")).toBeInTheDocument();
+    // The retry asked the SAME question, not the first one again by accident.
+    expect(apiFetch).toHaveBeenLastCalledWith(
+      "/articles/abc-123/sources",
+      expect.objectContaining({ cache: "default" }),
+    );
   });
 
   it("handles a story nothing else picked up", async () => {

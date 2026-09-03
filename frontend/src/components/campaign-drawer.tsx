@@ -17,6 +17,7 @@ import { useEffect, useRef, useState } from "react";
 import { AirlineLogo } from "@/components/airline-logo";
 import { CampaignStatusPill, ConfidencePill } from "@/components/campaign-analyst-table";
 import { CampaignWindows } from "@/components/campaign-windows";
+import { InlineSourceError } from "@/components/data-source-error";
 import { apiFetch } from "@/lib/api";
 import {
   campaignAttr,
@@ -117,12 +118,35 @@ export function CampaignDrawer({
   /** Keyed by campaign id rather than reset on close: clearing it in an effect
    * would be a synchronous setState in an effect body (a cascading render, and
    * a lint error), and keying makes the stale-history question unaskable --
-   * history for another campaign simply is not this campaign's. */
+   * history for another campaign simply is not this campaign's.
+   *
+   * The two `*Failed` flags are the point of this round. Both requests used to
+   * end in `.catch(() => [])`, so a dead `/promotions/{id}/sources` produced
+   * the same empty array as a campaign genuinely recorded from no source --
+   * and this panel's rule is that an absent field says so. Rendered, that
+   * became a drawer with no Kaynaklar section at all, which an analyst reads
+   * as "kaynaksız kampanya": the strongest possible statement about a record's
+   * provenance, made out of an HTTP error. */
   const [history, setHistory] = useState<{
     id: string;
     versions: PromotionVersion[];
+    versionsFailed: boolean;
     sources: PromotionSource[];
+    sourcesFailed: boolean;
   } | null>(null);
+  const [retryToken, setRetryToken] = useState(0);
+  /** A request for this campaign's history is ACTUALLY in flight.
+   *
+   * Not derivable from `history`: a retry leaves the previous (failed) record
+   * in place -- deliberately, so the two error lines stay on screen instead of
+   * blinking out -- so "have we settled?" answers false for the whole duration
+   * of every retry after the first. That is what made this drawer the one
+   * retry in the app that never reported itself: the button stayed enabled and
+   * still read "Yeniden dene" while its request was running, the error text
+   * underneath did not move, and the honest reading of the screen was "nothing
+   * happened" (see RetryButton in data-source-error.tsx). */
+  const [inFlight, setInFlight] = useState(false);
+  const retryHistory = () => setRetryToken((token) => token + 1);
 
   useEffect(() => {
     if (!promotion) return;
@@ -147,28 +171,47 @@ export function CampaignDrawer({
     // than breaking the drawer -- the campaign itself is already on screen.
     if (!promotionId) return;
     let cancelled = false;
-    Promise.all([
+    const controller = new AbortController();
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the fetch is driven by the campaign/retry change; the flag has to flip with it, not a render later
+    setInFlight(true);
+    // `allSettled`, so one section failing does not decide the other's fate --
+    // and so the REASON each section is empty survives the join. `all` with a
+    // `.catch(() => [])` on each leg threw that reason away at the point it was
+    // known and left the render nothing to tell the two cases apart with.
+    Promise.allSettled([
       apiFetch<PromotionVersion[]>(`/promotions/${promotionId}/versions`, {
         cache: "default",
-      }).catch(() => []),
+        signal: controller.signal,
+      }),
       apiFetch<PromotionSource[]>(`/promotions/${promotionId}/sources`, {
         cache: "default",
-      }).catch(() => []),
-    ]).then(([versionRows, sourceRows]) => {
+        signal: controller.signal,
+      }),
+    ]).then(([versionResult, sourceResult]) => {
       if (cancelled) return;
-      setHistory({ id: promotionId, versions: versionRows, sources: sourceRows });
+      setInFlight(false);
+      setHistory({
+        id: promotionId,
+        versions: versionResult.status === "fulfilled" ? versionResult.value : [],
+        versionsFailed: versionResult.status === "rejected",
+        sources: sourceResult.status === "fulfilled" ? sourceResult.value : [],
+        sourcesFailed: sourceResult.status === "rejected",
+      });
     });
     return () => {
       cancelled = true;
+      controller.abort();
     };
-  }, [promotionId]);
+  }, [promotionId, retryToken]);
 
   // Hooks first, then the early return: `promotion === null` is the closed
   // state and this component is mounted for the whole page's life.
   if (!promotion) return null;
 
-  const versions = history?.id === promotionId ? history.versions : [];
-  const sources = history?.id === promotionId ? history.sources : [];
+  /** The history belonging to THIS campaign, or null while none has settled. */
+  const settled = history?.id === promotionId ? history : null;
+  const versions = settled?.versions ?? [];
+  const sources = settled?.sources ?? [];
 
   const markets = promotion.markets
     ? promotion.markets
@@ -545,6 +588,30 @@ export function CampaignDrawer({
                   ))}
                 </ol>
               </Collapsible>
+            </motion.div>
+          )}
+
+          {/* KAYNAKLAR, in three branches. The section is present whenever the
+              request failed -- a drawer that simply has no Kaynaklar block is
+              a drawer asserting the campaign has no recorded source, and that
+              is the one claim in this panel an analyst would act on. */}
+          {settled?.sourcesFailed && (
+            <motion.div variants={item}>
+              <InlineSourceError
+                message="Kaynak listesi okunamadı; bu kampanyanın kaynağı olmadığı anlamına gelmez."
+                onRetry={retryHistory}
+                pending={inFlight}
+              />
+            </motion.div>
+          )}
+
+          {settled?.versionsFailed && (
+            <motion.div variants={item}>
+              <InlineSourceError
+                message="Değişiklik geçmişi okunamadı."
+                onRetry={retryHistory}
+                pending={inFlight}
+              />
             </motion.div>
           )}
 

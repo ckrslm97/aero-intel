@@ -239,15 +239,31 @@ describe("SignalsClient", () => {
     expect(await screen.findByText("Risk sinyali")).toBeInTheDocument();
   });
 
-  it("lists a stream that produced nothing instead of dropping it", async () => {
-    // A reader has to be able to tell "nothing happened" from "it broke".
+  it("lists a stream that produced nothing, and says so in words rather than as a 0", async () => {
+    // A reader has to be able to tell "nothing happened" from "it broke", and
+    // that distinction has to be ON SCREEN. It used to live entirely in a
+    // `title` attribute over a dim `0` -- invisible to anyone skimming and
+    // unreachable on a touch device, so both states drew as the same digit.
     apiFetch.mockResolvedValue(payload([signal({ id: "r1" })]));
 
     render(<SignalsClient />);
 
-    expect(await screen.findByTitle("Bu akışta sinyal yok.")).toHaveTextContent(
-      "Ağ sinyalleri",
-    );
+    const chip = await screen.findByTitle("Bu akışta sinyal yok.");
+    expect(chip).toHaveTextContent("sinyal yok");
+    expect(chip.parentElement).toHaveTextContent("Ağ sinyalleri");
+  });
+
+  it("never calls a quiet stream unreadable", async () => {
+    // THE NEGATIVE HALF, and this round's own sin mirrored. `available` is the
+    // server's `bool(count)`, so labelling an empty stream "okunamadı" would
+    // invent an outage out of a measurement -- exactly the trade this whole
+    // party is about, made in the other direction.
+    apiFetch.mockResolvedValue(payload([signal({ id: "r1" })]));
+
+    render(<SignalsClient />);
+
+    await screen.findByTitle("Bu akışta sinyal yok.");
+    expect(screen.queryByText(/okunamadı/i)).toBeNull();
   });
 
   it("says so when every stream is quiet", async () => {

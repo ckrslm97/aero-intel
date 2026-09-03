@@ -2,9 +2,10 @@
 
 import { AnimatePresence } from "framer-motion";
 import { ChevronDown, CircleAlert, ExternalLink, Info, TriangleAlert } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo } from "react";
 
 import { AirlineLogo } from "@/components/airline-logo";
+import { DataSourceError, StaleDataBanner } from "@/components/data-source-error";
 // Only the ordering helper: this page renders its own multi-select category
 // row (the shared component is single-select by construction, and Gazete's
 // sliding pill depends on that).
@@ -12,6 +13,7 @@ import { orderCategories } from "@/components/filters/category-chip-row";
 import { CountUp } from "@/components/motion/count-up";
 import { MotionItem, MotionList } from "@/components/motion/motion-list";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useDataSource } from "@/hooks/use-data-source";
 import { useUrlState } from "@/hooks/use-url-state";
 import { apiFetch } from "@/lib/api";
 import { formatDateTr } from "@/lib/format";
@@ -150,43 +152,30 @@ export function RecommendationsClient() {
     [filters, params, replaceParams],
   );
 
-  const [items, setItems] = useState<Recommendation[] | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
   // The request, not the address bar -- see `recommendationQuery`. Repeated
   // keys, one per selected value: FastAPI parses `?region=a&region=b` straight
   // into a list. `days` stays single, because a comparison window is not a set.
   const query = recommendationQuery(filters).toString();
 
-  useEffect(() => {
-    let cancelled = false;
-    const controller = new AbortController();
-
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- the fetch is driven by the filter change; the loading flag must flip with it
-    setLoading(true);
-    apiFetch<RecommendationsOut>(`/recommendations?${query}`, {
-      cache: "default",
-      signal: controller.signal,
-    })
-      .then((data) => {
-        if (cancelled) return;
-        setItems(data.items);
-        setError(null);
-      })
-      .catch((err: unknown) => {
-        if (cancelled || (err as Error)?.name === "AbortError") return;
-        setError("Öneriler yüklenemedi. Sunucu çalışıyor mu?");
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-      controller.abort();
-    };
-  }, [query]);
+  // `query` IS the identity of the question, so it is the dependency. That
+  // matters here more than almost anywhere: this page's empty state reads
+  // "Bu filtrelerle öne çıkan bir örüntü yok", a claim about the selected
+  // filters -- and the hook now guarantees it can only be reached from a
+  // request that answered THESE filters, never from the previous set's answer
+  // or from a failure.
+  const source = useDataSource(
+    useCallback(
+      (signal: AbortSignal) =>
+        apiFetch<RecommendationsOut>(`/recommendations?${query}`, {
+          cache: "default",
+          signal,
+        }),
+      [query],
+    ),
+    [query],
+  );
+  const items: Recommendation[] | null = source.data?.items ?? null;
+  const loading = source.pending;
 
   return (
     <div className="flex flex-col gap-8">
@@ -289,11 +278,21 @@ export function RecommendationsClient() {
         </FilterRow>
       </div>
 
-      {error ? (
-        <p className="rounded-lg border border-dashed border-border p-6 text-sm text-muted-foreground">
-          {error}
-        </p>
-      ) : loading && items === null ? (
+      {source.stale && (
+        <StaleDataBanner
+          onRetry={source.retry}
+          lastUpdated={source.lastUpdated}
+          pending={source.pending}
+        />
+      )}
+
+      {source.error && !items ? (
+        <DataSourceError
+          onRetry={source.retry}
+          lastUpdated={source.lastUpdated}
+          pending={source.pending}
+        />
+      ) : source.loading ? (
         <div className="flex flex-col gap-3">
           {Array.from({ length: 4 }).map((_, i) => (
             <Skeleton key={i} className="h-36 w-full rounded-xl" />

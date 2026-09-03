@@ -323,10 +323,20 @@ export function RiskRadarClient() {
         </p>
       </header>
 
-      {radar.stale && <StaleDataBanner onRetry={radar.retry} lastUpdated={radar.lastUpdated} />}
+      {radar.stale && (
+        <StaleDataBanner
+          onRetry={radar.retry}
+          lastUpdated={radar.lastUpdated}
+          pending={radar.pending}
+        />
+      )}
 
       {radar.error && !data ? (
-        <DataSourceError onRetry={radar.retry} lastUpdated={radar.lastUpdated} />
+        <DataSourceError
+          onRetry={radar.retry}
+          lastUpdated={radar.lastUpdated}
+          pending={radar.pending}
+        />
       ) : !data ? (
         <div className="flex flex-col gap-6">
           <Skeleton className="h-20 w-full rounded-xl" />
@@ -601,7 +611,11 @@ export function RiskRadarClient() {
                 </p>
               </div>
               {trend.error && !trend.data ? (
-                <DataSourceError onRetry={trend.retry} lastUpdated={trend.lastUpdated} />
+                <DataSourceError
+                  onRetry={trend.retry}
+                  lastUpdated={trend.lastUpdated}
+                  pending={trend.pending}
+                />
               ) : trend.data ? (
                 <RiskTrendChart trend={trend.data} />
               ) : (

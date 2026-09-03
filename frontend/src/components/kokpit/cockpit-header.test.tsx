@@ -73,4 +73,21 @@ describe("CockpitHeader", () => {
     render(<CockpitHeader board={null} />);
     expect(screen.getByText("Veri yok")).toBeInTheDocument();
   });
+
+  it("separates a board that was not read from one that is genuinely empty", () => {
+    // Same `board={null}` prop, opposite facts. An amber "Veri yok" in the top
+    // right corner of the product's first screen is a claim that no
+    // exchange-rate data exists; when `/kokpit/fx` never answered, the header
+    // knows nothing of the kind, and the reader who acts on it loses the
+    // urgency signal this whole surface is for.
+    const { unmount } = render(<CockpitHeader board={null} unavailable />);
+    expect(screen.getByText("Kur panosu okunamadı")).toBeInTheDocument();
+    expect(screen.queryByText("Veri yok")).not.toBeInTheDocument();
+    unmount();
+
+    // A board that answered with no pairs on it IS an empty board.
+    render(<CockpitHeader board={board([])} />);
+    expect(screen.getByText("Veri yok")).toBeInTheDocument();
+    expect(screen.queryByText(/okunamadı/)).not.toBeInTheDocument();
+  });
 });

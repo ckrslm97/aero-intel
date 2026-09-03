@@ -4,6 +4,7 @@ import ReactECharts from "echarts-for-react";
 import { useReducedMotion } from "framer-motion";
 import { useCallback, useMemo } from "react";
 
+import { InlineSourceError } from "@/components/data-source-error";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDataSource } from "@/hooks/use-data-source";
 import { apiFetch } from "@/lib/api";
@@ -103,12 +104,43 @@ export function FxForecastChart({
         : Promise.resolve(null),
     [metricKey],
   );
-  const { data: detail, loaded } = useDataSource(fetcher, [metricKey]);
+  // `[metricKey]` is the selection, not just a re-fetch trigger: useDataSource
+  // hands back `data: null` and `loaded: false` from the render the pair
+  // changes in, so the previous pair's closes cannot survive into the frame
+  // that already carries the new pair's heading.
+  const {
+    data: detail,
+    loaded,
+    error,
+    pending,
+    retry,
+  } = useDataSource(fetcher, [metricKey]);
+
+  /** The history request came back as a failure and left nothing to draw.
+   *
+   * `error` alone is not enough: a failed REFRESH keeps the previous successful
+   * closes for the same pair on screen (see hooks/use-data-source.ts), and a
+   * line that is still there is not a line that could not be read. Only
+   * `error && !detail` is the branch where this component knows nothing about
+   * the pair's history -- and it must say exactly that, never that the history
+   * does not exist. */
+  const historyFailed = error !== null && detail === null;
 
   const buckets = useMemo(() => forecastBuckets(rows), [rows]);
 
   const option = useMemo(() => {
-    const history = (detail?.history ?? []).map(
+    // THE LINE IS BOUND TO THE PAIR IN THE HEADING, and asserted twice.
+    //
+    // This chart draws MEASURED rates. Drawn one pair off, it is not a stale
+    // number, it is a true number labelled as a different instrument -- a
+    // 42,3 USD/TRY line under "EUR/TRY · gerçekleşen kur", on the top screen
+    // of the product, with a y axis scaled to whichever series arrived last.
+    // The hook's selection gate is the fix; `metric_key` is the payload's own
+    // statement of what it measured (backend/app/api/v1/kpis.py echoes the
+    // requested key), checked here so the guarantee also holds at the point
+    // the series is handed to ECharts.
+    const closes = detail && detail.metric_key === metricKey ? detail.history : [];
+    const history = closes.map(
       (point) => [point.as_of, point.value] as [string, number],
     );
     if (history.length === 0 && buckets.length === 0) return null;
@@ -297,11 +329,45 @@ export function FxForecastChart({
           : []),
       ],
     };
-  }, [detail, buckets, theme, reduceMotion, pair]);
+  }, [detail, metricKey, buckets, theme, reduceMotion, pair]);
 
+  // `loaded` is per-selection: on a pair switch it is false again until THIS
+  // pair's history answers, so the switch shows a skeleton rather than the
+  // previous pair's chart under the new pair's name.
   if (!loaded) return <Skeleton className="h-[240px] w-full rounded-xl" />;
 
   if (!option) {
+    // THREE REASONS FOR AN EMPTY CHART, AND ONLY ONE OF THEM IS A MEASUREMENT.
+    //
+    // This used to be one sentence for all three: "{pair} için ne kur geçmişi
+    // ne de tarihlendirilebilir bir kurum tahmini var." -- a checkable claim
+    // about the archive, printed on the top screen of the product, that a 500
+    // from `/kpis/{metric}` was enough to manufacture. An RM desk reading it
+    // concludes nobody has published on this pair, which is the opposite of
+    // "we could not find out".
+    if (historyFailed) {
+      return (
+        <InlineSourceError
+          message={`${pair} kur geçmişi okunamadı; kayıtlı geçmiş olmadığı anlamına gelmez.`}
+          onRetry={retry}
+          pending={pending}
+          className="rounded-xl border border-dashed border-warning/40 bg-warning/5 p-6"
+        />
+      );
+    }
+    if (!metricKey) {
+      // The pair is not in PAIR_METRIC_KEYS, so no history was ever REQUESTED
+      // for it. Nothing was asked, so nothing may be answered: "yok" would be
+      // a verdict on a question this component never put.
+      return (
+        <p className="rounded-xl border border-dashed border-border p-6 text-sm text-muted-foreground">
+          {pair} için kur geçmişi bu sistemde kaydedilmiyor ve tarihlendirilebilir bir kurum
+          tahmini yok.
+        </p>
+      );
+    }
+    // The request answered, and it answered with nothing. This is the only
+    // branch entitled to the sentence.
     return (
       <p className="rounded-xl border border-dashed border-border p-6 text-sm text-muted-foreground">
         {pair} için ne kur geçmişi ne de tarihlendirilebilir bir kurum tahmini var.
@@ -314,6 +380,19 @@ export function FxForecastChart({
 
   return (
     <div className="flex flex-col gap-1.5">
+      {/* THE SAME RULE WHEN THE MARKERS SURVIVED THE OUTAGE. Forecast points
+          render from `rows`, which this component's parent already has, so an
+          unread history draws a chart with institution markers and no realised
+          line -- and the missing line reads as "this pair has no measured
+          history", the identical claim the empty branch above refuses to
+          make. */}
+      {historyFailed && (
+        <InlineSourceError
+          message={`${pair} kur geçmişi okunamadı; grafikte yalnızca kurum tahminleri var.`}
+          onRetry={retry}
+          pending={pending}
+        />
+      )}
       {/* The 11px is on the CONTAINER, not only in `axisLabel`.
           ECharts 6 emits no font-size attribute on this axis' label nodes, so
           the SVG text inherited the document's 16px and the time axis rendered
