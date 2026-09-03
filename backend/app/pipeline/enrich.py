@@ -1059,6 +1059,7 @@ async def backfill_risk_classification(
         detect_aviation_relevance,
         detect_currency_flags,
         resolve_risk_location,
+        risk_veto,
     )
 
     provider = HeuristicProvider()
@@ -1082,6 +1083,16 @@ async def backfill_risk_classification(
         entities = await provider.extract_entities(article.title, article.raw_content)
         result = classify_risk_heuristic(article.title, article.raw_content, entities)
         risk_type = result["risk_type"] if is_valid_risk_type(result["risk_type"]) else None
+
+        # The veto has to run here too, not only in enrich_pending_articles.
+        # Every false-positive guard in this repo lives behind risk_veto, and a
+        # backfill that skips it re-classifies the archive with the guards
+        # switched off -- so a keyword fix ships, the backfill runs, and the
+        # story it was written to remove is still on the radar. Measured on
+        # production: a military-procurement piece and a central-bank housing
+        # report both survived a full backfill this way.
+        if risk_type is not None and risk_veto(article.title, article.raw_content):
+            risk_type = None
 
         if risk_type is None:
             # An article that no longer classifies must lose its old value --

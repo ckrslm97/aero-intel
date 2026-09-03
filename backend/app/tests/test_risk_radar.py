@@ -10,6 +10,7 @@ so the guards in app/llm/heuristic.py are the feature, not an optimisation.
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from sqlalchemy import select
 
 from app.api.v1.risks import DEFAULT_WINDOW_DAYS, UNKNOWN_COUNTRY, list_risks
 from app.llm.base import EntityMention
@@ -2460,3 +2461,82 @@ async def test_the_location_stage_splits_its_drop_into_both_reasons(db_session):
     stage = next(s for s in out.stages if s.key == "konum")
     assert stage.dropped == 3
     assert stage.reason_counts == {"location_unresolved": 1, "location_conflict": 2}
+
+
+# --------------------------------------------------------------------------
+# Backfill honours the veto
+# --------------------------------------------------------------------------
+
+
+async def test_backfill_applies_the_same_veto_as_live_enrichment(db_session):
+    """A guard that only runs on fresh articles never reaches the archive.
+
+    Measured in production: after a full `backfill-risks` run, a military
+    procurement piece ("Boeing MH-139A Grey Wolf helicopter, US nuclear
+    missile fields") and a central-bank housing report about an earthquake
+    region were both still classified as live risk events -- because the
+    backfill called classify_risk_heuristic directly and skipped risk_veto,
+    which is where every false-positive guard in this repo lives. Shipping a
+    keyword fix and re-running the backfill left the story it was written to
+    remove sitting on the radar.
+    """
+    from app.ingest.sources_seed import SourceSeed  # noqa: F401 -- parity with peers
+    from app.models.source import Source
+    from app.pipeline.enrich import backfill_risk_classification
+
+    source = Source(
+        name="Veto backfill kaynagi",
+        url="https://example.test/veto",
+        source_type="rss",
+        category="other",
+        trust_weight=0.7,
+    )
+    db_session.add(source)
+    await db_session.flush()
+
+    published = NOW - timedelta(days=1)
+    article = Article(
+        source_id=source.id,
+        url="https://example.test/veto/grey-wolf",
+        title="Boeing MH-139A Grey Wolf helicopter enters service at missile wing",
+        raw_content=(
+            "The Air Force accepted its first MH-139A Grey Wolf helicopters for "
+            "security patrols over the nuclear missile fields, replacing the UH-1N."
+        ),
+        published_at=published,
+        fetched_at=published,
+        content_hash="veto-grey-wolf",
+        status="enriched",
+    )
+    db_session.add(article)
+    await db_session.flush()
+    db_session.add(
+        ArticleEnrichment(
+            article_id=article.id,
+            headline=article.title,
+            summary="",
+            category="safety",
+            # The state a previous backfill left behind: classified, published.
+            risk_type="attack",
+            risk_family="conflict",
+            risk_severity="medium",
+            risk_country="United States",
+            importance_score=0.5,
+            sentiment="neutral",
+            confidence_score=0.61,
+            corroborating_source_count=1,
+        )
+    )
+    await db_session.commit()
+
+    stats = await backfill_risk_classification(db_session)
+
+    refreshed = (
+        await db_session.execute(
+            select(ArticleEnrichment).where(ArticleEnrichment.article_id == article.id)
+        )
+    ).scalar_one()
+    assert refreshed.risk_type is None, (
+        "vetoed article must lose its stale risk classification"
+    )
+    assert stats["cleared"] >= 1
