@@ -1,18 +1,19 @@
-"""New-route announcements for the Hub page's Ağ Sinyalleri tab.
+"""New-route announcements for the Hub page's Ağ Sinyalleri tab, the Sinyaller
+feed, /biz -- and the daily digest.
 
-This is insights_service.new_route_signals()'s logic moved onto news_events
-(pipeline v2) instead of raw articles -- classification now happens once per
-event rather than once per article (see app/models/news_event.py), and a
-route signal citing a duplicate-reporting article three times over was never
-the honest count. insights_service.new_route_signals itself is left exactly
-as it is: it still backs the live İçgörüler page's route section, and that
-page is not being switched to v2 in this change (see K8/K9 in the rebuild
-plan -- one page's route flips per PR, and İçgörüler's hasn't yet).
+The count is taken over news_events (pipeline v2) rather than over raw
+articles: classification happens once per event (see app/models/news_event.py),
+so a route signal that three outlets reported is one signal, not three. The
+article-based version that used to live in insights_service.new_route_signals
+counted the duplicate reporting, and it is gone -- while both existed, İçgörüler
+and the Hub page put two different numbers on the same real-world event, and an
+analyst reading İçgörüler saw competitor network activity overstated by however
+many outlets happened to pick the story up.
 
-Airport resolution reuses the same app.data.airport() lookup against the full
-3,241-airport reference table that insights_service already uses -- not the
-~20-entry app.hubs.HUBS list, which only names the carriers this desk
-actively watches and was never meant as a general-purpose gazetteer.
+Airport resolution uses the app.data.airport() lookup against the full
+3,241-airport reference table -- not the ~20-entry app.hubs.HUBS list, which
+only names the carriers this desk actively watches and was never meant as a
+general-purpose gazetteer.
 """
 from datetime import datetime, timedelta, timezone
 
@@ -21,10 +22,47 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer, selectinload
 
 from app.data import airport, country_name
+from app.hubs import HUBS
 from app.models.article import Article
 from app.models.entity import ArticleEntity, Entity
 from app.models.news_event import NewsEvent
-from app.services.insights_service import destination_airports
+
+
+# How many airports a single route signal may claim. A launch announcement
+# names its destination and usually its origin; anything past the third is
+# almost always a comparison ("unlike its LHR and CDG services"), and on the
+# map every extra code becomes a marker a reader will read as a destination.
+MAX_SIGNAL_AIRPORTS = 3
+
+
+def destination_airports(airports: list[dict], airlines: list[str]) -> list[dict]:
+    """The airports a signal is actually *about*.
+
+    Two corrections to the raw extraction, both aimed at the map:
+
+    * A carrier's own hub is the origin, not a new destination. An article
+      naming TK and IST is not announcing a new route to Istanbul. The
+      carrier->hub mapping is derived from `app/hubs.py`, which already
+      records which carriers are based at each hub, rather than restated
+      here where the two could drift.
+    * Order is text order, so the first codes are the ones the headline
+      named; comparisons trail. Keeping the first few is a better guess at
+      "the destination" than keeping all of them.
+
+    Origins are only dropped when something survives them -- a signal whose
+    every airport is a hub still shows those, because an empty list would
+    silently erase the story from the map.
+    """
+    if not airports:
+        return []
+    codes = {code.upper() for code in airlines if code}
+    origins = {
+        hub.code
+        for hub in HUBS
+        if any(carrier.upper() in codes for carrier in hub.carriers)
+    }
+    destinations = [a for a in airports if a["code"] not in origins]
+    return (destinations or airports)[:MAX_SIGNAL_AIRPORTS]
 
 
 async def network_signals(
@@ -35,7 +73,9 @@ async def network_signals(
     now: datetime | None = None,
 ) -> list[dict]:
     """New-route events grouped by world region, with the primary article
-    behind each one -- the same cited-list contract as the v1 version.
+    behind each one. Every signal links back to its source, so this returns
+    article detail rather than bare counts; `count` is the full regional total
+    even when the listed articles are capped at `per_region`.
 
     `now` is the window's anchor, passed in by a caller that has to state the
     window it served (/hubs/network-signals' envelope, and /biz, which cuts

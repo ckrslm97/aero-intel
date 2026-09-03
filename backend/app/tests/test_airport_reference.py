@@ -267,7 +267,7 @@ def test_real_route_pair_is_untouched_by_the_blocklist():
 
 def test_signal_airports_drop_the_carriers_own_hub():
     """TK naming IST is stating its origin, not announcing a route to it."""
-    from app.services.insights_service import destination_airports
+    from app.services.network_signals_service import destination_airports
 
     def ap(code: str) -> dict:
         return {"code": code, "name": code, "city": code, "country": "x",
@@ -278,7 +278,10 @@ def test_signal_airports_drop_the_carriers_own_hub():
 
 
 def test_signal_airports_are_capped_in_text_order():
-    from app.services.insights_service import MAX_SIGNAL_AIRPORTS, destination_airports
+    from app.services.network_signals_service import (
+        MAX_SIGNAL_AIRPORTS,
+        destination_airports,
+    )
 
     def ap(code: str) -> dict:
         return {"code": code, "name": code, "city": code, "country": "x",
@@ -296,7 +299,7 @@ def test_signal_airports_are_capped_in_text_order():
 
 def test_a_signal_whose_every_airport_is_a_hub_still_shows_them():
     """Dropping the last airport would erase the signal from the map."""
-    from app.services.insights_service import destination_airports
+    from app.services.network_signals_service import destination_airports
 
     def ap(code: str) -> dict:
         return {"code": code, "name": code, "city": code, "country": "x",

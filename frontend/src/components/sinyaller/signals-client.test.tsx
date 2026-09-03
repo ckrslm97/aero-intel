@@ -2,11 +2,17 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { SignalsClient } from "./signals-client";
+import { currentParams, resetNavigation, setUrl } from "@/lib/__fixtures__/next-navigation";
 import type { SignalOut, SignalsOut } from "@/lib/types";
+
+import { SignalsClient } from "./signals-client";
 
 const apiFetch = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/api", () => ({ apiFetch, API_BASE_URL: "http://test/api/v1" }));
+
+// A real (fake) address bar: replace() moves it and every useSearchParams
+// reader re-renders, because this page's two chips now live in the URL.
+vi.mock("next/navigation", async () => await import("@/lib/__fixtures__/next-navigation"));
 
 vi.mock("next/link", () => ({
   default: ({ href, children }: { href: string; children: React.ReactNode }) => (
@@ -65,6 +71,7 @@ function payload(signals: SignalOut[]): SignalsOut {
 describe("SignalsClient", () => {
   beforeEach(() => {
     apiFetch.mockReset();
+    resetNavigation("/sinyaller");
   });
 
   it("renders each signal's stream vocabulary rather than re-deriving it", async () => {
@@ -164,6 +171,72 @@ describe("SignalsClient", () => {
     // "Hepsi" on the kind row clears that axis and nothing else.
     await user.click(screen.getAllByRole("button", { name: "Hepsi" })[0]);
     expect(screen.getByText("Risk sinyali")).toBeInTheDocument();
+  });
+
+  it("opens on the filters the URL names", async () => {
+    // The positive half of "a view is a link": someone pasted
+    // /sinyaller?kind=competitor into a message and this is what the
+    // recipient must see -- their page narrowed the same way, without
+    // touching a chip.
+    setUrl("/sinyaller?kind=competitor");
+    apiFetch.mockResolvedValue(
+      payload([
+        signal({ id: "r1", title_tr: "Risk sinyali" }),
+        signal({
+          id: "c1",
+          kind: "competitor",
+          kind_label_tr: "Rakip",
+          title_tr: "Rakip sinyali",
+        }),
+      ]),
+    );
+
+    render(<SignalsClient />);
+
+    expect(await screen.findByText("Rakip sinyali")).toBeInTheDocument();
+    expect(screen.queryByText("Risk sinyali")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Rakip/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  it("writes a pressed chip into the URL and takes it back out when cleared", async () => {
+    const user = userEvent.setup();
+    apiFetch.mockResolvedValue(
+      payload([
+        signal({ id: "r1", title_tr: "Risk sinyali" }),
+        signal({
+          id: "c1",
+          kind: "competitor",
+          kind_label_tr: "Rakip",
+          title_tr: "Rakip sinyali",
+        }),
+      ]),
+    );
+
+    render(<SignalsClient />);
+    await screen.findByText("Risk sinyali");
+    // The negative half: an untouched page carries no filter keys at all, so
+    // "unfiltered" is one URL rather than several spellings of it.
+    expect(currentParams().has("kind")).toBe(false);
+
+    await user.click(screen.getByRole("button", { name: /Rakip/ }));
+    expect(currentParams().get("kind")).toBe("competitor");
+
+    await user.click(screen.getAllByRole("button", { name: "Hepsi" })[0]);
+    expect(currentParams().has("kind")).toBe(false);
+  });
+
+  it("ignores a severity the feed has no vocabulary for", async () => {
+    // A hand-edited or stale ?severity= must not empty the list while the
+    // chip row still reads "Hepsi" -- that looks exactly like a broken build.
+    setUrl("/sinyaller?severity=pembe");
+    apiFetch.mockResolvedValue(payload([signal({ id: "r1", title_tr: "Risk sinyali" })]));
+
+    render(<SignalsClient />);
+
+    expect(await screen.findByText("Risk sinyali")).toBeInTheDocument();
   });
 
   it("lists a stream that produced nothing instead of dropping it", async () => {

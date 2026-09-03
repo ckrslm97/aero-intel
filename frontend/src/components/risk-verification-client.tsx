@@ -2,13 +2,14 @@
 
 import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 
 import { DataSourceError, LastUpdatedStamp, StaleDataBanner } from "@/components/data-source-error";
 import { RiskFunnel } from "@/components/risk/risk-funnel";
 import { RiskRejectionsTable } from "@/components/risk/risk-rejections-table";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDataSource } from "@/hooks/use-data-source";
+import { readNumber, useUrlState, writeParam } from "@/hooks/use-url-state";
 import { apiFetch } from "@/lib/api";
 import { rejectionFilterOptions } from "@/lib/risk";
 import type { RiskQualityOut, RiskRejection } from "@/lib/types";
@@ -54,8 +55,54 @@ const chip = (active: boolean) =>
  * The output of this page is a code change, not a database edit.
  */
 export function RiskVerificationClient() {
-  const [days, setDays] = useState<number>(DEFAULT_DAYS);
-  const [reason, setReason] = useState<string | null>(null);
+  // ?days IS READ FROM THE URL, and that is the point of the parameter.
+  //
+  // The window used to be component state seeded from DEFAULT_DAYS, so the
+  // funnel opened on 5 days no matter what the radar had been showing. A
+  // reader on a 30-day radar clicked "Veri doğrulama" and audited a different
+  // fortnight than the one they had just read -- the exact drift this file's
+  // docstring says must not happen, produced by the link that exists to
+  // prevent it. The radar now writes the window into the link
+  // (risk-radar-client.tsx) and this screen reads it.
+  //
+  // ?reason joins it because it is the other thing worth sending: "şu kural
+  // bu pencerede N haber eledi, bak" is the sentence this page exists to
+  // support.
+  //
+  // ?country is carried but NOT applied -- see `radarHref`.
+  const { params, replaceParams } = useUrlState();
+  const days = readNumber(params, "days", DAY_WINDOWS, DEFAULT_DAYS);
+  const urlReason = params.get("reason");
+  const country = params.get("country");
+
+  const setUrlState = useCallback(
+    (next: { days?: number; reason?: string | null }) => {
+      const updated = new URLSearchParams(params.toString());
+      if (next.days !== undefined) {
+        writeParam(updated, "days", next.days === DEFAULT_DAYS ? null : String(next.days));
+      }
+      if (next.reason !== undefined) writeParam(updated, "reason", next.reason);
+      replaceParams(updated);
+    },
+    [params, replaceParams],
+  );
+
+  const setDays = useCallback(
+    (next: number) => setUrlState({ days: next }),
+    [setUrlState],
+  );
+
+  /** Back to the radar, on the window and country the reader came from.
+   *
+   * Without the round trip the audit is a one-way door: you arrive from
+   * "Yunanistan, son 30 gün", press the back link, and land on the default
+   * radar -- so checking whether you believe a view costs you the view. */
+  const radarHref = useMemo(() => {
+    const back = new URLSearchParams();
+    if (days !== DEFAULT_DAYS) back.set("days", String(days));
+    if (country) back.set("country", country);
+    return back.size ? `/risk-radari?${back.toString()}` : "/risk-radari";
+  }, [days, country]);
 
   const quality = useDataSource<RiskQualityOut>(
     (signal) =>
@@ -63,31 +110,57 @@ export function RiskVerificationClient() {
     [days],
   );
 
+  const data = quality.data;
+  const options = useMemo(() => (data ? rejectionFilterOptions(data) : []), [data]);
+
+  /** The reason actually applied. The set of rejection reasons is served, not
+   * compiled in, so `?reason=` can only be checked once the funnel arrives --
+   * before that it is passed through (the API answers an unknown one with an
+   * empty list, which costs one request), and after that an unrecognised one
+   * is dropped rather than left lighting no chip above an empty table. */
+  const activeReason = useMemo(() => {
+    if (!urlReason) return null;
+    if (!data) return urlReason;
+    return options.some((option) => option.reason === urlReason) ? urlReason : null;
+  }, [urlReason, data, options]);
+
+  // Dropping it from the request is only half the job: left in the address bar
+  // it made the URL claim a filter the table was not applying. archive-client
+  // names this exact failure -- "worse than no filter at all, because the URL
+  // said the filter had been applied" -- and forwarding such a link passes the
+  // claim on. So once the funnel has told us the reason is not one of ours, the
+  // address bar loses it too, and the two say the same thing again.
+  useEffect(() => {
+    if (!urlReason || !data) return;
+    if (activeReason === null) setUrlState({ reason: null });
+  }, [urlReason, data, activeReason, setUrlState]);
+
   const rejected = useDataSource<RiskRejection[]>(
     (signal) =>
       apiFetch<RiskRejection[]>(
-        `/risks/rejected?days=${days}&limit=${ROW_LIMIT}${reason ? `&reason=${reason}` : ""}`,
+        `/risks/rejected?days=${days}&limit=${ROW_LIMIT}${activeReason ? `&reason=${activeReason}` : ""}`,
         { cache: "default", signal },
       ),
-    [days, reason],
+    [days, activeReason],
   );
 
-  const data = quality.data;
-  const options = useMemo(() => (data ? rejectionFilterOptions(data) : []), [data]);
   const rows = rejected.data ?? [];
 
   const shownOf = useMemo(() => {
     if (!data) return null;
-    if (reason) return data.rejected_counts[reason] ?? 0;
+    if (activeReason) return data.rejected_counts[activeReason] ?? 0;
     // The unfiltered table cannot show `outside_window`: that bucket is the
     // archive, and the API counts it rather than listing it. Saying "N / M"
     // against a total the table can never reach would look like a bug.
     return Object.entries(data.rejected_counts)
       .filter(([slug]) => slug !== "outside_window")
       .reduce((sum, [, count]) => sum + count, 0);
-  }, [data, reason]);
+  }, [data, activeReason]);
 
-  const selectReason = useCallback((next: string | null) => setReason(next), []);
+  const selectReason = useCallback(
+    (next: string | null) => setUrlState({ reason: next }),
+    [setUrlState],
+  );
 
   return (
     <div className="flex flex-col gap-6">
@@ -95,7 +168,7 @@ export function RiskVerificationClient() {
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="flex min-w-0 flex-col gap-1">
             <Link
-              href="/risk-radari"
+              href={radarHref}
               className="flex w-fit items-center gap-1 text-[11px] font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
             >
               <ArrowLeft className="size-3" aria-hidden />
@@ -141,6 +214,18 @@ export function RiskVerificationClient() {
               {window}g
             </button>
           ))}
+          {/* Said out loud rather than left to be discovered. The radar's
+              country filter travels in the link so the way back restores it,
+              but the audit endpoints take days and reason only -- a screen
+              that quietly ignored a filter it is visibly carrying would be
+              exactly the "iki ekran, iki farklı gün" problem in a new place. */}
+          {country && (
+            <span className="text-[11px] text-muted-foreground">
+              Radar <span className="font-medium text-foreground">{country}</span> ile
+              daraltılmıştı; bu ekran ülkeye göre daralmaz, huni pencerenin
+              tamamını sayar.
+            </span>
+          )}
         </div>
 
         {/* The sentence the whole screen is built to make defensible. Three of
@@ -171,7 +256,7 @@ export function RiskVerificationClient() {
         ) : (
           <RiskFunnel
             stages={data.stages}
-            activeReason={reason}
+            activeReason={activeReason}
             onSelectReason={selectReason}
           />
         )}
@@ -190,9 +275,9 @@ export function RiskVerificationClient() {
         <div className="flex flex-wrap items-center gap-1.5">
           <button
             type="button"
-            onClick={() => setReason(null)}
-            aria-pressed={reason === null}
-            className={chip(reason === null)}
+            onClick={() => selectReason(null)}
+            aria-pressed={activeReason === null}
+            className={chip(activeReason === null)}
           >
             Tümü
           </button>
@@ -200,10 +285,12 @@ export function RiskVerificationClient() {
             <button
               key={option.reason}
               type="button"
-              onClick={() => setReason(reason === option.reason ? null : option.reason)}
-              aria-pressed={reason === option.reason}
+              onClick={() =>
+                selectReason(activeReason === option.reason ? null : option.reason)
+              }
+              aria-pressed={activeReason === option.reason}
               title={option.reason}
-              className={chip(reason === option.reason)}
+              className={chip(activeReason === option.reason)}
             >
               {option.label}
               <span className="ml-0.5 tabular-nums opacity-70">{option.count}</span>
@@ -217,9 +304,9 @@ export function RiskVerificationClient() {
           <Skeleton className="h-64 w-full rounded-xl" />
         ) : rows.length === 0 ? (
           <p className="rounded-lg border border-dashed border-border px-3 py-6 text-center text-xs text-muted-foreground">
-            {reason === "outside_window"
+            {activeReason === "outside_window"
               ? "Bu pencerenin dışında kalan risk adayı yok."
-              : reason
+              : activeReason
                 ? "Bu sebeple elenen aday yok."
                 : "Bu pencerede hiçbir risk adayı elenmedi."}
           </p>

@@ -9,7 +9,6 @@ vi.mock("@/lib/api", () => ({ apiFetch, API_BASE_URL: "http://test/api/v1" }));
 const insights = (momentum: unknown[]) => ({
   generated_at: "2026-09-01T00:00:00Z",
   airline_momentum: momentum,
-  new_route_signals: [],
   top_topics: [],
   sentiment: [],
 });

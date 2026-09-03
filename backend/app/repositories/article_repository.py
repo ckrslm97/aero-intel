@@ -394,10 +394,20 @@ class ArticleRepository:
         result = await self.db.execute(query)
         return int(result.scalar_one())
 
-    async def count_by_day(self, days: int = 7) -> dict[str, int]:
+    async def count_by_day(
+        self, days: int = 7, category: str | None = None
+    ) -> dict[str, int]:
         """Article count per UTC day over the last `days` days -- the archive
         page's date-strip badges. Keys are ISO dates; days with no articles are
-        simply absent (the frontend fills zeros)."""
+        simply absent (the frontend fills zeros).
+
+        `category` narrows the tally the same way it narrows the list, because
+        the archive uses these counts for two things: the badge on each day
+        chip, and picking which day to open on when today is still empty. Under
+        a beat filter an unnarrowed tally does both jobs wrong -- it prints
+        "40" over a day holding two Gelir Yönetimi stories, and it opens the
+        page on a day that has news but none of the news the reader asked for.
+        """
         cutoff = datetime.combine(
             datetime.now(timezone.utc).date() - timedelta(days=days - 1),
             time.min,
@@ -407,11 +417,16 @@ class ArticleRepository:
         # in the *session* timezone, which shifts every late-evening UTC article
         # into the wrong day on any non-UTC deployment (bitten by this before).
         day_col = func.date_trunc("day", func.timezone("UTC", _DAY_EXPR))
-        query = (
-            select(day_col, func.count())
-            .where(Article.is_duplicate.is_(False), _NOT_BLACKLISTED, _DAY_EXPR >= cutoff)
-            .group_by(day_col)
+        query = select(day_col, func.count()).where(
+            Article.is_duplicate.is_(False), _NOT_BLACKLISTED, _DAY_EXPR >= cutoff
         )
+        if category:
+            # Same join and same column as `_apply_filters`, so a badge counts
+            # exactly the rows `GET /articles?date=...&category=...` returns.
+            query = query.join(ArticleEnrichment).where(
+                ArticleEnrichment.category == category
+            )
+        query = query.group_by(day_col)
         result = await self.db.execute(query)
         return {day.date().isoformat(): count for day, count in result.all()}
 

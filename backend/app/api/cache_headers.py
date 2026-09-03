@@ -63,6 +63,37 @@ def public_cache(response: Response, max_age: int, stale_for: int | None = None)
     )
 
 
-def immutable_cache(response: Response) -> None:
-    """For content that can never change again -- a past day's edition."""
-    response.headers["Cache-Control"] = "public, max-age=86400, immutable"
+# A past day's edition. Long, because nothing in the ordinary life of the
+# product rewrites yesterday's paper; not forever, because something does --
+# see `archive_cache`.
+ARCHIVE = 86400
+
+
+def archive_cache(response: Response) -> None:
+    """For a finished document that a rebuild can still replace.
+
+    Was `immutable_cache`, and both halves of that name were wrong.
+
+    `immutable` tells a browser it may not revalidate for the whole max-age,
+    even on an explicit reload. But POST /editions/{date}/rebuild reassembles
+    ANY day, past ones included, so a past edition is not immutable -- it is
+    merely stable. Under `immutable` an operator who fixed yesterday's paper
+    had no way to make anyone see the fix: the URL does not change, there is no
+    ETag, and every client had been told to stop asking for a day. Ordinary
+    freshness is the honest contract: readers still hit the edge, and a rebuild
+    becomes visible on the next revalidation instead of never.
+
+    And it sent no `Vary: Origin`, which `public_cache` above carries for a
+    reason paid for in production. Any shared cache in front of this response
+    keyed one visitor's CORS answer for everyone; the first request without an
+    Origin header poisoned it for every browser after. A response that is
+    cached for a day is the worst possible place to leave that out.
+    """
+    stale = ARCHIVE * 5
+    response.headers["Vary"] = "Origin"
+    response.headers["Cache-Control"] = (
+        f"public, max-age={ARCHIVE}, stale-while-revalidate={stale}"
+    )
+    response.headers["CDN-Cache-Control"] = (
+        f"public, s-maxage={ARCHIVE}, stale-while-revalidate={stale}"
+    )

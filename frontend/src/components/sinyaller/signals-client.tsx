@@ -1,21 +1,23 @@
 "use client";
 
 import { Activity } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo } from "react";
 
 import { DataSourceError, LastUpdatedStamp, StaleDataBanner } from "@/components/data-source-error";
 import { MotionItem, MotionList } from "@/components/motion/motion-list";
 import { SignalCard } from "@/components/sinyaller/signal-card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDataSource } from "@/hooks/use-data-source";
+import { useUrlState } from "@/hooks/use-url-state";
 import { apiFetch } from "@/lib/api";
 import {
   countBy,
   filterSignals,
   KIND_ORDER,
-  NO_FILTERS,
+  parseSignalFilters,
   SEVERITY_ORDER,
   severityStyle,
+  signalFiltersToSearchParams,
   type SignalFilters,
 } from "@/lib/signals";
 import type { SignalKind, SignalSeverity, SignalsOut } from "@/lib/types";
@@ -43,7 +45,18 @@ export function SignalsClient() {
     [],
   );
   const { data, error, loaded, lastUpdated, stale, retry } = useDataSource(fetcher, []);
-  const [filters, setFilters] = useState<SignalFilters>(NO_FILTERS);
+
+  // Both chips are URL-owned. This page's whole output is "look at this" --
+  // a severity chip that evaporates on reload cannot be sent to the person who
+  // has to act on it. Same parse/serialise shape as Kampanyalar.
+  const { params, replaceParams } = useUrlState();
+  const filters = useMemo(() => parseSignalFilters(params), [params]);
+  const setFilters = useCallback(
+    (next: SignalFilters) => {
+      replaceParams(signalFiltersToSearchParams(next, params));
+    },
+    [params, replaceParams],
+  );
 
   const signals = useMemo(() => data?.signals ?? [], [data]);
   const visible = useMemo(() => filterSignals(signals, filters), [signals, filters]);
@@ -124,7 +137,7 @@ export function SignalsClient() {
           )}
           counts={kindCounts}
           active={filters.kind}
-          onChange={(kind) => setFilters((prev) => ({ ...prev, kind: kind as SignalKind | null }))}
+          onChange={(kind) => setFilters({ ...filters, kind: kind as SignalKind | null })}
         />
         <ChipRow
           label="Şiddet"
@@ -135,7 +148,7 @@ export function SignalsClient() {
           counts={severityCounts}
           active={filters.severity}
           onChange={(severity) =>
-            setFilters((prev) => ({ ...prev, severity: severity as SignalSeverity | null }))
+            setFilters({ ...filters, severity: severity as SignalSeverity | null })
           }
           dotFor={(value) => severityStyle(value).dot}
         />

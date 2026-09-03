@@ -1,11 +1,11 @@
 "use client";
 
 import { Lightbulb, Sparkles } from "lucide-react";
-import { useSearchParams } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useCallback } from "react";
 
 import { InsightsClient } from "@/components/insights-client";
 import { RecommendationsClient } from "@/components/recommendations-client";
+import { readEnum, useUrlState, writeParam } from "@/hooks/use-url-state";
 import { cn } from "@/lib/utils";
 
 /** The two lenses on the same question -- "what does the data say". Örüntüler
@@ -20,37 +20,34 @@ type TabKey = (typeof TABS)[number]["key"];
 
 const DEFAULT_TAB: TabKey = "oruntuler";
 
+const TAB_KEYS = TABS.map((t) => t.key) as readonly TabKey[];
+
 /** The two İçgörüler tabs. Each tab renders its own client whole and unedited --
  * Öneriler in particular owns its filters, multi-select state and fetches, and
  * absorbing them here would just be a second copy to keep in sync. */
 export function InsightsTabs() {
-  // Same idiom as NewspaperBrowser: the URL seeds the opening state so
-  // /insights?tab=oneriler deep-links straight to the recommendations, and
-  // after that the buttons own the tab -- re-reading the URL would fight them.
-  const searchParams = useSearchParams();
-  const initialTab = useMemo<TabKey>(() => {
-    const wanted = searchParams.get("tab");
-    return TABS.some((t) => t.key === wanted) ? (wanted as TabKey) : DEFAULT_TAB;
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberately the first URL only
-  }, []);
+  // THE URL OWNS THE TAB, continuously -- it does not merely seed it.
+  //
+  // This used to hold the tab in state and write `?tab=` with
+  // `window.history.replaceState`, on the reasoning that a router navigation
+  // would remount both clients and throw away Öneriler's filters. Öneriler's
+  // filters are in the URL now (lib/recommendations.ts), so there is nothing
+  // left to throw away -- and the old trick had a cost that outlived its
+  // reason: `history.replaceState` is invisible to `useSearchParams`, so the
+  // moment Öneriler wrote a filter it serialised onto params that had never
+  // heard of `?tab=oneriler` and silently dropped the reader's tab out of the
+  // link. One writer per address bar, and it is the router.
+  const { params, replaceParams } = useUrlState();
+  const tab = readEnum(params, "tab", TAB_KEYS, DEFAULT_TAB);
 
-  const [tab, setTab] = useState<TabKey>(initialTab);
-
-  function selectTab(next: TabKey) {
-    setTab(next);
-    // Keep the address bar addressable (copy the link, hit refresh, land on
-    // the same tab) without a router navigation: router.replace would refetch
-    // the route and remount both clients, throwing away Öneriler's filters.
-    // replaceState rather than pushState -- a tab is not a page, so Back
-    // should leave İçgörüler rather than walk the tabs the user clicked.
-    const url = new URL(window.location.href);
-    if (next === DEFAULT_TAB) {
-      url.searchParams.delete("tab");
-    } else {
-      url.searchParams.set("tab", next);
-    }
-    window.history.replaceState(null, "", url);
-  }
+  const selectTab = useCallback(
+    (next: TabKey) => {
+      const updated = new URLSearchParams(params.toString());
+      writeParam(updated, "tab", next === DEFAULT_TAB ? null : next);
+      replaceParams(updated);
+    },
+    [params, replaceParams],
+  );
 
   return (
     <div className="flex flex-col gap-6">

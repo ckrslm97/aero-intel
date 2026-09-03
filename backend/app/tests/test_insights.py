@@ -11,7 +11,6 @@ from app.services.insights_service import (
     airline_momentum,
     build_daily_digest,
     latest_digest,
-    new_route_signals,
 )
 from app.services.tk_service import latest_tk_digest
 
@@ -72,44 +71,94 @@ async def test_airline_momentum_computes_week_over_week_delta(db_session):
     assert (ek["current"], ek["previous"], ek["delta"]) == (3, 1, 2)
 
 
-async def test_new_route_signals_group_by_region_with_cited_articles(db_session):
+# --- new routes are counted in ONE place ------------------------------------
+#
+# /insights used to publish its own `new_route_signals` block, counted per
+# ARTICLE, while the Hub page's Ağ Sinyalleri tab counted the same
+# announcements per EVENT (app/services/network_signals_service.py). One
+# launch that five outlets picked up was therefore "5" on İçgörüler and "1" on
+# the Hub -- and İçgörüler, the page an analyst reads to size up a rival's
+# network activity, was the one showing the inflated number. The article-based
+# count is gone; these two pin that it did not come back, and that the digest
+# sentence built from the same data counts events too.
+
+
+async def _new_route_articles(db, *, region="europe", count=3):
+    """`count` articles reporting ONE launch, plus the single v2 event that
+    represents it -- the shape that made the two counts disagree."""
+    from app.models.news_event import NewsEvent
     from app.models.source import Source
 
     source = Source(name="S2", url="https://example.com/feed2", source_type="rss")
-    db_session.add(source)
-    await db_session.flush()
-    lufthansa = Entity(entity_type="airline", name="Lufthansa", code="LH")
-    db_session.add(lufthansa)
-    await db_session.flush()
-
-    articles = []
-    for i, region in enumerate(["europe", "europe", "asia"]):
-        articles.append(
-            await _article(
-                db_session, source, url=f"https://example.com/nr{i}", published_at=NOW,
-                category="network", subcategory="new_route", region=region,
-                headline_tr=f"Yeni hat {i}",
-            )
+    db.add(source)
+    await db.flush()
+    articles = [
+        await _article(
+            db, source, url=f"https://example.com/nr{i}", published_at=NOW,
+            category="network", subcategory="new_route", region=region,
+            headline_tr=f"Yeni hat {i}",
         )
-    db_session.add(ArticleEntity(article_id=articles[0].id, entity_id=lufthansa.id))
-    # A network article that is NOT a new route must not count.
-    await _article(
-        db_session, source, url="https://example.com/nr-x", published_at=NOW,
-        category="network", subcategory="cancellation", region="europe",
+        for i in range(count)
+    ]
+    db.add(
+        NewsEvent(
+            slug="tek-hat-duyurusu",
+            title_tr="Yeni hat",
+            primary_article_id=articles[0].id,
+            region=region,
+            category="network",
+            subcategory="new_route",
+            first_seen=NOW,
+            last_seen=NOW,
+            is_published=True,
+            confidence_band="high",
+            article_count=count,
+        )
     )
-    await db_session.commit()
+    await db.commit()
+    return articles
 
-    signals = await new_route_signals(db_session)
-    europe = signals[0]
-    assert (europe["region"], europe["count"]) == ("europe", 2)
-    assert len(europe["articles"]) == 2
-    # Every signal is citable: Turkish headline preferred, source named, URL kept.
-    first = next(a for a in europe["articles"] if a["url"] == "https://example.com/nr0")
-    assert first["headline"] == "Yeni hat 0"
-    assert first["source_name"] == "S2"
-    assert first["airlines"] == ["LH"]
-    asia = next(s for s in signals if s["region"] == "asia")
-    assert asia["count"] == 1
+
+async def test_insights_publishes_no_route_count_of_its_own(db_session):
+    from fastapi import Response
+
+    from app.api.v1 import insights as insights_api
+
+    await _new_route_articles(db_session)
+
+    payload = await insights_api.get_insights(response=Response(), db=db_session)
+
+    # Positive: the aggregates İçgörüler still owns are all there.
+    assert set(payload) == {
+        "generated_at",
+        "windows",
+        "airline_momentum",
+        "sentiment_by_category",
+        "digest",
+    }
+    # Negative: three articles about one launch are in the database and the
+    # payload states no route count anywhere -- not under the old key, and not
+    # under a window that would let a page print one.
+    assert "new_route_signals" not in payload
+    assert "new_route_signals" not in payload["windows"]
+
+
+async def test_the_digest_counts_a_launch_once_however_many_outlets_ran_it(
+    db_session, monkeypatch
+):
+    from app.core.config import get_settings
+
+    get_settings.cache_clear()
+    monkeypatch.setenv("LLM_PROVIDER", "heuristic")
+
+    await _new_route_articles(db_session, region="europe", count=3)
+    digest = await build_daily_digest(db_session)
+
+    # One event, three articles: the sentence says one. The article-based
+    # tally this replaced would have written "3" into the same slot.
+    assert "europe (1 duyuru)" in digest.body
+    assert "3 duyuru" not in digest.body
+    get_settings.cache_clear()
 
 
 async def test_digest_falls_back_to_deterministic_turkish_without_llm(db_session, monkeypatch):

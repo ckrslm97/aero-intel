@@ -68,7 +68,7 @@ const DAY_WINDOWS = [5, 7, 14, 30, 90] as const;
 const DEFAULT_DAYS = 5;
 const TREND_DAYS = 30;
 
-/** The lit-chip pattern shared with Gazete/İçgörüler/Öneriler. Note there is
+/** The lit-chip pattern shared with Gazete/Hub/Öneriler. Note there is
  * no REGION_GLOW anywhere on this page: the chrome stays neutral so the only
  * saturated things on screen are the few item cards that earn it. */
 const chip = (active: boolean) =>
@@ -116,6 +116,28 @@ export function RiskRadarClient() {
     (value: string | null) => setUrlState({ country: value }),
     [setUrlState],
   );
+
+  /** The audit view, opened on the SAME window this page is showing.
+   *
+   * The link used to be bare. The funnel then opened on its own 5-day default
+   * and the reader compared a 30-day radar against a 5-day audit -- two
+   * different sets of days under one question ("do I believe what I just
+   * looked at"), with nothing on either screen saying they were different.
+   * risk-verification-client.tsx's own docstring forbids exactly this.
+   *
+   * `country` rides along too. The audit endpoints cannot narrow by country --
+   * `/risks/quality` and `/risks/rejected` take days and reason only -- so it
+   * is carried as memory rather than as a filter: the audit says out loud that
+   * it is not narrowed, and its way back returns the reader to the country
+   * they were looking at instead of dropping them on an unfiltered radar. */
+  const verificationHref = useMemo(() => {
+    const params = new URLSearchParams();
+    if (days !== DEFAULT_DAYS) params.set("days", String(days));
+    if (country) params.set("country", country);
+    return params.size
+      ? `/risk-radari/dogrulama?${params.toString()}`
+      : "/risk-radari/dogrulama";
+  }, [days, country]);
 
   const radar = useDataSource<RiskRadarOut>(
     (signal) => apiFetch<RiskRadarOut>(`/risks?days=${days}`, { cache: "default", signal }),
@@ -256,7 +278,7 @@ export function RiskRadarClient() {
                   attention to serve the few who came to check the pipeline.
                   One quiet link is the whole footprint it gets. */}
               <Link
-                href="/risk-radari/dogrulama"
+                href={verificationHref}
                 className="text-[11px] font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
               >
                 Veri doğrulama
