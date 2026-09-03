@@ -25,6 +25,7 @@ on:
           - repair-etna-article-content
           - repair-translations
           - clean-headlines
+          - clean-content
           - translate-backlog
           - build-insight
           - evaluate-golden
@@ -142,6 +143,8 @@ jobs:
               python -m app.cli repair-translations ;;
             clean-headlines)
               python -m app.cli clean-headlines ;;
+            clean-content)
+              python -m app.cli clean-content ;;
             translate-backlog)
               python -m app.cli translate-backlog --limit "${LIMIT:-12}" ;;
             build-insight)
