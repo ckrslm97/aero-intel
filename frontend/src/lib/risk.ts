@@ -16,7 +16,14 @@
  * never becomes an impact number, and an airport is always "anılan".
  * ======================================================================== */
 
-import type { RiskCountry, RiskItem, RiskTrendPoint } from "@/lib/types";
+import type {
+  RiskCountry,
+  RiskFunnelStage,
+  RiskItem,
+  RiskQualityOut,
+  RiskRejection,
+  RiskTrendPoint,
+} from "@/lib/types";
 
 /** Matches backend/app/api/v1/risks.py UNKNOWN_COUNTRY: events whose country
  * never resolved. They stay in the list -- the event is real, only its
@@ -399,4 +406,127 @@ export function buildRiskTrendSeries(
   }
 
   return { days: dayKeys, natural, conflict, high };
+}
+
+/* ===========================================================================
+ * The doğrulama screen's pure rules (spec §23-24).
+ *
+ * Same discipline as everything above: no React, no DOM, so the funnel's
+ * arithmetic and the rejection filter can be asserted without a renderer. The
+ * screen draws the funnel twice -- as bars and as a numeric column -- and both
+ * must read the same widths off the same function.
+ * ======================================================================== */
+
+/** One funnel stage, ready to draw: the API's row plus the bar geometry.
+ *
+ * `widthPct` is measured against the FIRST stage, never against the previous
+ * one. A bar scaled to its own predecessor makes every stage look like it kept
+ * most of what reached it -- which is exactly the impression the funnel exists
+ * to correct when 13.906 articles become 9 signals. */
+export interface RiskFunnelBar {
+  key: string;
+  label: string;
+  passed: number;
+  dropped: number;
+  reason: string | null;
+  /** Every reason this stage's drops carry, with its own count -- one entry
+   * for most stages, two for the location gate. A chip built from `reason`
+   * alone would promise the stage's whole drop and deliver one reason's share
+   * of it. */
+  reasons: { reason: string; count: number }[];
+  dropKind: string | null;
+  note: string | null;
+  /** 0-100, relative to the widest (first) stage. */
+  widthPct: number;
+  /** What share of the stage ABOVE reached this one, 0-100. Null on the first
+   * stage, which has nothing above it. */
+  keptPct: number | null;
+}
+
+export function buildRiskFunnel(stages: readonly RiskFunnelStage[]): RiskFunnelBar[] {
+  const top = stages[0]?.passed ?? 0;
+  return stages.map((stage, index) => {
+    const previous = index > 0 ? stages[index - 1].passed : null;
+    return {
+      key: stage.key,
+      label: stage.label_tr,
+      passed: stage.passed,
+      dropped: stage.dropped,
+      reason: stage.reason,
+      reasons: Object.entries(stage.reason_counts ?? {}).map(([reason, count]) => ({
+        reason,
+        count,
+      })),
+      dropKind: stage.drop_kind,
+      note: stage.note_tr,
+      // A zero-length bar for a real, non-zero stage would read as "nothing
+      // here"; 0 stays 0, and anything else gets at least a sliver.
+      widthPct: top > 0 ? Math.max(stage.passed > 0 ? 0.6 : 0, (stage.passed / top) * 100) : 0,
+      keptPct: previous && previous > 0 ? (stage.passed / previous) * 100 : null,
+    };
+  });
+}
+
+/** The reason filter's options, in funnel order, each with its uncapped count.
+ *
+ * Built from the STAGES rather than from `rejected_counts`, so the order a
+ * reader sees matches the order the rules run in -- and so a reason with zero
+ * rejections this window still appears, greyed, instead of vanishing. A filter
+ * whose options come and go with the data cannot be learned. */
+export interface RiskRejectionFilterOption {
+  reason: string;
+  label: string;
+  count: number;
+}
+
+export function rejectionFilterOptions(
+  quality: Pick<RiskQualityOut, "stages" | "rejected_counts" | "reason_labels_tr">,
+): RiskRejectionFilterOption[] {
+  const seen = new Set<string>();
+  const options: RiskRejectionFilterOption[] = [];
+  for (const stage of quality.stages) {
+    if (stage.drop_kind !== "rejected" || !stage.reason || seen.has(stage.reason)) continue;
+    seen.add(stage.reason);
+    options.push({
+      reason: stage.reason,
+      label: quality.reason_labels_tr[stage.reason] ?? stage.reason,
+      count: quality.rejected_counts[stage.reason] ?? 0,
+    });
+  }
+  // The location stage carries one of its two reasons; the other only ever
+  // appears in `rejected_counts`, and leaving it out would make a whole class
+  // of rejection unreachable from the filter.
+  for (const [reason, count] of Object.entries(quality.rejected_counts)) {
+    if (seen.has(reason)) continue;
+    seen.add(reason);
+    options.push({
+      reason,
+      label: quality.reason_labels_tr[reason] ?? reason,
+      count,
+    });
+  }
+  return options;
+}
+
+/** What a rejected row's location evidence says, as one short line.
+ *
+ * The three fields it folds are meaningless apart: a country with no
+ * confidence is a guess presented as a fact, and a confidence with no country
+ * is a number about nothing. */
+export function rejectionPlaceLabel(
+  row: Pick<RiskRejection, "detected_country" | "detected_city" | "location_confidence">,
+): string {
+  const place = [row.detected_city, row.detected_country].filter(Boolean).join(", ");
+  if (!place) return "Konum çözülemedi";
+  if (row.location_confidence === null) return `${place} (ölçülmedi)`;
+  return `${place} (${row.location_confidence.toFixed(2)})`;
+}
+
+/** A score, or the word for "nobody measured this".
+ *
+ * Never "0.00" for a null: the whole revision exists because "we did not
+ * measure this" and "we measured this and it was zero" are different facts,
+ * and a table that renders them identically re-creates the bug on screen. */
+export function scoreOrUnscored(score: number | null | undefined): string {
+  return score === null || score === undefined ? "ölçülmedi" : score.toFixed(2);
 }

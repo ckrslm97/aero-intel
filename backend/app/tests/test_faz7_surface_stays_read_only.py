@@ -17,7 +17,7 @@ gained one, it would need require_admin exactly like /admin/status and
 POST /editions/{date}/rebuild -- this test fails loudly the moment that
 happens, rather than the gap being discovered in production.
 """
-from app.api.v1 import biz, hubs, kokpit, promotions, signals
+from app.api.v1 import biz, hubs, kokpit, promotions, risks, signals
 from app.api.v1.router import api_router
 
 READ_ONLY_ROUTERS = {
@@ -28,6 +28,14 @@ READ_ONLY_ROUTERS = {
     # Sinyaller composes six other read-only surfaces into one feed; it must
     # never gain a way to write to any of them.
     "signals": signals.router,
+    # Risk Radarı, added when it grew the verification surface (/risks/quality
+    # and /risks/rejected). Those two exist to EXPLAIN the gates, and the
+    # explanation must never become a way to change them: "mark this rejection
+    # as wrong" is the obvious next request and it is a write, needing
+    # require_admin exactly like /admin/status does. This is where that gets
+    # noticed. It is also why the rejection reasons are computed on read and
+    # stored nowhere -- see app/services/risk_quality.py.
+    "risks": risks.router,
 }
 
 # CLI commands that must stay reachable only via `python -m app.cli`, never

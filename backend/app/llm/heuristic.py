@@ -572,6 +572,17 @@ _RISK_RULES: tuple[_RiskRule, ...] = (
         strong=(
             "civil war", "war zone", "warzone", "war crimes", "war torn", "at war",
             "armed conflict", "military offensive",
+            # EASA and the FAA both publish airspace warnings under this exact
+            # phrase ("Conflict Zone Information Bulletin"), which is how a
+            # regulator says "there is a war under this airspace". It was
+            # missed entirely: bare "conflict" is weak and needs a casualty
+            # word beside it, and a bulletin telling airlines to stay out of
+            # four countries' airspace contains none -- it is a notice, not a
+            # casualty report. Safe as a strong term because the three
+            # ordinary-business senses of "conflict" are already masked
+            # (conflict of interest / scheduling conflict / conflict
+            # resolution) and none of them is ever written "conflict zone".
+            "conflict zone", "conflict zones", "catisma bolgesi",
             "airstrike", "airstrikes", "air strike", "air strikes", "shelling",
             "bombardment", "savas bolgesi", "ic savas", "silahli catisma",
             "ates kes", "isgal",
@@ -608,6 +619,17 @@ _RISK_RULES: tuple[_RiskRule, ...] = (
             "rocket attack", "armed attack", "gun attack", "car bomb", "bombing",
             "gunmen", "opened fire", "hijack", "hijacking", "hijacked", "assassination",
             "teror saldirisi", "bombali saldiri", "silahli saldiri", "suikast",
+            # The "-strike" forms of the three attack compounds already above.
+            # Bare "strike" stays out of this whole taxonomy (a pilots' strike
+            # is `labor`), but these three are compounds and none of them has a
+            # labour reading. Measured miss: "Yemen strikes capital's airport
+            # runway to block a Mahan Air flight" classified as nothing at all
+            # -- a runway bombed to stop an aircraft landing is the most
+            # aviation-relevant conflict event this feed can carry.
+            "drone strike", "drone strikes", "missile strike", "missile strikes",
+            "rocket strike", "rocket strikes", "air raid", "air raids",
+            "struck the runway", "struck the airport", "struck the terminal",
+            "insansiz hava araci saldirisi", "fuze saldirisi", "hava akini",
         ),
         weak=("attack", "attacks", "attackers", "militants", "shooting", "saldiri"),
     ),
@@ -784,6 +806,40 @@ def detect_risk_severity(title_text: str, body_text: str) -> str:
     return "low"
 
 
+def _best_rule(title_text: str, body_text: str, *, aircraft_discount: int = 0) -> str | None:
+    """The highest-scoring rule over ALREADY FOLDED text, or None.
+
+    Split out of detect_risk_type so risk_veto() below can run the same scoring
+    with one guard disabled at a time and read off WHICH guard was the one that
+    removed the match. Two implementations of this loop would be two answers to
+    "does this article's own vocabulary support a hazard claim".
+    """
+    has_context = _any(_RISK_CONTEXT, f"{title_text} {body_text}")
+    best_slug: str | None = None
+    best_score = 0
+    for rule in _RISK_RULES:
+        score = _score(_keyword_pattern(rule.strong), title_text, body_text)
+        if has_context:
+            score += _score(_keyword_pattern(rule.weak), title_text, body_text)
+        if rule.slug == "storm":
+            score -= aircraft_discount
+        if score > best_score:
+            best_score = score
+            best_slug = rule.slug
+    return best_slug
+
+
+def _aircraft_discount(title_text: str, body_text: str) -> int:
+    """Typhoon, Tornado, Hurricane and Cyclone are aircraft here as often as
+    they are weather. Discount exactly their contribution when the article is
+    plainly about military aviation, so "RAF Typhoons scrambled to intercept"
+    scores zero for `storm` while "Typhoon Noul threatens South China airports"
+    keeps its full score."""
+    if not _any(_MILITARY_AVIATION_CONTEXT, f"{title_text} {body_text}"):
+        return 0
+    return _score(_keyword_pattern(_WEATHER_NAMED_AIRCRAFT), title_text, body_text)
+
+
 def detect_risk_type(title: str, content: str) -> str | None:
     """The closed-taxonomy risk type for this article, or None.
 
@@ -799,31 +855,106 @@ def detect_risk_type(title: str, content: str) -> str | None:
 
     title_text = _masked(fold_text(title))
     body_text = _masked(fold_text(content))
-    has_context = _any(_RISK_CONTEXT, f"{title_text} {body_text}")
+    return _best_rule(
+        title_text,
+        body_text,
+        aircraft_discount=_aircraft_discount(title_text, body_text),
+    )
 
-    # Typhoon, Tornado and Hurricane are aircraft here as often as they are
-    # weather. Discount exactly their contribution when the article is plainly
-    # about military aviation, so "RAF Typhoons scrambled to intercept" scores
-    # zero for `storm` while "Typhoon Noul threatens South China airports"
-    # keeps its full score.
-    aircraft_discount = 0
-    if _any(_MILITARY_AVIATION_CONTEXT, f"{title_text} {body_text}"):
-        aircraft_discount = _score(
-            _keyword_pattern(_WEATHER_NAMED_AIRCRAFT), title_text, body_text
-        )
 
-    best_slug: str | None = None
-    best_score = 0
-    for rule in _RISK_RULES:
-        score = _score(_keyword_pattern(rule.strong), title_text, body_text)
-        if has_context:
-            score += _score(_keyword_pattern(rule.weak), title_text, body_text)
-        if rule.slug == "storm":
-            score -= aircraft_discount
-        if score > best_score:
-            best_score = score
-            best_slug = rule.slug
-    return best_slug
+# ---------------------------------------------------------------------------
+# THE VETO, AND THE GAP IT CLOSES
+#
+# Every guard above -- the metaphor mask, the weather-named-aircraft discount,
+# the retrospective rule, the 14 regression cases in test_risk_radar.py -- runs
+# inside detect_risk_type(). And detect_risk_type() is the FALLBACK path:
+# app/pipeline/enrich.py asks the LLM first and only reaches the keyword pass
+# when the model declines to answer.
+#
+# So on the deployment that has a model configured -- which is production --
+# none of those guards had any effect on a fresh article. "RAF Typhoons
+# scrambled to escort a 777" is pinned in CI as a false positive and could
+# still reach the live radar as a `storm`, because the model, not the keyword
+# pass, decided. The regression suite was guarding a code path production does
+# not take.
+#
+# risk_veto() is that suite applied to whatever produced the answer. It returns
+# a reason ONLY when a guard actively fired -- when the article's own
+# vocabulary contains the evidence that the classification is wrong -- and
+# never merely because the keyword pass found nothing:
+#
+#   guard fired      -> a reason. The text says "Typhoon" and also says
+#                       "squadron"; it says "fare war" and nothing else;
+#                       the headline narrates 1988. Veto.
+#   no keyword found -> None. This vocabulary is English and Turkish only, so
+#                       silence on a Spanish-language earthquake report is the
+#                       list's limitation, not evidence about the article. A
+#                       veto here would delete exactly the stories the model is
+#                       there to catch.
+#
+# The one asymmetric case is MILITARY_AVIATION_PROSE, and it is deliberate: an
+# article whose own words say it is about military aircraft, carrying no hazard
+# vocabulary at all, is not reporting a natural disaster or a conflict event.
+# That is the shape of nearly every entry in PRODUCTION_FALSE_POSITIVES
+# (Typhoons, Rafale/Gripen comparisons, a Hurricane warbird, a Tornado
+# procurement retrospective, the NOAA hurricane hunter, an F-22 budget piece, a
+# Skyraider training loss) and of the live examples this phase was opened with
+# (a Boeing MH-139A delivery, "Helicopter Vs. Fighter: The Cold War Exercise",
+# a Civil Air Patrol squadron deactivation). It stays narrow by requiring the
+# military-aviation vocabulary to be present: a Spanish earthquake story
+# carries none of it and is untouched.
+# ---------------------------------------------------------------------------
+
+#: The headline narrates the past. See is_retrospective.
+RISK_VETO_RETROSPECTIVE = "retrospective"
+#: The only hazard tokens in the article sat inside a masked idiom -- "fare
+#: war", "under fire", "perfect storm", "political earthquake".
+RISK_VETO_FIGURATIVE = "figurative_language"
+#: The hazard token is an aircraft type in an article about military aviation.
+RISK_VETO_WEATHER_NAMED_AIRCRAFT = "weather_named_aircraft"
+#: Military-aviation prose with no hazard vocabulary anywhere in it.
+RISK_VETO_MILITARY_AVIATION = "military_aviation_prose"
+
+
+def risk_veto(title: str, content: str) -> str | None:
+    """A reason to REFUSE a risk classification, whoever produced it, or None.
+
+    None means "no guard fired", which is emphatically not "this is a risk" --
+    it is the absence of counter-evidence, and the caller's own classification
+    stands. See the section header on why that asymmetry is the whole point.
+    """
+    if is_retrospective(title):
+        return RISK_VETO_RETROSPECTIVE
+
+    folded_title = fold_text(title)
+    folded_body = fold_text(content)
+    masked_title = _masked(folded_title)
+    masked_body = _masked(folded_body)
+
+    discount = _aircraft_discount(masked_title, masked_body)
+    if _best_rule(masked_title, masked_body, aircraft_discount=discount) is not None:
+        # The article's own words support a hazard claim. Which hazard is the
+        # classifier's business, not this function's -- the keyword pass is a
+        # far worse taxonomist than the model and must not overrule it on
+        # WHICH type, only on WHETHER there is one at all.
+        return None
+
+    # Nothing survived. Turn one guard off at a time to name which removed it.
+    if discount and _best_rule(masked_title, masked_body) is not None:
+        return RISK_VETO_WEATHER_NAMED_AIRCRAFT
+    # The mask, tested by PRESENCE rather than by re-scoring the unmasked text.
+    # Re-scoring misses the commonest shape: "fare war" contributes a WEAK
+    # token, weak tokens need a _RISK_CONTEXT word beside them, and a pricing
+    # story has none -- so both passes score zero and the comparison sees no
+    # difference. What is actually true about that article is what this asks:
+    # a masked idiom is in it, and after removing the idioms no hazard
+    # vocabulary is left anywhere. Its only risk-shaped words were figures of
+    # speech.
+    if _mask_pattern().search(f"{folded_title} {folded_body}"):
+        return RISK_VETO_FIGURATIVE
+    if _any(_MILITARY_AVIATION_CONTEXT, f"{masked_title} {masked_body}"):
+        return RISK_VETO_MILITARY_AVIATION
+    return None
 
 
 # ===========================================================================
@@ -1070,6 +1201,50 @@ def _folded_sentences(title: str, content: str) -> list[str]:
     return [fold_text(s) for s in _sentences(f"{title}. {content}") if s.strip()]
 
 
+#: Words that put an event INSIDE the place that follows them. English carries
+#: the marker in front ("in Russia", "across Taiwan"); Turkish carries it
+#: behind, and fold_text turns the apostrophe into a space, so "Japonya'da"
+#: arrives here as "japonya da" -- two tokens, matched by the suffix list.
+_LOCATIVE_PREFIXES: tuple[str, ...] = (
+    "in", "at", "across", "near", "inside", "throughout", "within",
+    "around", "over",
+)
+_LOCATIVE_TR_SUFFIXES: tuple[str, ...] = ("da", "de", "nda", "nde", "ta", "te")
+
+
+@lru_cache(maxsize=256)
+def _locative_re(alias: str) -> re.Pattern[str]:
+    return re.compile(
+        rf"\b(?:{_alternation(_LOCATIVE_PREFIXES)})\s+{re.escape(alias)}\b"
+        rf"|\b{re.escape(alias)}\s+(?:{_alternation(_LOCATIVE_TR_SUFFIXES)})\b"
+    )
+
+
+def _is_locative(sentences: list[str], aliases: tuple[str, ...]) -> bool:
+    """Whether any of these aliases is grammatically marked as WHERE.
+
+    The tie-break the resolver needed and did not have. Role alone answers
+    "is this place the speaker or the scene", and when TWO countries both come
+    back "event" the old code simply took whichever the gazetteer happened to
+    list first -- which is document order, so the headline's subject wins.
+
+    "Ukraine strikes Russian pipeline station ... struck the station in
+    Russia's Republic of Bashkortostan" is that failure: both countries are in
+    the event role (nobody is quoted), Ukraine is named first, and the strike
+    is pinned to the attacker instead of to the target. Neither is a dateline,
+    so the discourse-verb rule has nothing to say about it.
+
+    A locative marker is real syntactic evidence and document order is not, so
+    it wins. It only ever chooses BETWEEN countries the role test already
+    accepted -- it can neither promote a source-role country nor reject a
+    country outright, which is what keeps it from re-opening the class of bug
+    the role test closed.
+    """
+    return any(
+        _locative_re(alias).search(sentence) for alias in aliases for sentence in sentences
+    )
+
+
 def _place_role(sentences: list[str], aliases: tuple[str, ...]) -> str | None:
     """The role these aliases play across the article, or None when none of
     them appears at all.
@@ -1170,6 +1345,10 @@ def resolve_risk_location(
 
     # ---- pass 2: countries ----------------------------------------------
     event_country: str | None = None
+    #: The first event-role country the gazetteer offered, kept separately from
+    #: the first LOCATIVELY MARKED one. Document order is the fallback, never
+    #: the preference -- see _is_locative.
+    event_country_first: str | None = None
     source_country: str | None = None
     unverified_country: str | None = None
     confidence: float | None = None
@@ -1196,13 +1375,20 @@ def resolve_risk_location(
         seen_countries.add(canonical)
         remember(canonical.title(), "country", role or "unverified")
         if role == "event":
-            if event_country is None:
+            if event_country_first is None:
+                event_country_first = canonical
+            if event_country is None and _is_locative(
+                sentences, alias_index.get(canonical, (canonical,))
+            ):
                 event_country = canonical
         elif role == "source":
             if source_country is None:
                 source_country = canonical
         elif unverified_country is None:
             unverified_country = canonical
+
+    if event_country is None:
+        event_country = event_country_first
 
     if event_country is not None:
         confidence = LOCATION_CONFIDENCE_COUNTRY
@@ -1335,6 +1521,18 @@ _AVIATION_OPERATIONAL: tuple[str, ...] = (
     "notam", "atc strike", "air traffic control strike",
     "air traffic controllers strike", "air traffic controller strike",
     "atc disruption", "hava trafik kontrolorleri grevi", "atc grevi",
+    # Airspace AVOIDANCE, which is the regulator's instrument and was missing.
+    # A closure is a state authority shutting its own sky; an avoidance
+    # bulletin is a different authority telling its own airlines to stay out of
+    # someone else's. Operationally they are the same fact -- routes move,
+    # sectors empty, fuel burn changes -- and the EASA bulletin that told
+    # airlines not to operate over Bahrain, Kuwait, Qatar and the UAE scored
+    # nothing here, which is the exact opposite of what §5 asks for. "Conflict
+    # Zone Information Bulletin" is the formal instrument's own name, in the
+    # same class as NOTAM above.
+    "conflict zone information bulletin", "conflict zone bulletin",
+    "avoid the airspace", "avoiding the airspace", "airspace advisory",
+    "hava sahasindan kacinilmasi", "hava sahasini kullanmamalari",
 )
 
 #: The same operational facts, written with the verb held away from the noun:
@@ -1349,6 +1547,15 @@ _AVIATION_OPERATIONAL: tuple[str, ...] = (
 _AVIATION_OPERATIONAL_RE = re.compile(
     r"\bflights?\b(?:\s+\w+){0,4}?\s+\b(?:cancell?ed|cancellations?|diverted|"
     r"suspended|grounded|halted|rerouted)\b"
+    # The same fact with the verb in FRONT, which is how a headline writes it:
+    # "Airlines cancel dozens of Taiwan and Hong Kong flights as Typhoon Bavi
+    # nears" scored nothing, because every alternative here read noun-then-verb.
+    # A typhoon cancelling flights at three airports is the textbook §16 case
+    # and it was passing the gate only on the unscored exemption -- publishing
+    # for want of a measurement rather than because of one.
+    r"|\b(?:cancel|cancels|cancell?ing|cancell?ed|divert|diverts|diverting|"
+    r"ground|grounds|grounding|suspend|suspends|suspending|halt|halts|halting)\b"
+    r"(?:\s+\w+){0,5}?\s+\bflights?\b"
     r"|\bairspace\b(?:\s+\w+){0,3}?\s+\b(?:closed|closure|closures|shut|"
     r"restricted|reopened)\b"
     r"|\b(?:airport|airports|runway|runways|terminal|terminals)\b"
@@ -1358,6 +1565,22 @@ _AVIATION_OPERATIONAL_RE = re.compile(
     r"\b(?:iptal|durduruldu|ertelendi|yonlendirildi|askiya)\b"
     r"|\b(?:havalimani|havaalani|pist|terminal)\b(?:\s+\w+){0,4}?\s+"
     r"\b(?:kapatildi|kapandi|kapali|tahliye)\b"
+    # Told to stay out of an airspace. Verb BEFORE the noun, which the closure
+    # alternatives above cannot express: "avoid Gulf airspace", "not to operate
+    # in the airspace of Bahrain".
+    r"|\b(?:avoid|avoiding|avoided|not to operate in|not to fly through)\b"
+    r"(?:\s+\w+){0,4}?\s+\bairspace\b"
+    # An airport, runway or terminal STRUCK. The closure alternatives above
+    # read "runway closed"; a runway bombed to stop a flight landing is the
+    # same operational fact reported the other way round, and it scored
+    # nothing. The verbs are deliberately the unambiguous damage ones -- "hit"
+    # is excluded, because "Middle East conflict ... hit Frankfurt Airport
+    # traffic" is a traffic statistic and must keep scoring nothing (§5).
+    r"|\b(?:struck|shelled|bombed|attacked|damaged|destroyed)\b"
+    r"(?:\s+\w+){0,3}?\s+"
+    r"\b(?:airport|airports|runway|runways|terminal|terminals|control tower)\b"
+    r"|\b(?:vuruldu|bombalandi|vurdu)\b(?:\s+\w+){0,3}?\s+"
+    r"\b(?:havalimani|havaalani|pist)\b"
 )
 
 #: Language that makes an operational statement a FORECAST rather than a

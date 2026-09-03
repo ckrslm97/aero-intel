@@ -26,7 +26,13 @@ same `pytest` step CI runs on every PR.
 """
 import inspect
 
-from app.tests import test_classify, test_news_event_model, test_pipeline_v2_runner, test_risk_radar
+from app.tests import (
+    test_classify,
+    test_news_event_model,
+    test_pipeline_v2_runner,
+    test_risk_radar,
+    test_risk_verification_cases,
+)
 
 
 def _is_test_function(module, name: str) -> None:
@@ -63,3 +69,25 @@ def test_the_weather_named_aircraft_false_positives_are_still_guarded():
         "the production-false-positive fixture list shrank -- a named "
         "incident may have been dropped instead of fixed"
     )
+
+
+def test_the_live_radar_false_positives_are_still_guarded():
+    # "Boeing MH-139A Grey Wolf helikopteri", "Helicopter Vs. Fighter: The
+    # Cold War Exercise" and "Teton Civil Air Patrol Squadron Deactivated"
+    # were on the live Risk Radarı list -- aviation content, not risk events.
+    # The mechanism was structural rather than lexical: every false-positive
+    # guard in this repository lived inside detect_risk_type, which
+    # app/pipeline/enrich.py only reaches when the model declines to answer,
+    # so on the deployment that has a model configured (production) none of
+    # them ever ran. risk_veto is that guard applied to whichever path
+    # answered, and the 30-case round is where the incidents themselves live.
+    _is_test_function(test_risk_verification_cases, "test_the_verification_round")
+    _is_test_function(test_risk_verification_cases, "test_every_spec_27_category_has_a_case")
+    assert len(test_risk_verification_cases.CASES) >= 24, (
+        "the §27 verification round shrank -- a real production case may have "
+        "been dropped instead of fixed"
+    )
+    live = {"uretim_grey_wolf_helikopteri", "uretim_cold_war_exercise",
+            "uretim_teton_civil_air_patrol"}
+    ids = {case.id for case in test_risk_verification_cases.CASES}
+    assert live <= ids, f"live-radar false positives no longer pinned: {live - ids}"

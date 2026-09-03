@@ -545,13 +545,18 @@ async def _campaign_quality_report(days: int | None) -> None:
 
 
 async def _risk_quality_report(days: int | None) -> None:
-    """§23's funnel: total articles -> current -> risk candidate -> confidence
-    -> aviation relevance -> location verified -> clustered signal.
+    """§23's funnel: total articles -> risk candidate -> in window -> not a
+    duplicate -> current -> confidence -> aviation relevance -> location
+    verified -> clustered signal.
 
     Read-only and LLM-free, so it is safe against production while enrichment
     is running. Its most important lines are the "ölçülmemiş" ones: three of
     the four gates publish unscored rows on purpose, and this is what says how
     much of the funnel that leniency is currently carrying.
+
+    The same numbers are served by GET /risks/quality, from the same function,
+    for the doğrulama screen -- see app/services/risk_quality.py on why the
+    rejections are computed on read and stored nowhere.
     """
     from app.services.risk_quality import (
         DEFAULT_WINDOW_DAYS,

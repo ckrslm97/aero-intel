@@ -1,4 +1,10 @@
-import type { RiskCountry, RiskItem } from "@/lib/types";
+import type {
+  RiskCountry,
+  RiskFunnelStage,
+  RiskItem,
+  RiskQualityOut,
+  RiskRejection,
+} from "@/lib/types";
 
 /** One risk signal, overridable field by field.
  *
@@ -70,5 +76,122 @@ export function riskCountry(country: string, items: RiskItem[]): RiskCountry {
     score,
     severity_counts: counts,
     items,
+  };
+}
+
+/** One funnel stage. Defaults describe an ordinary REJECTING stage, because
+ * the interesting states -- the merge at the bottom, the non-rejection drop at
+ * `risk_adayi` -- are the ones a component gets wrong, and a fixture must make
+ * a test ask for them explicitly. */
+export function riskFunnelStage(overrides: Partial<RiskFunnelStage> = {}): RiskFunnelStage {
+  return {
+    key: "guven",
+    label_tr: "Güven kapısı",
+    passed: 8,
+    dropped: 2,
+    reason: "confidence_below_floor",
+    reason_counts: { confidence_below_floor: 2 },
+    drop_kind: "rejected",
+    note_tr: null,
+    ...overrides,
+  };
+}
+
+/** A funnel whose arithmetic CLOSES: each stage's passed + dropped equals the
+ * previous stage's passed, exactly as the API guarantees. Written as a derived
+ * builder rather than as literals so a fixture can never assert a shape the
+ * real payload could not produce. */
+export function riskFunnel(
+  steps: readonly {
+    key: string;
+    label: string;
+    passed: number;
+    reason?: string | null;
+    /** For the one stage that rejects for two reasons. Must add up to the
+     * stage's own drop, exactly as the API guarantees. */
+    reasonCounts?: Record<string, number>;
+    dropKind?: string | null;
+    note?: string | null;
+  }[],
+): RiskFunnelStage[] {
+  return steps.map((step, index) => {
+    const dropped = index === 0 ? 0 : steps[index - 1].passed - step.passed;
+    const dropKind = step.dropKind ?? (index === 0 ? null : "rejected");
+    return {
+      key: step.key,
+      label_tr: step.label,
+      passed: step.passed,
+      dropped,
+      reason: step.reason ?? null,
+      reason_counts:
+        step.reasonCounts ??
+        (dropKind === "rejected" && step.reason ? { [step.reason]: dropped } : {}),
+      drop_kind: dropKind,
+      note_tr: step.note ?? null,
+    };
+  });
+}
+
+/** One rejected candidate. The defaults are the THIN shape again: nothing
+ * measured, no other gate failed, no places named -- which is what most rows
+ * genuinely look like while the LLM's coverage is partial. */
+export function riskRejection(overrides: Partial<RiskRejection> = {}): RiskRejection {
+  return {
+    article_id: "11111111-1111-1111-1111-111111111111",
+    title: "EASA instructs airlines to avoid Gulf airspace",
+    url: "https://example.com/easa",
+    source_name: "AeroTime",
+    source_tier: "trade",
+    published_at: "2026-08-28T08:00:00Z",
+    reason: "aviation_relevance_low",
+    reason_label_tr: "Havacılıkla ilgisiz",
+    also_failed: [],
+    risk_type: "war",
+    risk_severity: "high",
+    confidence_score: null,
+    corroborating_source_count: null,
+    aviation_relevance_score: null,
+    aviation_relevance_source: null,
+    location_confidence: null,
+    detected_country: null,
+    detected_city: null,
+    mentioned_locations: [],
+    ...overrides,
+  };
+}
+
+/** A quality payload built around a funnel, with the reason counts derived
+ * from the stages -- so the filter chips a test renders can never disagree
+ * with the funnel it rendered them from. */
+export function riskQuality(
+  stages: RiskFunnelStage[],
+  overrides: Partial<RiskQualityOut> = {},
+): RiskQualityOut {
+  const counts: Record<string, number> = { outside_window: 0 };
+  for (const stage of stages) {
+    if (stage.drop_kind === "rejected" && stage.reason) {
+      counts[stage.reason] = (counts[stage.reason] ?? 0) + stage.dropped;
+    }
+  }
+  return {
+    days: 5,
+    generated_at: "2026-08-28T09:00:00Z",
+    since: "2026-08-23T09:00:00Z",
+    stages,
+    rejected_counts: counts,
+    reason_labels_tr: {
+      outside_window: "Pencere dışında",
+      duplicate: "Yinelenen haber",
+      not_current_event: "Güncel olay değil",
+      confidence_below_floor: "Güven eşiğinin altında",
+      aviation_relevance_low: "Havacılıkla ilgisiz",
+      location_unresolved: "Konum doğrulanamadı",
+      location_conflict: "Konum çelişkili",
+    },
+    aviation_unscored: 0,
+    location_unscored: 0,
+    confidence_unscored: 0,
+    aviation_by_source: {},
+    ...overrides,
   };
 }

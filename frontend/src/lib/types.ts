@@ -1033,3 +1033,85 @@ export interface SignalsOut {
    * newest signal in it. */
   generated_at: string;
 }
+
+// --- Risk Radarı doğrulama ekranı (backend spec §23-24) --------------------
+//
+// The two payloads behind /risk-radari/dogrulama. They answer the questions
+// the radar itself cannot: "is what I see six out of six, or six out of
+// forty", and "why is THIS story not here". Both are read-only aggregates
+// computed per request; nothing about a rejection is stored, so these types
+// describe a snapshot and never a history.
+
+/** One line of the funnel. Each stage is a subset of the one above it, and
+ * `passed + dropped` equals the previous stage's `passed` -- the arithmetic a
+ * reader uses to get from "toplam makale" to "sinyal" without a leap of
+ * faith. */
+export interface RiskFunnelStage {
+  key: string;
+  label_tr: string;
+  passed: number;
+  dropped: number;
+  /** The rejection slug the dropped rows carry. Null when the drop is not a
+   * rejection: the first stage has nothing above it, `risk_adayi` drops
+   * ordinary news, and `kume` MERGES rather than removes.
+   *
+   * Only the FIRST slug when a stage carries several -- the location gate
+   * splits into unresolved and conflict -- so anything that filters must read
+   * `reason_counts`, never this. */
+  reason: string | null;
+  /** reason -> how many of `dropped` carry it, summing to `dropped`. Empty
+   * when the drop is not a rejection. This is what a filter chip's label and
+   * its result are both built from, so the two cannot disagree. */
+  reason_counts: Record<string, number>;
+  /** "rejected" | "merged" | null. The distinction the screen must not blur --
+   * a merged cluster is still on the radar and a rejected article is not. */
+  drop_kind: string | null;
+  note_tr: string | null;
+}
+
+/** One risk candidate the gates removed, with the values the rule read. */
+export interface RiskRejection {
+  article_id: string;
+  title: string;
+  url: string;
+  source_name: string;
+  /** official | regulator | agency | trade | aggregator. */
+  source_tier: string;
+  published_at: string | null;
+  reason: string;
+  reason_label_tr: string;
+  /** Every OTHER gate this row would also have failed. Empty is the good
+   * case: fix the one rule and the article appears. */
+  also_failed: string[];
+  risk_type: string | null;
+  risk_severity: string | null;
+  confidence_score: number | null;
+  corroborating_source_count: number | null;
+  aviation_relevance_score: number | null;
+  aviation_relevance_source: string | null;
+  location_confidence: number | null;
+  /** What the resolver decided the place was, BEFORE the map gate blanked it.
+   * /risks blanks a weak placement on purpose; this screen is the one place
+   * the rejected answer stays visible, or a wrong placement cannot be told
+   * apart from an absent one. */
+  detected_country: string | null;
+  detected_city: string | null;
+  mentioned_locations: RiskMentionedLocation[];
+}
+
+export interface RiskQualityOut {
+  days: number;
+  generated_at: string;
+  since: string;
+  stages: RiskFunnelStage[];
+  /** Rejections per reason, UNCAPPED -- so a truncated table can still say how
+   * much of the whole it is showing. */
+  rejected_counts: Record<string, number>;
+  reason_labels_tr: Record<string, string>;
+  /** How much of each gate's yield is carried by rows nobody measured. A gate
+   * passing everything unscored is a gate not yet doing anything. */
+  aviation_unscored: number;
+  location_unscored: number;
+  confidence_unscored: number;
+  aviation_by_source: Record<string, number>;
+}
