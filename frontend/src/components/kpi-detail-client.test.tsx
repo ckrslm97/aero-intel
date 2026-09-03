@@ -80,7 +80,8 @@ describe("KpiDetailClient", () => {
     expect(screen.getByText("2025'e göre")).toBeInTheDocument();
     expect(screen.queryByText(/önceki ölçüme göre/)).not.toBeInTheDocument();
     // Two decimals, the same precision Market Pulse gives the same figure.
-    expect(screen.getByText("83,40")).toBeInTheDocument();
+    // 83,4 stays 83,4: a percentage carries the precision its source stated.
+    expect(screen.getByText("83,4")).toBeInTheDocument();
   });
 
   it("prints no delta at all rather than a wrong one when the payload has neither", async () => {
