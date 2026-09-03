@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   adjacentYearPair,
+  ANNUAL_KIND_LABELS_TR,
   annualScopeLabel,
   forecastBuckets,
   forecastSplitIndex,
@@ -13,6 +14,7 @@ import {
   splitForecast,
   unionYears,
 } from "./cockpit";
+import { PERIOD_KIND_LABELS_TR, PERIOD_KINDS } from "./taxonomy.gen";
 import type { AnnualPoint, FxForecastOut } from "./types";
 
 const NOW = new Date("2026-08-30T12:00:00Z");
@@ -289,3 +291,19 @@ describe("adjacentYearPair", () => {
   });
 });
 
+describe("ANNUAL_KIND_LABELS_TR", () => {
+  // The de-duplication: /kpi/<metric> renders this word server-side out of
+  // app/taxonomy.py while the outlook tile renders it here. Two dictionaries
+  // meant an IATA 2025 column read "tahmini gerçekleşme" on one surface and
+  // "ön gerçekleşme" on the other -- one row, two words.
+  it("is the backend's own map, not a second copy of it", () => {
+    expect(ANNUAL_KIND_LABELS_TR).toBe(PERIOD_KIND_LABELS_TR);
+  });
+
+  it("names every kind a yearly point can carry", () => {
+    for (const kind of PERIOD_KINDS) {
+      expect(ANNUAL_KIND_LABELS_TR[kind]).toBeTruthy();
+    }
+    expect(ANNUAL_KIND_LABELS_TR.estimate).toBe("tahmini gerçekleşme");
+  });
+});

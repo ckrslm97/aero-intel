@@ -321,12 +321,22 @@ export function ArticleAnalysisDrawer({
                         >
                           {band ? CONFIDENCE_LABEL[band] : "Bilinmiyor"}
                         </span>
-                        <span className="text-sm font-semibold tabular-nums">
-                          %{Math.round(enrichment.confidence_score * 100)}
-                        </span>
+                        {/* No number when nobody produced one. The backend
+                            column is NOT NULL and defaults to 0.0, so an
+                            unscored article used to arrive here as a hard
+                            zero and render "Düşük güven · %0" -- a verdict the
+                            system never reached, drawn with the same
+                            confidence as one it did. */}
+                        {enrichment.confidence_score !== null && (
+                          <span className="text-sm font-semibold tabular-nums">
+                            %{Math.round(enrichment.confidence_score * 100)}
+                          </span>
+                        )}
                       </span>
                       <span className="text-[10px] leading-tight text-muted-foreground">
-                        kaynak-güven temelli skor
+                        {enrichment.confidence_score !== null
+                          ? "kaynak-güven temelli skor"
+                          : "bu haber için güven skoru hesaplanmadı"}
                       </span>
                     </div>
 

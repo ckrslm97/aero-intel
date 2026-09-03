@@ -116,6 +116,7 @@ from app.llm.heuristic import LOCATION_CONFIDENCE_CONFLICT
 from app.models.article import Article, ArticleEnrichment
 from app.models.entity import ArticleEntity
 from app.pipeline.clustering import EventCandidate, cluster, entity_codes, tier_for_source
+from app.pipeline.verify import measured_confidence
 
 # ---------------------------------------------------------------------------
 # REJECTION REASONS
@@ -162,6 +163,20 @@ REJECTION_REASONS: tuple[str, ...] = (
     REASON_LOCATION_UNRESOLVED,
     REASON_LOCATION_CONFLICT,
 )
+
+#: The four gates that read one article's own enrichment, in funnel order.
+#: `RiskRejection.gates` is keyed by these. `outside_window` and `duplicate`
+#: are deliberately absent: they are properties of the article rather than
+#: verdicts a gate reached about it, and they are already the `reason` when
+#: they apply.
+GATE_KEYS: tuple[str, ...] = ("currency", "confidence", "aviation", "location")
+
+GATE_LABELS_TR: dict[str, str] = {
+    "currency": "Güncellik",
+    "confidence": "Güven",
+    "aviation": "Havacılık ilgisi",
+    "location": "Konum",
+}
 
 REJECTION_REASON_LABELS_TR: dict[str, str] = {
     REASON_OUTSIDE_WINDOW: "Pencere dışında",
@@ -240,8 +255,30 @@ class RiskRejection:
     #: have passed everything else.
     also_failed: tuple[str, ...] = ()
 
+    #: Every ROW-LEVEL gate's verdict, pass or fail -- not only the failures.
+    #: Keys are GATE_KEYS.
+    #:
+    #: `reason` and `also_failed` between them list what went wrong, which is
+    #: not the same information: a row rejected for currency alone reads
+    #: identically to one that also happens to be the only row in the window
+    #: clearing every other gate, and an analyst deciding whether a rule is
+    #: worth relaxing needs the passes as much as the failures.
+    gates: dict[str, bool] = field(default_factory=dict)
+    #: The confidence gate, called out of `gates` because it is the one gate
+    #: with an exemption ladder rather than a threshold, and the pass alone
+    #: does not say which rung carried it.
+    confidence_gate_passed: bool = True
+    #: WHY the confidence gate decided what it did, as `_confidence_verdict`
+    #: named it: "corroborated" | "unscored" | "scored" | "official" |
+    #: "below_gate". "unscored" is the one a reader must be able to see: that
+    #: row was published by a gate declining to judge an unmeasured number, not
+    #: by a score that cleared anything.
+    confidence_gate_reason: str = "unscored"
+
     risk_type: str | None = None
     risk_severity: str | None = None
+    #: The stored score. None means nothing scored this row; see
+    #: `confidence_gate_reason`.
     confidence_score: float | None = None
     corroborating_source_count: int | None = None
     aviation_relevance_score: float | None = None
@@ -467,9 +504,29 @@ def location_reason(location_confidence: float | None) -> str:
     return REASON_LOCATION_UNRESOLVED
 
 
+def _gate_verdicts(article) -> tuple[dict[str, bool], bool, str]:
+    """(`gates`, confidence passed, confidence reason) for one article.
+
+    Every gate is evaluated, none short-circuited: the point of the table this
+    feeds is to show what the rules actually decided about a row, and a
+    verdict skipped because an earlier one already rejected it is a blank the
+    reader would read as a pass.
+    """
+    enrichment = article.enrichment
+    confidence_passed, confidence_reason = _confidence_verdict(enrichment, article.source)
+    gates = {
+        "currency": enrichment.is_current_event is not False,
+        "confidence": confidence_passed,
+        "aviation": aviation_gate(enrichment.aviation_relevance_score),
+        "location": is_mappable(enrichment.location_confidence),
+    }
+    return gates, confidence_passed, confidence_reason
+
+
 def _rejection(article, reason: str, *, also_failed: tuple[str, ...] = ()) -> RiskRejection:
     enrichment = article.enrichment
     mentions = enrichment.mentioned_locations or []
+    gates, confidence_passed, confidence_reason = _gate_verdicts(article)
     return RiskRejection(
         article_id=str(article.id),
         title=article.title,
@@ -479,9 +536,16 @@ def _rejection(article, reason: str, *, also_failed: tuple[str, ...] = ()) -> Ri
         published_at=article.published_at,
         reason=reason,
         also_failed=also_failed,
+        gates=gates,
+        confidence_gate_passed=confidence_passed,
+        confidence_gate_reason=confidence_reason,
         risk_type=enrichment.risk_type,
         risk_severity=enrichment.risk_severity,
-        confidence_score=enrichment.confidence_score,
+        # The same null-out the drawer applies (app/schemas/article.py). The
+        # raw column is NOT NULL and defaults to 0.0, so forwarding it verbatim
+        # printed a measured-looking "0.00" in the verification table -- one
+        # line above that row's own "ölçülmedi, kapı yargılamadı".
+        confidence_score=measured_confidence(enrichment.confidence_score),
         corroborating_source_count=enrichment.corroborating_source_count,
         aviation_relevance_score=enrichment.aviation_relevance_score,
         aviation_relevance_source=enrichment.aviation_relevance_source,
@@ -504,24 +568,25 @@ def _downstream_failures(article, first: str) -> tuple[str, ...]:
     Only the four ROW-LEVEL gates are testable this way. `outside_window` and
     `duplicate` are properties of the article rather than of a gate reading its
     enrichment, and they are already the `reason` when they apply.
+
+    Reads `_gate_verdicts` rather than re-evaluating the four gates, so this
+    list and `RiskRejection.gates` cannot disagree about the same row -- which
+    they would be free to do the first time either copy was tuned.
     """
-    enrichment = article.enrichment
-    verdicts = (
-        (REASON_NOT_CURRENT_EVENT, enrichment.is_current_event is False),
-        (
-            REASON_CONFIDENCE_BELOW_FLOOR,
-            not _confidence_verdict(enrichment, article.source)[0],
-        ),
-        (
-            REASON_AVIATION_RELEVANCE_LOW,
-            not aviation_gate(enrichment.aviation_relevance_score),
-        ),
-        (
-            location_reason(enrichment.location_confidence),
-            not is_mappable(enrichment.location_confidence),
-        ),
+    gates, _, _ = _gate_verdicts(article)
+    reason_for_gate = {
+        "currency": REASON_NOT_CURRENT_EVENT,
+        "confidence": REASON_CONFIDENCE_BELOW_FLOOR,
+        "aviation": REASON_AVIATION_RELEVANCE_LOW,
+        # Two slugs, one gate: the resolver's own named conflict verdict is a
+        # different piece of work from "we could not place this".
+        "location": location_reason(article.enrichment.location_confidence),
+    }
+    return tuple(
+        reason_for_gate[key]
+        for key in GATE_KEYS
+        if not gates[key] and reason_for_gate[key] != first
     )
-    return tuple(reason for reason, failed in verdicts if failed and reason != first)
 
 
 async def risk_quality_report(

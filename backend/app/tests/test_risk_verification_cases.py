@@ -808,6 +808,95 @@ async def test_case_27_dusuk_guvenli_kaynak(db_session):
     assert row.source_tier == "aggregator"
     # The rest of the gates passed, so fixing the sourcing is the whole job.
     assert row.also_failed == ()
+    # `also_failed` says what else went wrong; `gates` says what every rule
+    # DECIDED. An empty also_failed and four unevaluated gates read the same
+    # without it, and they are not the same fact.
+    assert row.gates == {
+        "currency": True,
+        "confidence": False,
+        "aviation": True,
+        "location": True,
+    }
+    assert row.confidence_gate_passed is False
+    assert row.confidence_gate_reason == "below_gate"
+
+
+async def test_an_unscored_row_says_it_was_never_measured_not_that_it_passed(db_session):
+    """The confidence gate publishes an unscored row, and the table has to be
+    able to say WHY.
+
+    `confidence_score is None` alone is only half the sentence: an analyst
+    reading a rejected row's table sees a blank score next to a passing gate
+    and cannot tell "we measured it and it cleared" from "we never measured
+    it, so the gate declined to judge". `confidence_gate_reason` is the other
+    half.
+
+    Rejected here on the LOCATION gate, so the row is on this surface at all
+    while the confidence gate is the one being asserted.
+    """
+    source = await _source(db_session, "Unscored Outlet", tier="trade")
+    await _risk_article(
+        db_session,
+        source,
+        url="https://unscored.example/quake",
+        title="Earthquake reported inland",
+        risk_type="earthquake",
+        severity="high",
+        country="Greece",
+        # What ArticleEnrichment.confidence_score's NOT NULL default writes for
+        # a row the confidence pass never reached -- below the formula's own
+        # arithmetic floor of 0.4, which is how the two are told apart.
+        confidence_score=0.0,
+        location_confidence=0.1,
+    )
+    await db_session.commit()
+
+    rejected = await rejected_candidates(db_session, days=14)
+    assert len(rejected) == 1
+    row = rejected[0]
+
+    assert row.gates["confidence"] is True
+    assert row.confidence_gate_passed is True
+    assert row.confidence_gate_reason == "unscored"
+    # And the NUMBER agrees with the sentence. The stored 0.0 never reaches the
+    # table: it used to, and the row then printed a measured-looking "0.00"
+    # directly above its own "ölçülmedi, kapı yargılamadı" caption -- the same
+    # fabricated zero the analysis drawer had just stopped showing for this
+    # very column.
+    assert row.confidence_score is None
+    # And the gate that actually removed it is the one reported as failed.
+    assert row.gates["location"] is False
+
+
+async def test_a_scored_but_low_row_still_reports_its_number(db_session):
+    """The negative half of the rule above: nulling out an unscored row must
+    not swallow a row the confidence pass genuinely scored low.
+
+    0.535 is the seeded catalogue's single-source floor -- above the formula's
+    arithmetic minimum, so it is a measurement and the table has to print it.
+    """
+    source = await _source(db_session, "Scored Outlet", tier="trade")
+    await _risk_article(
+        db_session,
+        source,
+        url="https://scored.example/quake",
+        title="Earthquake reported inland",
+        risk_type="earthquake",
+        severity="high",
+        country="Greece",
+        confidence_score=0.535,
+        location_confidence=0.1,
+    )
+    await db_session.commit()
+
+    rejected = await rejected_candidates(db_session, days=14)
+    assert len(rejected) == 1
+    row = rejected[0]
+
+    assert row.confidence_score == 0.535
+    # Measured, and it did not clear the verified threshold on its own -- the
+    # gate publishes it on the source-tier ladder, not by pretending it scored.
+    assert row.confidence_gate_reason != "unscored"
 
 
 async def test_case_28_celisen_kaynaklar(db_session):

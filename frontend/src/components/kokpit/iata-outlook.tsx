@@ -1,6 +1,7 @@
 import { ExternalLink } from "lucide-react";
 
 import { AnnualTrendChart } from "@/components/kokpit/annual-trend-chart-lazy";
+import { ANNUAL_KIND_LABELS_TR, ANNUAL_KIND_SUFFIX } from "@/lib/cockpit";
 import type { AnnualSeries, IataIndicatorOut } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -83,15 +84,45 @@ function RevisionTile({ row }: { row: IataIndicatorOut }) {
   );
 }
 
+/**
+ * "NET KÂR  [2026T]  23 USD milyar · tahmin"
+ *
+ * THE BADGE CARRIES THE KIND, NOT JUST THE YEAR. IATA's 2026 profit lines are
+ * FORECASTS, and this tile used to draw them in exactly the visual language it
+ * draws a measured year in -- the word "tahmin" existed only inside
+ * `interpretation_tr`, which is a hover title. Every other surface on this page
+ * keeps the distinction in the open (YearDots' labels, Market Pulse's "IATA
+ * 2026T" badge, both delta scopes), so on this one tile the ABSENCE of a
+ * suffix read as a measurement.
+ *
+ * Three things say it, none of them hover-only: the page's own one-letter
+ * suffix from `ANNUAL_KIND_SUFFIX` (a reader who learned "T = tahmin" in the
+ * cell above must not meet a different letter here), the Turkish word from
+ * `ANNUAL_KIND_LABELS_TR` beside the unit, and a dashed badge border -- the
+ * app's existing idiom for "not a measurement".
+ *
+ * An `actual` row gets no word and no dash, which is the same rule the rest of
+ * the page follows: the plain form is the measured one.
+ */
 function MetricTile({ row }: { row: IataIndicatorOut }) {
+  const kindLabel = ANNUAL_KIND_LABELS_TR[row.kind];
+  const isProjection = row.kind !== "actual";
+
   return (
     <div className="flex flex-col gap-0.5 rounded-lg border border-border bg-card/60 px-3 py-2">
       <div className="flex items-baseline gap-1.5">
         <span className="min-w-0 flex-1 truncate text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
           {METRIC_LABEL_TR[row.metric] ?? row.metric}
         </span>
-        <span className="shrink-0 rounded-full bg-muted px-1.5 py-px text-[10px] text-muted-foreground">
+        <span
+          title={`${row.period_label_tr} · ${kindLabel}`}
+          className={cn(
+            "shrink-0 rounded-full px-1.5 py-px text-[10px] text-muted-foreground",
+            isProjection ? "border border-dashed border-border" : "bg-muted",
+          )}
+        >
           {row.period_label_tr}
+          {ANNUAL_KIND_SUFFIX[row.kind]}
         </span>
         <a
           href={row.source_url}
@@ -108,7 +139,10 @@ function MetricTile({ row }: { row: IataIndicatorOut }) {
         title={row.interpretation_tr ?? undefined}
       >
         {trNumber(row.value)}{" "}
-        <span className="text-[10px] font-sans text-muted-foreground">{row.unit}</span>
+        <span className="text-[10px] font-sans text-muted-foreground">
+          {row.unit}
+          {isProjection && ` · ${kindLabel}`}
+        </span>
       </span>
     </div>
   );

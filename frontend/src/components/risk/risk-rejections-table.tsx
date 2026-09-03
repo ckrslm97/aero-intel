@@ -5,7 +5,13 @@ import { ExternalLink } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { DenseTable, DenseTd, DenseTh } from "@/components/ui/dense-table";
 import { relativeTimeTr } from "@/lib/campaigns";
-import { rejectionPlaceLabel, riskSourceTierLabel, scoreOrUnscored } from "@/lib/risk";
+import {
+  confidenceGateLabel,
+  gateVerdict,
+  rejectionPlaceLabel,
+  riskSourceTierLabel,
+  scoreOrUnscored,
+} from "@/lib/risk";
 import type { RiskRejection } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -25,16 +31,24 @@ const HEADERS: { label: string; numeric?: boolean; width: string; title?: string
   {
     label: "Güven",
     numeric: true,
+    // The gate passes STRICTLY above 0.60 and has an exemption ladder above
+    // that, so "Eşik: 0.60" alone was a rule the column did not follow: a row
+    // scoring exactly 0.60 is rejected, and one scoring 0.10 can be published
+    // by a second source. The verdict under each number says which happened.
     width: "w-[5rem]",
-    title: "Çapraz kaynak doğrulama skoru (0-1). Eşik: 0.60",
+    title: "Çapraz kaynak doğrulama skoru (0-1). Kapı 0.60'ın ÜSTÜNDE geçer; muafiyetler için skorun altındaki karara bakın.",
   },
   {
     label: "Havacılık",
     numeric: true,
     width: "w-[5.5rem]",
-    title: "Operasyonel havacılık ilgisi (0-1). Eşik: 0.70",
+    title: "Operasyonel havacılık ilgisi (0-1). 0.70 ve üstü geçer; ölçülmemiş satırı kapı yargılamaz.",
   },
-  { label: "Konum", width: "w-[11rem]", title: "Tespit edilen yer ve konum güveni. İğne eşiği: 0.70" },
+  {
+    label: "Konum",
+    width: "w-[11rem]",
+    title: "Tespit edilen yer ve konum güveni. İğne eşiği: 0.70 ve üstü; ölçülmemiş satırı kapı yargılamaz.",
+  },
   { label: "Anılan yerler", width: "w-[13rem]" },
 ];
 
@@ -136,11 +150,29 @@ function Row({ row }: { row: RiskRejection }) {
       </DenseTd>
 
       <DenseTd numeric>
-        <Score value={row.confidence_score} threshold={0.6} />
+        <Score
+          value={row.confidence_score}
+          threshold={0.6}
+          // The GATE's own verdict, not `score < threshold` re-derived here.
+          // The two disagree at exactly 0.60 (the gate passes strictly above
+          // it) and wherever an exemption carried a low score.
+          passed={row.confidence_gate_passed}
+        />
+        {/* The gate's own verdict, under its number -- the same pairing the
+            aviation column uses. A blank score beside a passing gate reads as
+            "measured and fine"; it usually means the gate declined to judge an
+            unmeasured row, and that is a different piece of work. */}
+        <span className="mt-0.5 block text-[10px] font-normal text-muted-foreground">
+          {confidenceGateLabel(row.confidence_gate_reason)}
+        </span>
       </DenseTd>
 
       <DenseTd numeric>
-        <Score value={row.aviation_relevance_score} threshold={0.7} />
+        <Score
+          value={row.aviation_relevance_score}
+          threshold={0.7}
+          passed={gateVerdict(row.gates, "aviation")}
+        />
         {row.aviation_relevance_source && (
           <span className="mt-0.5 block text-[10px] font-normal text-muted-foreground">
             {row.aviation_relevance_source}
@@ -149,7 +181,17 @@ function Row({ row }: { row: RiskRejection }) {
       </DenseTd>
 
       <DenseTd>
-        <span className="text-[11px]">{rejectionPlaceLabel(row)}</span>
+        {/* Same rule as the two score columns: the map gate's own verdict
+            colours this, so a placement the gate refused cannot sit here in
+            the same type as one it accepted. */}
+        <span
+          className={cn(
+            "text-[11px]",
+            gateVerdict(row.gates, "location") === false && "text-critical",
+          )}
+        >
+          {rejectionPlaceLabel(row)}
+        </span>
       </DenseTd>
 
       <DenseTd>
@@ -179,20 +221,44 @@ function Row({ row }: { row: RiskRejection }) {
   );
 }
 
-/** A score against the gate it was judged by.
+/** A score, coloured by what the GATE decided about it.
  *
  * Null renders as "ölçülmedi" and never as 0.00: the three gates publish
  * unscored rows on purpose, and a table that draws "nobody measured this" and
  * "measured, scored zero" identically re-creates on screen the exact bug the
- * backend spent a phase removing. */
-function Score({ value, threshold }: { value: number | null; threshold: number }) {
+ * backend spent a phase removing.
+ *
+ * `passed` is the payload's verdict and NOT `value < threshold` re-derived
+ * here. The two are not the same function: the confidence gate passes strictly
+ * ABOVE its threshold, so a row rejected at exactly 0.60 used to render in
+ * ordinary type beside the rows that got through -- the number said "at the
+ * bar", the colour said "fine", and the row was in a table of rejections. An
+ * exemption runs the other way: a 0.12 published by a second source is not a
+ * failure and is not painted as one, and the verdict line underneath says
+ * which rung carried it.
+ *
+ * `passed === null` means the payload carried no verdict for this gate, which
+ * is neither a pass nor a failure and is therefore drawn as neither. */
+function Score({
+  value,
+  threshold,
+  passed,
+}: {
+  value: number | null;
+  threshold: number;
+  passed: boolean | null;
+}) {
   if (value === null) {
     return <span className="text-[10px] font-normal text-muted-foreground">ölçülmedi</span>;
   }
   return (
     <span
-      className={cn("text-[11px] tabular-nums", value < threshold && "text-critical")}
-      title={`Eşik: ${threshold.toFixed(2)}`}
+      className={cn("text-[11px] tabular-nums", passed === false && "text-critical")}
+      title={
+        passed === null
+          ? `Eşik: ${threshold.toFixed(2)} · bu satır için kapı kararı yok`
+          : `Eşik: ${threshold.toFixed(2)} · kapı: ${passed ? "geçti" : "eledi"}`
+      }
     >
       {scoreOrUnscored(value)}
     </span>

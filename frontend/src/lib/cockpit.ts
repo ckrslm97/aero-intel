@@ -6,6 +6,7 @@
  * "canlı" is a claim about data and has to be earned by a timestamp rather
  * than printed as decoration.
  */
+import { PERIOD_KIND_LABELS_TR } from "@/lib/taxonomy.gen";
 import type { AnnualPoint, CockpitSignal, FxForecastOut } from "@/lib/types";
 
 /* --- Signal levels ------------------------------------------------------ */
@@ -219,11 +220,15 @@ export function adjacentYearPair(
   return previous ? { previous, latest } : null;
 }
 
-export const ANNUAL_KIND_LABELS_TR: Record<AnnualPoint["kind"], string> = {
-  actual: "gerçekleşme",
-  estimate: "tahmini gerçekleşme",
-  forecast: "tahmin",
-};
+/** What a yearly point IS, in Turkish. NOT a copy: the backend owns these
+ * three words (PERIOD_KIND_LABELS_TR in app/taxonomy.py, exported into
+ * taxonomy.gen.ts) because it renders them itself on /kpi/<metric>'s period
+ * label. This file used to hold a second set, so an IATA 2025 column read
+ * "tahmini gerçekleşme" on the outlook tile and "ön gerçekleşme" on the KPI
+ * page -- one fact, two words, depending on which surface you were standing
+ * on. */
+export const ANNUAL_KIND_LABELS_TR: Record<AnnualPoint["kind"], string> =
+  PERIOD_KIND_LABELS_TR;
 
 /* --- FX forecast buckets ------------------------------------------------- */
 

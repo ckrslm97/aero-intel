@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import { KpiDetailChart } from "@/components/charts/kpi-detail-chart";
 import { Badge } from "@/components/ui/badge";
 import { API_BASE_URL, apiFetch } from "@/lib/api";
-import { formatCompactNumber, formatDelta } from "@/lib/format";
+import { formatMetricValue, kpiDeltaLabel } from "@/lib/format";
 import { KPI_ICONS } from "@/lib/kpi-icons";
 import type { KpiDetailOut, KpiPeriod } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -61,8 +61,19 @@ export function KpiDetailClient({ metricKey }: { metricKey: string }) {
 
   if (!detail) return null;
 
-  const isFlat = (detail.delta_pct ?? 0) === 0;
-  const isPositive = (detail.delta_pct ?? 0) >= 0;
+  // Exactly one of the two is a number -- points for a metric already
+  // denominated in points, percent for everything else. See KpiOut in
+  // lib/types.ts on why the payload never offers both.
+  const delta = detail.delta_pct ?? detail.delta_points;
+  // `kpiDeltaLabel`, which folds "pick the non-null one" and "draw it the way
+  // every other delta in this app is drawn" (ui/delta.tsx) into the single
+  // helper KpiOut's contract note points at. This page had its own
+  // `formatDelta` printing "+4.2%" -- an English decimal point, and the
+  // percent sign on the wrong side of the number -- for the same move Kokpit's
+  // KUR cell printed as "+%4,2".
+  const deltaLabel = kpiDeltaLabel(detail.delta_pct, detail.delta_points);
+  const isFlat = (delta ?? 0) === 0;
+  const isPositive = (delta ?? 0) >= 0;
   const isGoodDirection = isPositive === detail.up_is_good;
   const deltaColor = isFlat ? "text-muted-foreground" : isGoodDirection ? "text-good" : "text-critical";
   const Icon = KPI_ICONS[detail.metric_key] ?? CircleDashed;
@@ -108,12 +119,25 @@ export function KpiDetailClient({ metricKey }: { metricKey: string }) {
       <div className="flex flex-wrap items-end justify-between gap-6 rounded-xl border border-border bg-card p-5">
         <div className="flex flex-col gap-1">
           <div className="flex items-baseline gap-1.5">
+            {/* The page's own precision rule used to be compact notation,
+                which quotes a currency cross to one decimal: /kpi/fx_eur_usd
+                printed "1,1" for the reading Kokpit prints as "1,0850". The
+                rule now lives in lib/format.ts and every surface reads it. */}
             <span className="text-4xl font-semibold tracking-tight">
-              {formatCompactNumber(detail.value)}
+              {formatMetricValue(detail.value, detail.unit, detail.metric_key)}
             </span>
             {detail.unit && <span className="text-base text-muted-foreground">{detail.unit}</span>}
           </div>
-          {detail.delta_pct !== null && (
+          {/* What period the number describes. A 2026 full-year FORECAST drawn
+              with nothing but a value and a timestamp reads as a measurement
+              taken at that timestamp, which is what this page did to
+              /kpi/load_factor. */}
+          {detail.period_label && (
+            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              {detail.period_label}
+            </p>
+          )}
+          {deltaLabel !== null && (
             <div className="flex items-center gap-1 text-sm">
               {isFlat ? (
                 <Minus className="size-4 text-muted-foreground" />
@@ -122,8 +146,12 @@ export function KpiDetailClient({ metricKey }: { metricKey: string }) {
               ) : (
                 <ArrowDownRight className={cn("size-4", deltaColor)} />
               )}
-              <span className={cn("font-medium", deltaColor)}>{formatDelta(detail.delta_pct)}</span>
-              <span className="text-muted-foreground">önceki ölçüme göre</span>
+              <span className={cn("font-medium", deltaColor)}>{deltaLabel}</span>
+              {/* Server-sent: this used to be a hardcoded "önceki ölçüme göre"
+                  printed over year-on-year comparisons too. */}
+              {detail.comparison_label && (
+                <span className="text-muted-foreground">{detail.comparison_label}</span>
+              )}
             </div>
           )}
           <p className="text-xs text-muted-foreground">
@@ -142,8 +170,23 @@ export function KpiDetailClient({ metricKey }: { metricKey: string }) {
             </p>
             {detail.corroborations.map((c) => (
               <div key={c.source} className="flex items-center gap-2">
-                <Badge variant="outline" className="text-[10px]">
-                  {c.diff_pct < 0.5 ? "Eşleşiyor" : `Δ %${c.diff_pct.toFixed(2)}`}
+                {/* The verdict is the backend's, not this component's. The
+                    0.5% rule used to live here as a bare comparison, which put
+                    the one claim this block makes in the layer that draws it
+                    -- and left `diff_pct: null` (a comparison that could not be
+                    made at all) reading as the strongest possible agreement. */}
+                <Badge
+                  variant="outline"
+                  className="text-[10px]"
+                  title={
+                    c.incomparable_reason === "as_of_too_far_apart"
+                      ? "İki ölçümün zamanı birbirinden çok uzak -- karşılaştırma yapılmadı."
+                      : undefined
+                  }
+                >
+                  {c.diff_pct !== null && c.verdict === "diverges"
+                    ? `Δ %${c.diff_pct.toFixed(2)}`
+                    : c.verdict_label_tr}
                 </Badge>
                 {c.source_url ? (
                   <a
@@ -158,7 +201,15 @@ export function KpiDetailClient({ metricKey }: { metricKey: string }) {
                   <span>{c.source}</span>
                 )}
                 <span className="text-muted-foreground">
-                  {formatCompactNumber(c.value)} {detail.unit}
+                  {formatMetricValue(c.value, detail.unit, detail.metric_key)} {detail.unit}
+                </span>
+                {/* The second reading's own timestamp. Without it a refused
+                    comparison ("Karşılaştırılamaz") is unanswerable. */}
+                <span className="text-xs text-muted-foreground">
+                  {new Date(c.as_of).toLocaleString("tr-TR", {
+                    dateStyle: "short",
+                    timeStyle: "short",
+                  })}
                 </span>
               </div>
             ))}
@@ -192,18 +243,24 @@ export function KpiDetailClient({ metricKey }: { metricKey: string }) {
         </div>
 
         {detail.history.length > 1 ? (
-          <KpiDetailChart history={detail.history} period={detail.period} unit={detail.unit} />
+          <KpiDetailChart
+            history={detail.history}
+            period={detail.period}
+            unit={detail.unit}
+            metricKey={detail.metric_key}
+          />
         ) : (
           <p className="rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
             Bu dönem için henüz yeterli geçmiş veri kaydedilmedi.
           </p>
         )}
 
-        <p className="text-xs text-muted-foreground">
-          {detail.history_is_external
-            ? "Geçmiş veriler doğrudan kaynağın kendi arşivinden alınmıştır."
-            : "Geçmiş veriler kendi periyodik ölçümlerimizden biriktirilmiştir -- zamanlayıcı çalıştıkça zamanla dolar, geriye dönük doldurulmaz."}
-        </p>
+        {/* Three provenances, not two: jet fuel's chart is Brent's real closes
+            plus a stated crack spread, and the boolean above could only call
+            that "the source's own archive" -- asserting a published jet-fuel
+            history that exists nowhere. The sentence is written where the
+            derivation is known. */}
+        <p className="text-xs text-muted-foreground">{detail.history_provenance_tr}</p>
       </div>
 
       <div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-5">
@@ -240,7 +297,7 @@ export function KpiDetailClient({ metricKey }: { metricKey: string }) {
                       })}
                     </td>
                     <td className="px-2 py-2 font-medium">
-                      {formatCompactNumber(point.value)}
+                      {formatMetricValue(point.value, detail.unit, detail.metric_key)}
                       {detail.unit && (
                         <span className="ml-1 font-normal text-muted-foreground">
                           {detail.unit}

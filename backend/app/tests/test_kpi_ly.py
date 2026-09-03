@@ -57,10 +57,38 @@ async def test_seeded_metric_with_2025_observation_gets_ly_fields(kpi_app, db_se
     assert response.status_code == 200
     kpi = _kpi(response.json(), "load_factor")
     assert kpi["ly_value"] == 80.0
-    assert kpi["ly_delta_pct"] == round((84.0 - 80.0) / 80.0 * 100, 2)  # 5.0
     assert kpi["comparison_label"] == "2025'e göre"
-    # Existing delta_pct semantics are untouched: vs the previous observation.
-    assert kpi["delta_pct"] == round((84.0 - 82.0) / 82.0 * 100, 2)
+    # A load factor is denominated in points, so BOTH comparisons are reported
+    # in points and neither is reported as a percent. 84 vs 80 is 4 points; the
+    # 5.0% this used to print is arithmetically true and is not what anyone in
+    # revenue management means by "doluluk 5 arttı".
+    assert kpi["ly_delta_points"] == 4.0
+    assert kpi["ly_delta_pct"] is None
+    # Same rule on the previous-observation delta: 84 vs 82 is 2 points.
+    assert kpi["delta_points"] == 2.0
+    assert kpi["delta_pct"] is None
+    # And the period the number describes, which the card used to omit
+    # entirely: this is IATA's 2026 full-year FORECAST, not a reading taken at
+    # the timestamp beside it.
+    assert kpi["period_label"] == "2026 · tahmin"
+
+
+async def test_non_point_metrics_keep_reporting_percent_deltas(kpi_app, db_session):
+    """The negative half of the rule above: only a `%`-unit metric switches to
+    points. Brent still moves in percent, and its card must not go blank."""
+    repo = KpiRepository(db_session)
+    repo.record("oil_price", 80.0, "$/bbl", "Yahoo Finance (BZ=F)", False, LY_DATE)
+    repo.record("oil_price", 88.0, "$/bbl", "Yahoo Finance (BZ=F)", False, NOW)
+    await db_session.commit()
+
+    response = await _get(kpi_app, "/api/v1/kpis")
+
+    kpi = _kpi(response.json(), "oil_price")
+    assert kpi["delta_pct"] == 10.0
+    assert kpi["delta_points"] is None
+    # A live market reading is not a period claim, and must not be labelled as
+    # one just because its timestamp falls in a forecast year.
+    assert kpi["period_label"] == kpis_api.LIVE_PERIOD_LABEL_TR
 
 
 async def test_metric_without_2025_observation_or_yahoo_mapping_has_no_ly(kpi_app, db_session):

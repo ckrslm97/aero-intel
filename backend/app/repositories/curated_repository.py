@@ -1,8 +1,13 @@
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+# THE resolver for "when is this forecast for". Not a local copy: the same
+# question is answered for the FX table and the forecast chart in
+# app/api/v1/kokpit.py, and a second, weaker implementation here used to keep
+# forever exactly the rows that page renders as "vadesi geçti".
+from app.forecast_horizon import forecast_target_date
 from app.models.curated import FxForecast, IataIndicator
 
 
@@ -141,15 +146,62 @@ class CuratedRepository:
         return existing, False
 
     async def fx_forecasts(
-        self, *, currency_pair: str | None = None, horizon_months: int | None = None
+        self,
+        *,
+        currency_pair: str | None = None,
+        horizon_months: int | None = None,
+        only_upcoming: bool = False,
     ) -> list[FxForecast]:
+        """The curated bank forecasts, newest publication first.
+
+        `only_upcoming` drops rows whose own horizon has already ELAPSED. A
+        bank's "+3 months" published in March is a claim about June, and in
+        September it is a claim about the past -- still a true record of what
+        was said, and still worth keeping in the table, but no longer a
+        statement about where the rate is going. Kokpit's Kur Riski tile asks
+        for it because that tile is about the road ahead; the /kokpit forecast
+        table does not, because it is a record of who said what.
+
+        WHICH date is compared is the whole point. `app.forecast_horizon`
+        resolves the institution's own wording -- "end-2026", "year-end",
+        "Q4 2026", "+3m" -- into a target date, and it is that resolver this
+        filter calls. It used to call a local copy that could only date a row
+        carrying `horizon_months`, so a JPMorgan "end-2026" row published in
+        2026 stayed "upcoming" forever: the Kur Riski tile quoted it as its
+        forward-looking endpoint while the FX board on the same page drew the
+        very same row with "· vadesi geçti".
+
+        Nothing is dropped on a guess. A label the resolver genuinely cannot
+        date returns None and survives the filter: refusing to publish a claim
+        we cannot prove is stale would be acting on an absence of evidence.
+
+        Applied in Python rather than as SQL date arithmetic: the table is a
+        hand-curated few dozen rows, and the label forms above are not
+        expressible as a date expression at all -- an SQL
+        `publication_date + make_interval(months => horizon_months)` returns
+        NULL for exactly the rows this rule has to reason about, which would
+        have silently inverted it.
+        """
         query = select(FxForecast)
         if currency_pair is not None:
             query = query.where(FxForecast.currency_pair == currency_pair)
         if horizon_months is not None:
             query = query.where(FxForecast.horizon_months == horizon_months)
         query = query.order_by(FxForecast.currency_pair, FxForecast.publication_date.desc())
-        return list((await self.db.execute(query)).scalars().all())
+        rows = list((await self.db.execute(query)).scalars().all())
+        if not only_upcoming:
+            return rows
+        today = datetime.now(timezone.utc).date()
+        kept = []
+        for row in rows:
+            target, _ = forecast_target_date(
+                horizon_months=row.horizon_months,
+                horizon_label=row.horizon_label,
+                publication_date=row.publication_date,
+            )
+            if target is None or target >= today:
+                kept.append(row)
+        return kept
 
     async def iata_indicators(
         self, *, kind: str | None = None, region: str | None = None

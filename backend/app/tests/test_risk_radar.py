@@ -1143,6 +1143,104 @@ async def test_the_region_follows_the_resolved_country_not_the_article(db_sessio
     assert out.countries[0].items[0].region == "north-america"
 
 
+async def test_a_blanked_placement_publishes_no_region_either(db_session):
+    """A region IS a placement claim, only a coarser one.
+
+    When the map gate blanks a weak placement, `country` becomes
+    "Belirtilmemiş" -- and the region fallback then fired on the ARTICLE's own
+    detected region, so the pipeline said "konum doğrulanamadı" while the card
+    still wore a "Orta Doğu" chip. The reader had no way to tell that chip from
+    one backed by a resolved country, which is exactly what blanking exists to
+    prevent.
+    """
+    source = await _source(db_session, "S12c")
+    article = Article(
+        source_id=source.id,
+        url="https://r.com/blanked",
+        title="Explosion reported near an unnamed facility",
+        raw_content="body",
+        published_at=NOW - timedelta(days=1),
+        fetched_at=NOW - timedelta(days=1),
+        content_hash="https://r.com/blanked",
+        status="enriched",
+    )
+    db_session.add(article)
+    await db_session.flush()
+    db_session.add(
+        ArticleEnrichment(
+            article_id=article.id,
+            headline="Explosion reported",
+            category="safety",
+            region="middle-east",
+            risk_type="war",
+            risk_family="conflict",
+            risk_severity="high",
+            risk_country="Israel",
+            # Below LOCATION_MAP_PIN_MIN: measured, and too weak to pin.
+            location_confidence=0.2,
+        )
+    )
+    await db_session.commit()
+
+    from fastapi import Response
+
+    out = await list_risks(days=14, response=Response(), db=db_session)
+    item = out.countries[0].items[0]
+
+    assert out.unplaced_low_confidence == 1
+    assert item.country is None
+    assert item.is_mappable is False
+    # The claim that used to survive the blanking.
+    assert item.region is None
+
+
+async def test_a_confidently_placed_signal_still_falls_back_to_its_region(db_session):
+    """The negative half of the test above: binding the fallback to `placed`
+    must not stop an ordinary signal from reporting a region.
+
+    A country the taxonomy has no region entry for still gets the article's
+    own detected region -- that fallback is why the field is usually filled,
+    and it is untouched for a placement the map gate accepted.
+    """
+    source = await _source(db_session, "S12d")
+    article = Article(
+        source_id=source.id,
+        url="https://r.com/placed",
+        title="Storm closes a regional airport",
+        raw_content="body",
+        published_at=NOW - timedelta(days=1),
+        fetched_at=NOW - timedelta(days=1),
+        content_hash="https://r.com/placed",
+        status="enriched",
+    )
+    db_session.add(article)
+    await db_session.flush()
+    db_session.add(
+        ArticleEnrichment(
+            article_id=article.id,
+            headline="Storm closes airport",
+            category="safety",
+            region="europe",
+            risk_type="storm",
+            risk_family="natural",
+            risk_severity="medium",
+            # Not in COUNTRY_TO_REGION, so only the fallback can answer.
+            risk_country="Ruritania",
+            location_confidence=0.9,
+        )
+    )
+    await db_session.commit()
+
+    from fastapi import Response
+
+    out = await list_risks(days=14, response=Response(), db=db_session)
+    item = out.countries[0].items[0]
+
+    assert item.country == "Ruritania"
+    assert item.is_mappable is True
+    assert item.region == "europe"
+
+
 async def test_the_primary_summary_and_confidence_ride_along(db_session):
     source = await _source(db_session, "S12")
     await _risk_article(

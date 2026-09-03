@@ -121,14 +121,24 @@ export const SELECTABLE_CAMPAIGN_STATUSES: readonly CampaignStatus[] = [
  * backend/app/api/v1/promotions.py -- the export link and the on-screen list
  * have to agree about what "Avrupa" selects.
  *
- * `markets_json` is the backend's third place and is not serialised; the flat
- * `markets` string is what reaches us, region slugs and city names mixed, so
- * only the slugs REGION_LABELS_TR knows are read out of it. */
+ * Three places, matching `_regions_of` exactly: the flat `region` column, the
+ * resolved route, and `markets_json.regions`. The flat `markets` string is
+ * read too -- region slugs and city names mixed, so only the slugs
+ * REGION_LABELS_TR knows are taken out of it.
+ *
+ * `markets_json` used to be missing from the payload, and the chip row was
+ * therefore narrower than the filter the export ran: a campaign whose only
+ * mention of Europe lived in that column matched `region=europe` server-side
+ * and could not appear in the on-screen chip at all. */
 export function campaignRegions(promo: PromotionOut): string[] {
   const found = new Set<string>();
   if (promo.region) found.add(promo.region);
   for (const side of [promo.route_json?.origin, promo.route_json?.dest]) {
     if (side?.region) found.add(side.region);
+  }
+  for (const slug of promo.markets_json?.regions ?? []) {
+    const trimmed = slug.trim();
+    if (trimmed) found.add(trimmed);
   }
   for (const part of (promo.markets ?? "").split(",")) {
     const slug = part.trim();
@@ -137,17 +147,24 @@ export function campaignRegions(promo: PromotionOut): string[] {
   return [...found];
 }
 
-/** Every country this campaign names, from the resolved route.
+/** Every country this campaign names: the resolved route AND the extracted
+ * market list.
  *
- * Only the route: `markets_json.countries` is the backend's other source and
- * it is not part of `PromotionOut`, so a client-side country chip built on it
- * would silently under-select. The chip row is built from these same values,
- * which is what keeps the offered set and the matched set identical. */
+ * Both, now that `markets_json` reaches the client. It used not to, so this
+ * read the route alone and the chip row silently under-selected against the
+ * server-side `country=` filter the export uses -- one dimension, two answers.
+ * Mirrors `_countries_of` in backend/app/api/v1/promotions.py, and the chip
+ * row is built from these same values, which is what keeps the offered set
+ * and the matched set identical. */
 export function campaignCountries(promo: PromotionOut): string[] {
   const found = new Set<string>();
   for (const side of [promo.route_json?.origin, promo.route_json?.dest]) {
     const country = side?.country?.trim();
     if (country) found.add(country);
+  }
+  for (const name of promo.markets_json?.countries ?? []) {
+    const trimmed = name.trim();
+    if (trimmed) found.add(trimmed);
   }
   return [...found];
 }

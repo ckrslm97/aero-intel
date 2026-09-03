@@ -12,13 +12,18 @@ import {
   useChartTheme,
   valueAxis,
 } from "@/lib/chart-theme";
-import { formatCompactNumber } from "@/lib/format";
+import { formatMetricValue } from "@/lib/format";
 import type { KpiHistoryPointOut, KpiPeriod } from "@/lib/types";
 
 interface KpiDetailChartProps {
   history: KpiHistoryPointOut[];
   period: KpiPeriod;
   unit: string;
+  /** Which metric these points are, for the precision rule. Optional so a
+   * caller with no key still gets the unit-based one, never a crash -- but
+   * without it an FX cross is drawn to one decimal, and every gridline
+   * between 1,0801 and 1,0899 prints the same "1,1". */
+  metricKey?: string;
 }
 
 const DATE_FORMAT_BY_PERIOD: Record<KpiPeriod, Intl.DateTimeFormatOptions> = {
@@ -31,7 +36,7 @@ const DATE_FORMAT_BY_PERIOD: Record<KpiPeriod, Intl.DateTimeFormatOptions> = {
 
 /** A real chart -- axes, gridlines, tooltip -- for the KPI detail page, as
  * opposed to the decorative sparkline used on the dashboard cards. */
-export function KpiDetailChart({ history, period, unit }: KpiDetailChartProps) {
+export function KpiDetailChart({ history, period, unit, metricKey }: KpiDetailChartProps) {
   const theme = useChartTheme();
   const reduceMotion = useReducedMotion();
 
@@ -74,14 +79,16 @@ export function KpiDetailChart({ history, period, unit }: KpiDetailChartProps) {
       axisLabel: {
         color: theme.ink,
         fontSize: 11,
-        formatter: (v: number) => formatCompactNumber(v),
+        // The headline above this chart and the axis under it are the same
+        // reading; lib/format.ts owns the one rule both print it by.
+        formatter: (v: number) => formatMetricValue(v, unit, metricKey),
       },
     },
     tooltip: {
       ...base.tooltip,
       trigger: "axis",
       valueFormatter: (v: number) =>
-        `${formatCompactNumber(v)}${unit ? ` ${unit}` : ""}`,
+        `${formatMetricValue(v, unit, metricKey)}${unit ? ` ${unit}` : ""}`,
     },
     series: [
       {
@@ -102,7 +109,7 @@ export function KpiDetailChart({ history, period, unit }: KpiDetailChartProps) {
       },
     ],
     };
-  }, [history, period, unit, theme, reduceMotion]);
+  }, [history, period, unit, metricKey, theme, reduceMotion]);
 
   return (
     <ReactECharts

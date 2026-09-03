@@ -10,12 +10,24 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useDataSource } from "@/hooks/use-data-source";
 import { apiFetch } from "@/lib/api";
 import { worldRegions } from "@/lib/nav";
+import { RIVAL_CODES } from "@/lib/taxonomy.gen";
 import type { InsightsOut, NetworkSignalGroup, PromotionNewCountOut } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const REGION_NAME = new Map<string, string>(
   worldRegions.map((region) => [region.slug, region.name]),
 );
+
+/** The carriers this cell is allowed to rank, from the generated taxonomy.
+ *
+ * TK is the home carrier and is deliberately absent (backend/app/taxonomy.py
+ * RIVAL_CODES, and SQ with it) -- but `/insights` counts mentions across the
+ * whole feed, and in a Turkish-language feed the most-mentioned carrier is
+ * always TK. A "Rekabet" cell whose top mover is the airline it is written for
+ * is not a competitive reading; it is the feed's own language, ranked.
+ *
+ * A Set, so a taxonomy that grows a rival costs no scan per row. */
+const RIVAL_CODE_SET = new Set<string>(RIVAL_CODES);
 
 /** "The stream did not answer" -- which is NOT "the stream answered zero".
  *
@@ -114,7 +126,11 @@ export function CompetitivePulse() {
   const routes = useDataSource(routesFetcher, []);
 
   const momentum = insights.data?.airline_momentum ?? [];
-  const movers = momentum.filter((mover) => mover.delta !== 0).slice(0, 3);
+  // Rivals only -- see RIVAL_CODE_SET. Filtered BEFORE the "did anything move"
+  // test so the empty state below still distinguishes "the stream returned
+  // nothing" from "it returned rows and no rival moved".
+  const rivalMomentum = momentum.filter((mover) => RIVAL_CODE_SET.has(mover.code));
+  const movers = rivalMomentum.filter((mover) => mover.delta !== 0).slice(0, 3);
   const routeGroups = routes.data ?? [];
   const routeTotal = routeGroups.reduce((sum, group) => sum + group.count, 0);
   const firstRoute = routeGroups.find((group) => group.articles.length > 0);
@@ -158,19 +174,23 @@ export function CompetitivePulse() {
         )}
       </Cell>
 
-      <Cell icon={TrendingUp} title="Haber momentumu (7g vs 7g)" href="/biz">
+      <Cell icon={TrendingUp} title="Rakip haber momentumu (7g vs 7g)" href="/biz">
         {!insights.loaded ? (
           <Skeleton className="h-6 w-full rounded" />
         ) : !insights.data ? (
           <SourceDown onRetry={insights.retry} />
         ) : movers.length === 0 ? (
-          // "Measured, and nothing moved" and "we have no measurement" are
-          // different facts and now read differently. The old single sentence
-          // collapsed them.
+          // THREE facts, three sentences. "We have no measurement", "we
+          // measured the feed and no RIVAL was in it" and "rivals were
+          // measured and none moved" are different things to go and check, and
+          // one sentence for all three would hide the middle one entirely --
+          // which is the state the TK filter above can now produce.
           <p className="text-[10px] text-muted-foreground">
             {momentum.length === 0
               ? "Momentum verisi yok."
-              : "Bu hafta belirgin bir hareket yok."}
+              : rivalMomentum.length === 0
+                ? "Bu hafta rakip taşıyıcı ölçülmedi."
+                : "Bu hafta belirgin bir hareket yok."}
           </p>
         ) : (
           <ul className="flex flex-wrap gap-x-3 gap-y-0.5">

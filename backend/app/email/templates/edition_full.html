@@ -64,7 +64,7 @@
                 <td>
                   <p style="margin:0 0 4px 0;">
                     <span style="display:inline-block;background-color:#f0efec;color:#52514e;font-size:10px;font-weight:600;letter-spacing:0.04em;text-transform:uppercase;border-radius:10px;padding:2px 8px;">{{ article.source_name }}</span>
-                    <span style="color:#898781;font-size:11px;margin-left:6px;">%{{ article.confidence_pct }} güven &middot; {{ article.corroborating_count }} kaynak</span>
+                    <span style="color:#898781;font-size:11px;margin-left:6px;">{% if article.confidence_pct is not none %}%{{ article.confidence_pct }} güven &middot; {% endif %}{{ article.corroborating_count }} kaynak</span>
                     {% if not article.is_translated %}
                     <span style="display:inline-block;background-color:#f0efec;color:#898781;font-size:9px;font-weight:600;letter-spacing:0.04em;text-transform:uppercase;border-radius:10px;padding:2px 6px;margin-left:6px;">otomatik çeviri yok</span>
                     {% endif %}

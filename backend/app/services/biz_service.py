@@ -18,7 +18,7 @@ from the Hub phase for the same reason: one implementation, two pages.
 """
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.entity import ArticleEntity, Entity
@@ -81,12 +81,31 @@ def _section(items: list) -> dict:
     )
 
 
+#: How many of a rival's events travel in the payload. A cap on the CARDS, and
+#: emphatically not the count -- see `count` vs `events` below.
+RIVAL_EVENT_CAP = 10
+
+
 async def competitor_signals(db: AsyncSession, days: int = 30) -> list[dict]:
     """Published events about each watched rival, most-covered rival first.
     An event with no coverage of any rival in the window contributes nothing
     -- rivals with zero events in the window are simply absent, not shown
     at zero, since a per-rival section is itself the "which one" the reader
-    is after."""
+    is after.
+
+    `count` IS THE REAL TOTAL AND `events` IS THE HEAD OF IT. They used to be
+    the same list: `count` was `len(rows)` over a query capped at ten, so every
+    rival the news covered more than ten times in the window reported exactly
+    "10 olay". A month in which Emirates was written about forty times and KLM
+    ten rendered the two identically -- and the ranking underneath, sorted on
+    that same saturated number, then ordered the rivals by nothing at all.
+
+    So the total is its own `count(*)` over the same predicate, the ordering
+    reads that total, and the cap applies only to the event payload the cards
+    draw. Sinyaller's per-rival card (services/signals_service.py
+    from_rival_events) prints this `count` verbatim and inherits the fix
+    rather than carrying a second copy of it.
+    """
     since = _since(days)
     out: list[dict] = []
     for code, name in RIVAL_CARRIERS:
@@ -95,28 +114,49 @@ async def competitor_signals(db: AsyncSession, days: int = 30) -> list[dict]:
             .join(Entity, Entity.id == ArticleEntity.entity_id)
             .where(Entity.entity_type == "airline", Entity.code == code)
         )
+        # One predicate, two reads of it: the total and the head. Written once
+        # so the number on the card can never describe a different set than
+        # the events under it.
+        published_in_window = (
+            NewsEvent.primary_article_id.in_(mentions),
+            NewsEvent.is_published.is_(True),
+            NewsEvent.confidence_band.in_(PUBLISHABLE_BANDS),
+            NewsEvent.superseded_at.is_(None),
+            NewsEvent.last_seen >= since,
+        )
+        total = int(
+            (
+                await db.execute(
+                    select(func.count())
+                    .select_from(NewsEvent)
+                    .where(*published_in_window)
+                )
+            ).scalar_one()
+        )
+        if not total:
+            continue
         rows = (
             await db.execute(
                 select(NewsEvent)
-                .where(
-                    NewsEvent.primary_article_id.in_(mentions),
-                    NewsEvent.is_published.is_(True),
-                    NewsEvent.confidence_band.in_(PUBLISHABLE_BANDS),
-                    NewsEvent.superseded_at.is_(None),
-                    NewsEvent.last_seen >= since,
-                )
+                .where(*published_in_window)
                 .order_by(NewsEvent.last_seen.desc())
-                .limit(10)
+                .limit(RIVAL_EVENT_CAP)
             )
         ).scalars().all()
-        if not rows:
-            continue
         out.append(
             {
                 "airline_code": code,
                 "airline_name": name,
-                "count": len(rows),
+                "count": total,
+                # The newest RIVAL_EVENT_CAP of `count`, never all of them.
+                # `events_truncated` says so on the wire, so that a card
+                # listing ten events under a headline reading 40 CAN be
+                # explained rather than merely inconsistent. No surface reads
+                # it yet -- /biz does not render competitor_signals at all --
+                # so this is a contract the frontend can honour, not a claim
+                # that it already does.
                 "events": [_event_payload(e) for e in rows],
+                "events_truncated": total > len(rows),
             }
         )
     out.sort(key=lambda r: -r["count"])

@@ -82,6 +82,45 @@ describe("IataOutlook", () => {
     expect(screen.queryByText(/Avrupa|Orta Doğu|Asya/)).not.toBeInTheDocument();
   });
 
+  it("marks a forecast level as a forecast, and not only on hover", () => {
+    // THE REGRESSION. IATA's 2026 profit lines are forecasts, and this tile
+    // drew them in the same visual language as a measured year: the word
+    // "tahmin" lived only in `interpretation_tr`, which is a title attribute.
+    // Every other cell on the page carries the T/G suffix in the open, so the
+    // absence of one here read as "actual".
+    render(<IataOutlook series={[]} indicators={[indicator()]} />);
+
+    const badge = screen.getByText("2026T");
+    expect(badge).toBeInTheDocument();
+    expect(badge.getAttribute("title")).toBe("2026 · tahmin");
+    // The Turkish word too: a one-letter suffix is the page's shorthand, not
+    // its explanation.
+    expect(screen.getByText(/USD milyar · tahmin/)).toBeInTheDocument();
+  });
+
+  it("leaves a measured year plain -- no suffix, no word, no dashed badge", () => {
+    // The other half of the same rule. If an actual were also decorated, the
+    // decoration would stop meaning "not measured".
+    render(
+      <IataOutlook
+        series={[]}
+        indicators={[
+          indicator({
+            kind: "actual",
+            period_label_tr: "2025",
+            previous_value: null,
+            previous_publication_date: null,
+          }),
+        ]}
+      />,
+    );
+
+    const badge = screen.getByText("2025");
+    expect(badge.getAttribute("title")).toBe("2025 · gerçekleşme");
+    expect(badge.className).not.toContain("border-dashed");
+    expect(screen.queryByText(/· tahmin/)).not.toBeInTheDocument();
+  });
+
   it("says the profit indicators are unseeded rather than rendering an empty column", () => {
     render(<IataOutlook series={[]} indicators={[]} />);
     expect(screen.getByText("Kâr göstergeleri henüz seed edilmedi.")).toBeInTheDocument();

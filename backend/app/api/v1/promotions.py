@@ -155,7 +155,23 @@ class PromotionOut(BaseModel):
     title_tr: str
     summary_tr: str
     discount_pct: int | None
+    #: The flat, human-written markets string, exactly as the extractor wrote
+    #: it: region slugs and city names mixed in one comma-separated line.
     markets: str | None
+    #: The structured markets the flat string above cannot express:
+    #: `{"countries": [...], "regions": [...]}`.
+    #:
+    #: Serialised because the screen and the export were selecting different
+    #: rows without it. `_regions_of`/`_countries_of` read this column, so the
+    #: server-side filter behind `/promotions/export` matched campaigns whose
+    #: only mention of a country lives here -- while the on-screen chip row,
+    #: built client-side from the payload, could not see it and left those
+    #: campaigns out of both the chip and the selection. Same campaign set,
+    #: two answers to "Avrupa", and nothing on the page to explain the gap.
+    #:
+    #: NULL on every legacy row and it stays NULL: an unextracted campaign
+    #: names no market, which is not the same claim as naming none.
+    markets_json: dict | None = None
     sale_starts: date | None
     sale_ends: date | None
     travel_starts: date | None

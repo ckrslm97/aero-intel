@@ -108,6 +108,40 @@ describe("CompetitivePulse", () => {
     expect(screen.queryByText(/Momentum verisi yok/)).not.toBeInTheDocument();
   });
 
+  it("never ranks TK as its own rival", async () => {
+    // THE REGRESSION. `/insights` counts carrier mentions across the whole
+    // feed, and in a Turkish-language feed the most-mentioned carrier is
+    // always TK -- so the "Rekabet" cell's top mover was the airline the page
+    // is written for. RIVAL_CODES (backend/app/taxonomy.py, via
+    // taxonomy.gen.ts) leaves out the home carrier on purpose.
+    routes({
+      insightsOut: insights([
+        { code: "TK", name: "Turkish Airlines", previous: 40, current: 61, delta: 21 },
+        { code: "LH", name: "Lufthansa", previous: 4, current: 7, delta: 3 },
+      ]),
+    });
+    render(<CompetitivePulse />);
+
+    expect(await screen.findByText("LH")).toBeInTheDocument();
+    expect(screen.queryByText("TK")).not.toBeInTheDocument();
+  });
+
+  it("does not report 'nothing moved' when only the home carrier moved", async () => {
+    // The other half: dropping TK must not turn its move into a measured
+    // stillness. Nothing rival-shaped was in the payload at all, and that is a
+    // third state -- not "we have no data", not "rivals were flat".
+    routes({
+      insightsOut: insights([
+        { code: "TK", name: "Turkish Airlines", previous: 40, current: 61, delta: 21 },
+      ]),
+    });
+    render(<CompetitivePulse />);
+
+    expect(await screen.findByText(/rakip taşıyıcı ölçülmedi/)).toBeInTheDocument();
+    expect(screen.queryByText(/Momentum verisi yok/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/belirgin bir hareket yok/)).not.toBeInTheDocument();
+  });
+
   it("says so when the momentum stream returned nothing at all", async () => {
     routes({ insightsOut: insights([]) });
     render(<CompetitivePulse />);

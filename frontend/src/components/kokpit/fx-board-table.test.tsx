@@ -106,6 +106,27 @@ describe("buildFxRows", () => {
     expect(rows.get("EUR/USD")?.value).toBe("1,0842");
   });
 
+  // The de-duplication itself: the spot cell and the forecast cell beside it
+  // are quoted by ONE rule (`formatMetricValue`), not by two inline copies of
+  // "four decimals below ten". A EUR/USD target printed as "1,12" next to a
+  // spot printed as "1,0842" is the same rate in two precisions, on one row.
+  it("quotes a spot and the forecast beside it with the same precision", () => {
+    const rows = new Map(
+      buildFxRows(
+        board(ALL_PAIRS),
+        [
+          forecast({ currency_pair: "EUR/USD", value: 1.12, institution: "JPMorgan" }),
+          forecast({ currency_pair: "USD/TRY", value: 52 }),
+        ],
+        NOW,
+      ).map((row) => [row.pair, row]),
+    );
+    expect(rows.get("EUR/USD")?.value).toBe("1,0842");
+    expect(rows.get("EUR/USD")?.forecast?.label).toContain("1,1200");
+    expect(rows.get("USD/TRY")?.value).toBe("48,25");
+    expect(rows.get("USD/TRY")?.forecast?.label).toContain("52,00");
+  });
+
   it("gives the peg a badge and no deltas, trend or history page", () => {
     const peg = buildFxRows(board([]), [], NOW).find((row) => row.pair === "USD/SAR");
     // The badge is the backend's own string -- never one this component wrote.

@@ -330,3 +330,17 @@ export const CAMPAIGN_STATUS_LABELS_TR: Record<CampaignStatus, string> = {
   "EXPIRED": "Süresi doldu",
   "UNKNOWN": "Belirsiz",
 };
+
+export type PeriodKind =
+  | "actual"
+  | "estimate"
+  | "forecast";
+
+export const PERIOD_KINDS: readonly PeriodKind[] = ["actual", "estimate", "forecast"] as const;
+
+
+export const PERIOD_KIND_LABELS_TR: Record<PeriodKind, string> = {
+  "actual": "gerçekleşme",
+  "estimate": "tahmini gerçekleşme",
+  "forecast": "tahmin",
+};

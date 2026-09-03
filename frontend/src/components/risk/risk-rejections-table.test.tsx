@@ -40,6 +40,81 @@ describe("RiskRejectionsTable", () => {
     expect(screen.queryByText("0.00")).not.toBeInTheDocument();
   });
 
+  it("paints a row rejected AT the threshold, not only one below it", () => {
+    // THE REGRESSION. The gate passes strictly ABOVE 0.60
+    // (`_confidence_verdict`, backend/app/services/risk_quality.py), while
+    // this column coloured on `score < 0.60` -- so a row rejected at exactly
+    // 0.60 sat in a table of rejections in ordinary type, reading as a value
+    // that had cleared the bar.
+    render(
+      <RiskRejectionsTable
+        rows={[
+          riskRejection({
+            reason: "confidence_below_floor",
+            reason_label_tr: "Güven eşiğin altında",
+            confidence_score: 0.6,
+            confidence_gate_passed: false,
+            confidence_gate_reason: "below_gate",
+            gates: { currency: true, confidence: false, aviation: true, location: true },
+          }),
+        ]}
+      />,
+    );
+
+    const score = screen.getByText("0.60");
+    expect(score.className).toContain("text-critical");
+    expect(score.getAttribute("title")).toContain("kapı: eledi");
+    expect(screen.getByText("eşiğin altında")).toBeInTheDocument();
+  });
+
+  it("leaves an exempted low score uncoloured, and says which rung carried it", () => {
+    // The other direction, and the reason the colour reads the VERDICT rather
+    // than the number: a 0.12 published because a second outlet told the same
+    // story did not fail this gate, and painting it red would invent a
+    // rejection the pipeline never made.
+    render(
+      <RiskRejectionsTable
+        rows={[
+          riskRejection({
+            reason: "aviation_relevance_low",
+            confidence_score: 0.12,
+            confidence_gate_passed: true,
+            confidence_gate_reason: "corroborated",
+            gates: { currency: true, confidence: true, aviation: false, location: true },
+          }),
+        ]}
+      />,
+    );
+
+    const score = screen.getByText("0.12");
+    expect(score.className).not.toContain("text-critical");
+    expect(score.getAttribute("title")).toContain("kapı: geçti");
+    expect(screen.getByText("çoklu kaynak muafiyeti")).toBeInTheDocument();
+  });
+
+  it("colours the place a map gate refused, and leaves an accepted one plain", () => {
+    render(
+      <RiskRejectionsTable
+        rows={[
+          riskRejection({
+            detected_country: "Russia",
+            location_confidence: 0.4,
+            gates: { currency: true, confidence: true, aviation: true, location: false },
+          }),
+          riskRejection({
+            article_id: "2",
+            detected_country: "Japan",
+            location_confidence: 0.9,
+            gates: { currency: true, confidence: true, aviation: false, location: true },
+          }),
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("Russia (0.40)").className).toContain("text-critical");
+    expect(screen.getByText("Japan (0.90)").className).not.toContain("text-critical");
+  });
+
   it("names every other gate the row would also have failed", () => {
     render(
       <RiskRejectionsTable

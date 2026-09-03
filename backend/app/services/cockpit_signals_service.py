@@ -37,7 +37,12 @@ from app.api.v1.promotions import new_promotion_counts
 # Both of these are the rollup that already backs a page, reused rather than
 # re-derived: a cheaper second query would eventually state a number the page
 # it links to cannot reproduce. See each function's own docstring.
-from app.api.v1.risks import UNKNOWN_COUNTRY, RiskRadarOut, aggregate_risks
+from app.api.v1.risks import (
+    DEFAULT_WINDOW_DAYS,
+    UNKNOWN_COUNTRY,
+    RiskRadarOut,
+    aggregate_risks,
+)
 from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.ingest.markets import fetch_history
@@ -125,7 +130,25 @@ FUEL_30D_RISE_BANDS: tuple[Band, ...] = (
     Band(None, CRITICAL),
 )
 
-#: Risk Radarı: how many HIGH-severity signals the radar is currently holding.
+#: Risk Radarı: how many HIGH-severity signals the radar is currently holding
+#: OVER RISK_WINDOW_DAYS -- which is the radar's own default window, five days,
+#: not the fourteen this table was first written against.
+#:
+#: Re-checked when the window was corrected, because a count band read over a
+#: shorter window is a different question and the numbers do not carry over for
+#: free. Two things make these three rows survive the change:
+#:
+#: * It is a COUNT of clustered high-severity signals, not a rate. Nothing in
+#:   0/1-2/3+ is derived from the window length by arithmetic, so shortening the
+#:   window does not leave a stale divisor behind.
+#: * Shortening it can only move a tile DOWN a band, never up: the 5-day count
+#:   is a subset of the 14-day one. The band therefore got stricter -- three
+#:   high-severity signals now mean three inside five days, a genuinely dense
+#:   week -- and a threshold erring towards "Sakin" is the safe direction for a
+#:   tile nobody can audit at a glance.
+#:
+#: `method_tr` prints the window next to the band, so a reader who disagrees
+#: with the thresholds can see which window they were applied over.
 RISK_HIGH_COUNT_BANDS: tuple[Band, ...] = (
     Band(1, GOOD),
     Band(3, WARNING),
@@ -142,9 +165,15 @@ COMPETITOR_48H_COUNT_BANDS: tuple[Band, ...] = (
     Band(None, CRITICAL),
 )
 
-#: Matches risk-radar-client.tsx's own DAYS, so the tile's count and the page
-#: it links to cover the same window.
-RISK_WINDOW_DAYS = 14
+#: The radar's own default window, imported rather than restated.
+#:
+#: It used to be a hand-typed 14 sitting beside a comment claiming it matched
+#: the page -- and it had not for as long as risks.DEFAULT_WINDOW_DAYS has been
+#: 5. The tile counted a fortnight, the Risk Radarı the tile links to opened on
+#: five days, and the two numbers disagreed by construction: clicking a tile
+#: reading "4" landed on a page showing two signals. One name, one window, and
+#: no second place to forget to change it.
+RISK_WINDOW_DAYS = DEFAULT_WINDOW_DAYS
 #: How far back airline_momentum compares (7 days vs the 7 before it).
 MOMENTUM_WINDOW_DAYS = 7
 
@@ -195,11 +224,32 @@ FUEL_METHOD_TR = (
 )
 
 
+@dataclass(frozen=True)
+class FxForecastPoint:
+    """One curated bank forecast, reduced to what the tile is allowed to say
+    about it: WHO said it, for WHEN, and the number.
+
+    The horizon is not optional decoration. `build_fx_signal` used to take a
+    bare `list[float]` and print min-max as "the range of bank forecasts" --
+    and those floats were a 3-month call, a 12-month call and two year-end
+    calls, mixed. The resulting "51,40–66,00" was not a range any institution
+    or any date would recognise: its two ends were nine months apart. A type
+    that cannot be constructed without a horizon and an institution is what
+    stops that sentence being writable again.
+    """
+
+    institution: str
+    #: The institution's own label -- "+3m", "end-2026". Never rewritten; see
+    #: app/models/curated.py.
+    horizon_label: str
+    value: float
+
+
 def build_fx_signal(
     *,
     spot: float | None,
     move_30d_pct: float | None,
-    forecast_values: list[float],
+    forecasts: list[FxForecastPoint],
     as_of: datetime | None = None,
     source: str | None = None,
     source_url: str | None = None,
@@ -225,19 +275,55 @@ def build_fx_signal(
 
     reason = f"USD/TRY {tr_number(spot, 2)} · 30 günde {tr_signed_percent(move_30d_pct)}."
 
-    # The curated bank forecasts as a RANGE, never a consensus number:
-    # averaging them is forbidden by the module that curates them (see
-    # app/ingest/curated_seed.py). The two endpoints of the range are two
-    # institutions' own published figures, each still individually attributed
-    # in the forecast table further down the page.
-    if forecast_values:
-        low, high = min(forecast_values), max(forecast_values)
-        gap_low = (low - spot) / spot * 100
-        gap_high = (high - spot) / spot * 100
-        reason += (
-            f" Küratörlü banka tahminleri {tr_number(low, 2)}–{tr_number(high, 2)} aralığında"
-            f" ({tr_signed_percent(gap_low, 0)}…{tr_signed_percent(gap_high, 0)})."
-        )
+    # The curated bank forecasts, NEVER a consensus number: averaging them is
+    # forbidden by the module that curates them (see app/ingest/curated_seed.py).
+    #
+    # And never an unlabelled "range" either, which is what this was. The rows
+    # reaching a USD/TRY tile are a Danske +3m, a Danske +12m, a JPMorgan
+    # end-2026 and a Garanti year-end; min-max over them printed
+    # "51,40–66,00 aralığında", an interval whose ends are nine months and two
+    # institutions apart, presented as though four banks had bracketed one
+    # number. A reader could only take it for a spread of opinion about the
+    # same moment, which is the one thing it is not.
+    #
+    # Rows whose horizon has already elapsed never arrive here at all -- the
+    # caller asks the repository for `only_upcoming` -- so nothing below can be
+    # anchored to a date in the past.
+    if forecasts:
+        low = min(forecasts, key=lambda f: f.value)
+        high = max(forecasts, key=lambda f: f.value)
+        gap_low = tr_signed_percent((low.value - spot) / spot * 100, 0)
+        gap_high = tr_signed_percent((high.value - spot) / spot * 100, 0)
+        horizons = {f.horizon_label for f in forecasts}
+
+        if len(forecasts) == 1:
+            # One curated row. "Aralık" would be a range of one. Tested on the
+            # list length and not on `low is high`, which is also true of two
+            # institutions that happen to have published the same number.
+            reason += (
+                f" Küratörlü tek banka tahmini: {low.institution}, {low.horizon_label} vadeli"
+                f" {tr_number(low.value, 2)} ({gap_low})."
+            )
+        elif len(horizons) == 1:
+            # Same horizon on every row: a genuine spread of opinion about one
+            # date, and the only case where "aralık" is the honest word.
+            horizon = next(iter(horizons))
+            reason += (
+                f" Küratörlü banka tahminleri ({horizon} vadeli)"
+                f" {tr_number(low.value, 2)}–{tr_number(high.value, 2)} aralığında"
+                f" ({gap_low}…{gap_high})."
+            )
+        else:
+            # Different horizons: two endpoints, each named with its own
+            # institution and its own vade, and said out loud not to be a range.
+            reason += (
+                " Küratörlü banka tahminleri farklı vadeli:"
+                f" en düşük {tr_number(low.value, 2)}"
+                f" ({low.institution}, {low.horizon_label} vadeli, {gap_low}),"
+                f" en yüksek {tr_number(high.value, 2)}"
+                f" ({high.institution}, {high.horizon_label} vadeli, {gap_high})."
+                " Tek bir aralık değil."
+            )
 
     level = band_for(abs(move_30d_pct), FX_30D_ABS_MOVE_BANDS)
     return CockpitSignalOut(
@@ -398,7 +484,7 @@ async def cockpit_signals(
     `radar` is an escape hatch for a caller that has already run
     `aggregate_risks` for its own reasons -- the Sinyaller aggregate
     (app/services/signals_service.py) renders both these tiles and the radar's
-    own high-severity signals in one response, and re-clustering a 14-day
+    own high-severity signals in one response, and re-clustering the same
     window twice per request buys nothing. Passing it in is also what
     guarantees the tile's count and the signals listed beside it come from the
     same rollup rather than from two runs that could differ. Production's own
@@ -418,7 +504,14 @@ async def cockpit_signals(
 
     usd_try, fx_move = await move_30d("fx_usd_try")
     brent, brent_move = await move_30d("oil_price")
-    forecasts = await CuratedRepository(db).fx_forecasts(currency_pair="USD/TRY")
+    # only_upcoming: a bank's "+3m" published in March says nothing about where
+    # the rate goes from here once June has passed, and an elapsed horizon was
+    # free to be the endpoint the tile quoted. The rows stay in the table --
+    # they are a true record of what was said -- they just stop steering a tile
+    # about the road ahead.
+    forecast_rows = await CuratedRepository(db).fx_forecasts(
+        currency_pair="USD/TRY", only_upcoming=True
+    )
 
     # Brent's own published year, from the same Yahoo path the KPI detail page
     # already uses on the request path. fetch_history never raises -- it
@@ -454,7 +547,14 @@ async def cockpit_signals(
         build_fx_signal(
             spot=usd_try.value if usd_try else None,
             move_30d_pct=fx_move,
-            forecast_values=[row.value for row in forecasts],
+            forecasts=[
+                FxForecastPoint(
+                    institution=row.institution,
+                    horizon_label=row.horizon_label,
+                    value=row.value,
+                )
+                for row in forecast_rows
+            ],
             as_of=usd_try.as_of if usd_try else None,
             source=usd_try.source if usd_try else None,
             source_url=usd_try.source_url if usd_try else None,

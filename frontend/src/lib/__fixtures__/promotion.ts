@@ -16,6 +16,7 @@ export function promotion(overrides: Partial<PromotionOut> = {}): PromotionOut {
     summary_tr: "",
     discount_pct: 40,
     markets: null,
+    markets_json: null,
     sale_starts: null,
     sale_ends: null,
     travel_starts: null,

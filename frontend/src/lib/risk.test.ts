@@ -9,6 +9,7 @@ import {
   coverageBadge,
   EMPTY_RISK_FILTERS,
   filterRiskCountries,
+  gateVerdict,
   headlinePresentation,
   liveFeedItems,
   partitionByVisibility,
@@ -511,5 +512,20 @@ describe("rejectionPlaceLabel and scoreOrUnscored", () => {
     expect(scoreOrUnscored(null)).toBe("ölçülmedi");
     expect(scoreOrUnscored(undefined)).toBe("ölçülmedi");
     expect(scoreOrUnscored(0)).toBe("0.00");
+  });
+});
+
+describe("gateVerdict", () => {
+  it("hands back the payload's own pass and fail", () => {
+    const gates = { currency: true, confidence: false, aviation: true, location: false };
+    expect(gateVerdict(gates, "confidence")).toBe(false);
+    expect(gateVerdict(gates, "currency")).toBe(true);
+  });
+
+  it("returns null for a gate the payload said nothing about", () => {
+    // Not false. Colouring an absent verdict as a rejection asserts something
+    // nothing told us -- the same class of claim as drawing an unmeasured
+    // score as 0.00.
+    expect(gateVerdict({ currency: true }, "aviation")).toBeNull();
   });
 });

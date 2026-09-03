@@ -49,7 +49,13 @@ def _validated_tiers(tier: list[str] | None) -> list[str] | None:
 
 
 def _window_start(hours: int | None, days: int | None, date: date_type | None):
-    """The `published_at >=` cutoff for whichever window the caller asked for.
+    """The cutoff for whichever window the caller asked for.
+
+    Compared against `coalesce(published_at, fetched_at)`, not against
+    `published_at` alone -- see the `since` note at the top of
+    app/repositories/article_repository.py for why, and note that this
+    docstring naming the bare column is exactly the drift that note exists to
+    prevent.
 
     `hours`, `days` and `date` are three ways to say the same thing and only
     one can be true at a time: a request carrying `hours=6&days=30` has no

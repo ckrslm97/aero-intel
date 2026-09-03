@@ -16,6 +16,27 @@ from app.taxonomy import DEFAULT_UNDECLARED_TIER, FOCUS_BONUS, RIVAL_CODES, TRUS
 # every article belongs to exactly one day.
 _DAY_EXPR = func.coalesce(Article.published_at, Article.fetched_at)
 
+# WHY EVERY `since` WINDOW BELOW IS CUT ON _DAY_EXPR AND NOT ON
+# Article.published_at
+#
+# A "last N days" filter used to compare the raw column here while /search
+# (app/search/postgres_fts.py) compared the coalesce. The two therefore
+# answered the same question differently: an article a feed published without
+# a date -- published_at NULL -- is invisible to `published_at >= since`
+# (NULL >= x is NULL, not true) and visible to the coalesced one, so the same
+# 7-day window returned one count on the Gazete and another in search, and
+# nothing on either page could explain the gap.
+#
+# The coalesce is the honest side of that disagreement, and it is the rule
+# this module already applies everywhere the day itself matters (`on_date`,
+# `count_by_day`): every article belongs to exactly one day, and an undated
+# row belongs to the day we fetched it rather than to no day at all.
+#
+# It is also the cheaper side: ix_articles_day_expr indexes exactly
+# coalesce(published_at, fetched_at) (partial, is_duplicate = false), so the
+# range predicate stays index-covered -- the bare column was the expression
+# the index did NOT match.
+
 # Articles retired by the domain blacklist (app/ingest/blacklist.py) must not
 # appear in any listing. Marking them `is_duplicate` would have hidden them
 # with one fewer line, but it would also have been a lie -- is_duplicate means
@@ -169,7 +190,8 @@ class ArticleRepository:
         the list returns (rather than every article ever ingested)."""
         query = query.where(Article.is_duplicate.is_(False), _NOT_BLACKLISTED)
         if since is not None:
-            query = query.where(Article.published_at >= since)
+            # _DAY_EXPR, not the bare column -- see the `since` note above.
+            query = query.where(_DAY_EXPR >= since)
         if on_date is not None:
             day_start = datetime.combine(on_date, time.min, tzinfo=timezone.utc)
             query = query.where(
@@ -410,7 +432,12 @@ class ArticleRepository:
             .group_by(ArticleEnrichment.category)
         )
         if since is not None:
-            query = query.where(Article.published_at >= since)
+            # Same _DAY_EXPR window as the list -- see the `since` note at
+            # the top of this module. A badge
+            # counted on a different predicate than the list under it is a
+            # badge that lies, which is the whole reason this module shares
+            # its filters rather than restating them.
+            query = query.where(_DAY_EXPR >= since)
         # Same clause the list uses, so a badge counts exactly the rows the
         # filtered list will render (this query already joins the enrichment).
         if translated_only:
@@ -468,7 +495,12 @@ class ArticleRepository:
             .limit(limit)
         )
         if since is not None:
-            query = query.where(Article.published_at >= since)
+            # Same _DAY_EXPR window as the list -- see the `since` note at
+            # the top of this module. A badge
+            # counted on a different predicate than the list under it is a
+            # badge that lies, which is the whole reason this module shares
+            # its filters rather than restating them.
+            query = query.where(_DAY_EXPR >= since)
         if (
             category
             or translated_only

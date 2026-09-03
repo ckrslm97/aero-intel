@@ -236,6 +236,36 @@ async def test_country_matches_either_the_market_list_or_the_resolved_route(db_s
     assert {r.title_tr for r in rows} == {"market", "route"}
 
 
+async def test_markets_json_reaches_the_payload_the_chip_row_is_built_from(db_session):
+    """The screen's country/region chips are derived client-side from the rows
+    the API returns; the CSV export's filter runs server-side over the same
+    campaigns and reads `markets_json` (see `_countries_of` / `_regions_of`).
+
+    While that column was not serialised, the two selected different sets: a
+    campaign whose only mention of Almanya lives in `markets_json` matched the
+    export's `country=almanya` and could not appear in the on-screen chip at
+    all. One dimension, two answers, and nothing on the page to explain the
+    gap.
+    """
+    await _promo(
+        db_session,
+        slug="market-only",
+        markets_json={"countries": ["Almanya"], "regions": ["europe"]},
+    )
+    await _promo(db_session, slug="legacy")
+
+    rows = {r.title_tr: r for r in await _list(db_session)}
+
+    assert rows["market-only"].markets_json == {
+        "countries": ["Almanya"],
+        "regions": ["europe"],
+    }
+    # The server-side filter and the payload now describe the same campaign.
+    assert [r.title_tr for r in await _list(db_session, country="almanya")] == ["market-only"]
+    # A legacy row says nothing rather than an empty structure it never had.
+    assert rows["legacy"].markets_json is None
+
+
 async def test_region_matches_the_flat_column_and_both_json_shapes(db_session):
     await _promo(db_session, slug="flat", region="europe")
     await _promo(db_session, slug="markets", markets_json={"regions": ["europe"]})
