@@ -4,7 +4,7 @@ import { CampaignsClient } from "@/components/campaigns-client";
 import { Skeleton } from "@/components/ui/skeleton";
 
 export const metadata = {
-  title: "Kampanyalar — AeroIntel",
+  title: "Kampanyalar",
   description:
     "Rakip havayollarının satış kampanyaları: satış ve seyahat dönemleri ayrı ayrı, bitmek üzere olanlar önde, kaynağıyla birlikte.",
 };

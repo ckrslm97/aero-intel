@@ -4,7 +4,7 @@ import { RiskRadarClient } from "@/components/risk-radar-client";
 import { Skeleton } from "@/components/ui/skeleton";
 
 export const metadata = {
-  title: "Risk Radarı — AeroIntel",
+  title: "Risk Radarı",
   description:
     "Haber akışından sınıflandırılmış doğal afet ve çatışma sinyalleri: ülke ve şehir kırılımıyla, kaynak kronolojisiyle, operasyonel farkındalık için.",
 };
