@@ -1,6 +1,6 @@
 "use client";
 
-import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import { AnimatePresence, motion } from "framer-motion";
 import { ChevronLeft, ChevronRight, Plane, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -8,19 +8,34 @@ import { usePathname } from "next/navigation";
 import { primaryNav } from "@/lib/nav";
 import { cn } from "@/lib/utils";
 
-function NavLinks({
+/** The pathname the nav should compare against.
+ *
+ * Vercel's runtime ISR re-render of `/` serves an RSC payload whose canonical
+ * path is "/index" (`"c":["","index"]`), so `usePathname()` returns "/index"
+ * on the server for the one route in this app that carries `revalidate`. No
+ * nav item matches that, and the Kokpit link prerenders inactive. Measured on
+ * production: `grep -c 'ring-primary/25'` returns 0 for `/` and 1 for every
+ * other route.
+ *
+ * Normalising here rather than at each call site: this is the only place that
+ * turns a path into a "you are here", and a second copy of the rule is a
+ * second chance to forget it.
+ */
+export function navPathname(pathname: string): string {
+  if (pathname === "/index") return "/";
+  return pathname;
+}
+
+export function NavLinks({
   onNavigate,
   collapsed,
   /** Distinct per mounted nav so the desktop rail and the mobile drawer don't
    * share (and fight over) one shared-element pill. */
-  layoutId,
 }: {
   onNavigate?: () => void;
   collapsed?: boolean;
-  layoutId: string;
 }) {
-  const pathname = usePathname();
-  const reduceMotion = useReducedMotion();
+  const pathname = navPathname(usePathname());
 
   const renderItems = (items: typeof primaryNav) =>
     items.map((item) => {
@@ -41,29 +56,41 @@ function NavLinks({
               : "text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
           )}
         >
-          {active &&
-            // The lit approach light for "you are here". Under reduced motion
-            // it is a plain span with no layoutId, so navigating swaps it
-            // instantly instead of sliding it between items.
-            (reduceMotion ? (
-              <span
-                aria-hidden
-                className="absolute inset-0 rounded-md bg-gradient-to-r from-primary/15 via-primary/8 to-transparent ring-1 ring-primary/25"
-              />
-            ) : (
-              <motion.span
-                aria-hidden
-                layoutId={layoutId}
-                className="absolute inset-0 rounded-md bg-gradient-to-r from-primary/15 via-primary/8 to-transparent ring-1 ring-primary/25"
-                transition={{ type: "spring", stiffness: 480, damping: 38 }}
-              />
-            ))}
-          {active && (
-            <span
-              aria-hidden
-              className="absolute inset-y-1 left-0 w-0.5 rounded-full bg-gradient-to-b from-primary to-chart-4"
-            />
-          )}
+          {/* ALWAYS MOUNTED, never conditionally rendered -- the marker
+              changes CLASSES, not the number of children.
+              …
+              Measured in production: Vercel's runtime ISR re-render of `/`
+              serves an RSC payload whose canonical path is "/index", not "/"
+              (`"c":["","index"]`). `usePathname()` therefore returned
+              "/index" on the server, no nav item matched, and the Kokpit link
+              was prerendered with TWO children -- while the browser, where
+              the path really is "/", rendered FOUR. React walks the tree
+              expecting a <span> and finds the <svg>, throws #418 and tears
+              down the whole <body> to re-render it client-side. Kokpit was
+              the only page affected (it is the only route carrying
+              `revalidate`), and it looked like every page because the console
+              was never cleared across soft navigations.
+              `navPathname` above fixes the path; this fixes the CLASS of bug:
+              a marker whose presence depends on state the server can get
+              wrong must not be able to change the shape of the tree.
+              The shared-element `layoutId` slide went with it. It required
+              exactly one mounted instance, which is the thing that cannot be
+              guaranteed here -- and a pill sliding between menu items is not
+              a fact a revenue-management desk acts on. */}
+          <span
+            aria-hidden
+            className={cn(
+              "absolute inset-0 rounded-md bg-gradient-to-r from-primary/15 via-primary/8 to-transparent ring-1 ring-primary/25 transition-opacity duration-200",
+              active ? "opacity-100" : "opacity-0",
+            )}
+          />
+          <span
+            aria-hidden
+            className={cn(
+              "absolute inset-y-1 left-0 w-0.5 rounded-full bg-gradient-to-b from-primary to-chart-4 transition-opacity duration-200",
+              active ? "opacity-100" : "opacity-0",
+            )}
+          />
           <Icon className="relative z-10 size-4 shrink-0" aria-hidden />
           {/* The label is ALWAYS rendered, and merely hidden visually when the
               rail is collapsed. It used to be dropped from the tree entirely,
@@ -131,7 +158,7 @@ export function Sidebar({
       )}
     >
       <Brand collapsed={collapsed} />
-      <NavLinks collapsed={collapsed} layoutId="sidebar-active" />
+      <NavLinks collapsed={collapsed} />
       <button
         onClick={onToggleCollapsed}
         aria-label={collapsed ? "Kenar çubuğunu genişlet" : "Kenar çubuğunu daralt"}
@@ -178,7 +205,7 @@ export function MobileSidebar({
                 <X className="size-4" />
               </button>
             </Brand>
-            <NavLinks onNavigate={onClose} layoutId="mobile-sidebar-active" />
+            <NavLinks onNavigate={onClose} />
           </motion.aside>
         </>
       )}
