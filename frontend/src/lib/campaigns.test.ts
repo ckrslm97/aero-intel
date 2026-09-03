@@ -3,165 +3,345 @@ import { describe, expect, it } from "vitest";
 import { promotion } from "@/lib/__fixtures__/promotion";
 import {
   campaignAmountLabel,
+  campaignAttr,
+  campaignCountries,
   campaignFacetCounts,
   campaignFieldLabel,
+  campaignFiltersToSearchParams,
   campaignQueryString,
   campaignRegions,
   campaignRouteLabel,
   campaignStatusStyle,
   confidenceBandLabel,
+  daysUntil,
   EMPTY_CAMPAIGN_FILTERS,
   filterCampaigns,
   formatChangeValue,
-  groupDatelessCampaigns,
   hasActiveCampaignFilter,
-  isDatelessCampaign,
+  isUndatedCampaign,
+  orderCampaigns,
+  parseCampaignFilters,
+  periodRange,
   relativeTimeTr,
+  remainingDaysLabel,
   reviewRequiredCount,
+  SELECTABLE_CAMPAIGN_STATUSES,
   sourceTierLabel,
+  splitUndatedCampaigns,
+  todayIso,
+  windowOverlaps,
+  type CampaignFilters,
 } from "@/lib/campaigns";
+
+const TODAY = "2026-09-03";
 
 describe("filterCampaigns", () => {
   const rows = [
-    promotion({ id: "1", airline_code: "TK", campaign_type: "FLASH_SALE", status: "ACTIVE_BOOKING", confidence_band: "high", region: "europe" }),
-    promotion({ id: "2", airline_code: "PC", campaign_type: "EARLY_BOOKING", status: "EXPIRED", confidence_band: "medium", region: "europe" }),
+    promotion({ id: "1", airline_code: "TK", campaign_type: "FLASH_SALE", campaign_kind: "CAMPAIGN", status: "ACTIVE_BOOKING", confidence_band: "high", region: "europe" }),
+    promotion({ id: "2", airline_code: "PC", campaign_type: "EARLY_BOOKING", campaign_kind: "CAMPAIGN", status: "BOOKING_CLOSED_TRAVEL_ACTIVE", confidence_band: "medium", region: "europe" }),
     promotion({ id: "3", airline_code: "TK", campaign_type: null, status: "UPCOMING", confidence_band: null, region: "asia", review_required: true }),
   ];
 
   it("returns everything when nothing is selected", () => {
-    expect(filterCampaigns(rows, EMPTY_CAMPAIGN_FILTERS)).toHaveLength(3);
+    expect(filterCampaigns(rows, EMPTY_CAMPAIGN_FILTERS, TODAY)).toHaveLength(3);
     expect(hasActiveCampaignFilter(EMPTY_CAMPAIGN_FILTERS)).toBe(false);
   });
 
   it("narrows on each dimension", () => {
-    const only = (filters: Partial<typeof EMPTY_CAMPAIGN_FILTERS>) =>
-      filterCampaigns(rows, { ...EMPTY_CAMPAIGN_FILTERS, ...filters }).map((r) => r.id);
+    const only = (filters: Partial<CampaignFilters>) =>
+      filterCampaigns(rows, { ...EMPTY_CAMPAIGN_FILTERS, ...filters }, TODAY).map((r) => r.id);
 
     expect(only({ airline: "TK" })).toEqual(["1", "3"]);
     expect(only({ campaignType: "FLASH_SALE" })).toEqual(["1"]);
-    expect(only({ status: "EXPIRED" })).toEqual(["2"]);
+    expect(only({ campaignKind: "CAMPAIGN" })).toEqual(["1", "2"]);
+    expect(only({ status: "BOOKING_CLOSED_TRAVEL_ACTIVE" })).toEqual(["2"]);
     expect(only({ band: "high" })).toEqual(["1"]);
     expect(only({ region: "asia" })).toEqual(["3"]);
     expect(only({ reviewOnly: true })).toEqual(["3"]);
   });
 
+  it("narrows on route scope and country", () => {
+    const routed = [
+      promotion({
+        id: "ond",
+        route_scope: "OND",
+        route_json: { origin: { country: "Türkiye" }, dest: { country: "Birleşik Krallık" } },
+      }),
+      promotion({ id: "net", route_scope: "NETWORK_WIDE" }),
+    ];
+    const only = (filters: Partial<CampaignFilters>) =>
+      filterCampaigns(routed, { ...EMPTY_CAMPAIGN_FILTERS, ...filters }, TODAY).map((r) => r.id);
+
+    expect(only({ routeScope: "OND" })).toEqual(["ond"]);
+    expect(only({ country: "Türkiye" })).toEqual(["ond"]);
+    // Case is the reader's problem, not theirs.
+    expect(only({ country: "türkiye" })).toEqual(["ond"]);
+    expect(only({ country: "Almanya" })).toEqual([]);
+  });
+
   it("combines dimensions as an intersection", () => {
-    const rowsOut = filterCampaigns(rows, {
-      ...EMPTY_CAMPAIGN_FILTERS,
-      airline: "TK",
-      status: "ACTIVE_BOOKING",
-    });
+    const rowsOut = filterCampaigns(
+      rows,
+      { ...EMPTY_CAMPAIGN_FILTERS, airline: "TK", status: "ACTIVE_BOOKING" },
+      TODAY,
+    );
     expect(rowsOut.map((r) => r.id)).toEqual(["1"]);
   });
 
   it("hides an unclassified row behind a type filter rather than calling it OTHER", () => {
     // The legacy row has campaign_type null. Bucketing it as OTHER would put
-    // 200 never-classified rows under a label the classifier never assigned.
-    const out = filterCampaigns(rows, { ...EMPTY_CAMPAIGN_FILTERS, campaignType: "OTHER" });
+    // 39 never-classified rows under a label the classifier never assigned.
+    const out = filterCampaigns(rows, { ...EMPTY_CAMPAIGN_FILTERS, campaignType: "OTHER" }, TODAY);
     expect(out).toEqual([]);
   });
 
   it("treats a null review_required as not-flagged", () => {
     // NULL means "never queued", which is not the review queue.
-    const out = filterCampaigns([promotion({ review_required: null })], {
-      ...EMPTY_CAMPAIGN_FILTERS,
-      reviewOnly: true,
-    });
+    const out = filterCampaigns(
+      [promotion({ review_required: null })],
+      { ...EMPTY_CAMPAIGN_FILTERS, reviewOnly: true },
+      TODAY,
+    );
     expect(out).toEqual([]);
   });
 });
 
-describe("groupDatelessCampaigns", () => {
-  /** A start-less campaign detected on `day`, i.e. one point marker. */
-  const dateless = (id: string, airline: string, day: string) =>
-    promotion({ id, airline_code: airline, sale_starts: null, detected_at: `${day}T09:00:00Z` });
+describe("date-window filters", () => {
+  it("treats a missing edge as open and a missing window as no claim", () => {
+    // "A campaign with no stated end has not been said to stop" -- the same
+    // convention as the backend's campaign_status.
+    expect(windowOverlaps("2026-09-01", null, TODAY, TODAY)).toBe(true);
+    expect(windowOverlaps(null, "2026-09-30", TODAY, TODAY)).toBe(true);
+    expect(windowOverlaps("2026-09-01", "2026-09-02", TODAY, TODAY)).toBe(false);
+    expect(windowOverlaps("2026-10-01", "2026-10-30", TODAY, TODAY)).toBe(false);
+    // Neither edge stated: an unstated window cannot support a claim about a
+    // period, so it matches nothing rather than everything.
+    expect(windowOverlaps(null, null, TODAY, TODAY)).toBe(false);
+  });
 
-  it("collapses a carrier's 23 same-day announcements into one cluster", () => {
-    // The regression itself: Singapore Airlines published 23 route fares on one
-    // day with no sale window, and the lane drew 23 diamonds in one column.
-    const rows = Array.from({ length: 23 }, (_, i) =>
-      dateless(`sq-${i}`, "SQ", "2026-08-29"),
+  it("reads the sale and the travel window separately", () => {
+    const rows = [
+      promotion({
+        id: "sale-now",
+        status: "ACTIVE_BOOKING",
+        sale_starts: "2026-09-01",
+        sale_ends: "2026-09-10",
+        travel_starts: "2027-01-01",
+        travel_ends: "2027-03-31",
+      }),
+      promotion({
+        id: "travel-now",
+        status: "BOOKING_CLOSED_TRAVEL_ACTIVE",
+        sale_starts: "2026-06-01",
+        sale_ends: "2026-06-30",
+        travel_starts: "2026-09-01",
+        travel_ends: "2026-09-30",
+      }),
+    ];
+    const ids = (filters: Partial<CampaignFilters>) =>
+      filterCampaigns(rows, { ...EMPTY_CAMPAIGN_FILTERS, ...filters }, TODAY).map((r) => r.id);
+
+    // The distinction the whole product rests on: "on sale now" and "flyable
+    // now" are different campaigns.
+    expect(ids({ salePeriod: "now" })).toEqual(["sale-now"]);
+    expect(ids({ travelPeriod: "now" })).toEqual(["travel-now"]);
+    expect(ids({ salePeriod: "90" })).toEqual(["sale-now"]);
+  });
+
+  it("never matches an undated campaign", () => {
+    const undated = promotion({ id: "u", status: "UNKNOWN" });
+    expect(
+      filterCampaigns([undated], { ...EMPTY_CAMPAIGN_FILTERS, salePeriod: "90" }, TODAY),
+    ).toEqual([]);
+    expect(
+      filterCampaigns([undated], { ...EMPTY_CAMPAIGN_FILTERS, travelPeriod: "90" }, TODAY),
+    ).toEqual([]);
+  });
+
+  it("measures each horizon from today", () => {
+    expect(periodRange("now", TODAY)).toEqual([TODAY, TODAY]);
+    expect(periodRange("30", TODAY)).toEqual([TODAY, "2026-10-03"]);
+    expect(periodRange("90", TODAY)).toEqual([TODAY, "2026-12-02"]);
+  });
+
+  it("counts whole days to a deadline", () => {
+    expect(daysUntil("2026-09-05", TODAY)).toBe(2);
+    expect(daysUntil("2026-09-03", TODAY)).toBe(0);
+    expect(remainingDaysLabel("2026-09-05", TODAY)).toBe("2 gün kaldı");
+    expect(remainingDaysLabel("2026-09-04", TODAY)).toBe("Son 1 gün");
+    expect(remainingDaysLabel("2026-09-03", TODAY)).toBe("Bugün son gün");
+  });
+
+  it("reads today as a local calendar day, never a UTC instant", () => {
+    // A reader west of UTC must not be told it is already tomorrow.
+    expect(todayIso(new Date(2026, 8, 3, 23, 30))).toBe("2026-09-03");
+    expect(todayIso(new Date(2026, 8, 3, 0, 15))).toBe("2026-09-03");
+  });
+});
+
+describe("splitUndatedCampaigns", () => {
+  it("moves the campaigns with no date of any kind into their own group", () => {
+    // The measurement this whole layout rests on: 70 of 83 production rows are
+    // UNKNOWN, and interleaved they bury the 13 that carry a real window.
+    const dated = promotion({ id: "d", status: "ACTIVE_BOOKING", sale_starts: "2026-09-01" });
+    const undated = promotion({ id: "u", status: "UNKNOWN" });
+
+    const split = splitUndatedCampaigns([dated, undated]);
+
+    expect(split.dated.map((p) => p.id)).toEqual(["d"]);
+    expect(split.undated.map((p) => p.id)).toEqual(["u"]);
+    // Nothing is dropped -- it is moved.
+    expect(split.dated.length + split.undated.length).toBe(2);
+  });
+
+  it("keeps a campaign with travel dates and no sale dates in the main feed", () => {
+    // The API calls this ACTIVE_BOOKING: we know when it can be FLOWN, which
+    // is a real dated fact. Splitting on "has no sale start" -- what the old
+    // swimlane did -- would have exiled it.
+    const travelOnly = promotion({
+      id: "t",
+      status: "ACTIVE_BOOKING",
+      sale_starts: null,
+      sale_ends: null,
+      travel_starts: "2026-10-01",
+      travel_ends: "2026-12-31",
+    });
+    expect(isUndatedCampaign(travelOnly)).toBe(false);
+    expect(splitUndatedCampaigns([travelOnly]).dated).toHaveLength(1);
+  });
+
+  it("returns empty groups for an empty list", () => {
+    expect(splitUndatedCampaigns([])).toEqual({ dated: [], undated: [] });
+  });
+});
+
+describe("orderCampaigns", () => {
+  const row = (
+    id: string,
+    status: string,
+    extra: Partial<Parameters<typeof promotion>[0]> = {},
+  ) => promotion({ id, status: status as never, ...extra });
+
+  it("puts what is buyable today first, soonest deadline first inside it", () => {
+    const soon = row("soon", "ACTIVE_BOOKING", { sale_ends: "2026-09-05" });
+    const later = row("later", "ACTIVE_BOOKING", { sale_ends: "2026-09-25" });
+    const openEnded = row("open", "ACTIVE_BOOKING", { sale_ends: null });
+
+    const ordered = orderCampaigns([later, openEnded, soon]).map((p) => p.id);
+
+    // "No deadline" is not "deadline is today": an open-ended sale sorts
+    // behind every stated one.
+    expect(ordered).toEqual(["soon", "later", "open"]);
+  });
+
+  it("follows the API's bucket order and never invents a different one", () => {
+    const rows = [
+      row("unknown", "UNKNOWN"),
+      row("closed", "BOOKING_CLOSED_TRAVEL_ACTIVE"),
+      row("upcoming", "UPCOMING", { sale_starts: "2026-10-01" }),
+      row("active", "ACTIVE_BOOKING", { sale_ends: "2026-09-10" }),
+    ];
+    expect(orderCampaigns(rows).map((p) => p.id)).toEqual([
+      "active",
+      "upcoming",
+      "closed",
+      "unknown",
+    ]);
+  });
+
+  it("breaks ties on newest-first-seen, not on detection order", () => {
+    const older = row("older", "UNKNOWN", {
+      first_seen_at: "2026-08-01T00:00:00Z",
+      detected_at: "2026-09-01T00:00:00Z",
+    });
+    const newer = row("newer", "UNKNOWN", {
+      first_seen_at: "2026-09-01T00:00:00Z",
+      detected_at: "2026-08-01T00:00:00Z",
+    });
+    expect(orderCampaigns([older, newer]).map((p) => p.id)).toEqual(["newer", "older"]);
+  });
+
+  it("orders upcoming campaigns by the day they open", () => {
+    const late = row("late", "UPCOMING", { sale_starts: "2026-12-01" });
+    const early = row("early", "UPCOMING", { sale_starts: "2026-09-20" });
+    expect(orderCampaigns([late, early]).map((p) => p.id)).toEqual(["early", "late"]);
+  });
+});
+
+describe("EXPIRED is never reachable from the page", () => {
+  it("is not offered as a filter chip", () => {
+    // The API hides expired rows by default; offering the chip would be
+    // offering an empty result with no way to explain it.
+    expect(SELECTABLE_CAMPAIGN_STATUSES).not.toContain("EXPIRED");
+  });
+
+  it("is dropped from a hand-edited URL rather than applied", () => {
+    const filters = parseCampaignFilters(new URLSearchParams("status=EXPIRED"));
+    expect(filters.status).toBeNull();
+  });
+
+  it("is never asked for on the wire", () => {
+    const query = campaignQueryString(
+      { ...EMPTY_CAMPAIGN_FILTERS, status: "ACTIVE_BOOKING" },
+      TODAY,
     );
+    expect(query).not.toContain("include_expired");
+    expect(campaignQueryString(EMPTY_CAMPAIGN_FILTERS, TODAY)).not.toContain("expired");
+  });
+});
 
-    const { clusters, singles, dated } = groupDatelessCampaigns(rows);
+describe("filter URL round-trip", () => {
+  const filters: CampaignFilters = {
+    airline: "TK",
+    campaignKind: "CAMPAIGN",
+    campaignType: "FLASH_SALE",
+    status: "ACTIVE_BOOKING",
+    region: "europe",
+    country: "Türkiye",
+    routeScope: "OND",
+    salePeriod: "30",
+    travelPeriod: "90",
+    band: "high",
+    reviewOnly: true,
+  };
 
-    expect(clusters).toHaveLength(1);
-    expect(clusters[0].items).toHaveLength(23);
-    expect(clusters[0].airlineCode).toBe("SQ");
-    expect(clusters[0].day).toBe("2026-08-29");
-    expect(clusters[0].key).toBe("SQ:2026-08-29");
-    expect(singles).toEqual([]);
-    expect(dated).toEqual([]);
+  it("survives a trip through the address bar unchanged", () => {
+    const params = campaignFiltersToSearchParams(filters);
+    expect(parseCampaignFilters(new URLSearchParams(params.toString()))).toEqual(filters);
   });
 
-  it("leaves dated campaigns entirely alone", () => {
-    const withDates = promotion({ id: "bar", sale_starts: "2026-09-01", sale_ends: "2026-09-30" });
-    const openEnded = promotion({ id: "open", sale_starts: "2026-09-01", sale_ends: null });
-    const rows = [
-      withDates,
-      dateless("p1", "TK", "2026-08-29"),
-      openEnded,
-      dateless("p2", "TK", "2026-08-29"),
-    ];
-
-    const { dated, clusters, singles } = groupDatelessCampaigns(rows);
-
-    // A published start is a bar, whatever the end date says.
-    expect(dated).toEqual([withDates, openEnded]);
-    expect(isDatelessCampaign(openEnded)).toBe(false);
-    expect(clusters).toHaveLength(1);
-    expect(clusters[0].items.map((p) => p.id)).toEqual(["p1", "p2"]);
-    expect(singles).toEqual([]);
+  it("writes nothing at all for an unfiltered page", () => {
+    expect(campaignFiltersToSearchParams(EMPTY_CAMPAIGN_FILTERS).toString()).toBe("");
   });
 
-  it("keeps two carriers announcing on the same day apart", () => {
-    const rows = [
-      dateless("tk-1", "TK", "2026-08-29"),
-      dateless("sq-1", "SQ", "2026-08-29"),
-      dateless("tk-2", "TK", "2026-08-29"),
-      dateless("sq-2", "SQ", "2026-08-29"),
-    ];
-
-    const { clusters } = groupDatelessCampaigns(rows);
-
-    expect(clusters.map((c) => c.key)).toEqual(["TK:2026-08-29", "SQ:2026-08-29"]);
-    expect(clusters.every((c) => c.items.length === 2)).toBe(true);
+  it("leaves unrelated params alone", () => {
+    const params = campaignFiltersToSearchParams(
+      { ...EMPTY_CAMPAIGN_FILTERS, airline: "PC" },
+      new URLSearchParams("view=table"),
+    );
+    expect(params.get("view")).toBe("table");
+    expect(params.get("airline")).toBe("PC");
   });
 
-  it("keeps one carrier's two different days apart", () => {
-    const rows = [
-      dateless("a", "SQ", "2026-08-29"),
-      dateless("b", "SQ", "2026-08-30"),
-      dateless("c", "SQ", "2026-08-30"),
-    ];
-
-    const { clusters, singles } = groupDatelessCampaigns(rows);
-
-    expect(singles.map((p) => p.id)).toEqual(["a"]);
-    expect(clusters).toHaveLength(1);
-    expect(clusters[0].day).toBe("2026-08-30");
+  it("clears a key rather than writing an empty one", () => {
+    const params = campaignFiltersToSearchParams(
+      EMPTY_CAMPAIGN_FILTERS,
+      new URLSearchParams("airline=TK&review=true"),
+    );
+    expect(params.toString()).toBe("");
   });
 
-  it("leaves a lone dateless campaign as a plain point marker", () => {
-    // A count chip reading "1" is noise, so a bucket of one is never a cluster.
-    const { clusters, singles } = groupDatelessCampaigns([dateless("only", "PC", "2026-08-29")]);
-    expect(clusters).toEqual([]);
-    expect(singles.map((p) => p.id)).toEqual(["only"]);
+  it("drops a value this build has never heard of", () => {
+    // A hand-edited ?sale=forever would otherwise narrow the page to nothing
+    // while every chip still read "Tümü".
+    const filtersOut = parseCampaignFilters(new URLSearchParams("sale=forever&travel=30"));
+    expect(filtersOut.salePeriod).toBeNull();
+    // ...while the neighbouring valid one still lands.
+    expect(filtersOut.travelPeriod).toBe("30");
   });
 
-  it("does not merge rows whose detection date cannot be read", () => {
-    // Two undateable rows are two unknowns, not one campaign seen twice.
-    const rows = [
-      promotion({ id: "x", airline_code: "TK", sale_starts: null, detected_at: "" }),
-      promotion({ id: "y", airline_code: "TK", sale_starts: null, detected_at: "" }),
-    ];
-    const { clusters, singles } = groupDatelessCampaigns(rows);
-    expect(clusters).toEqual([]);
-    expect(singles.map((p) => p.id)).toEqual(["x", "y"]);
-  });
-
-  it("returns empty buckets for an empty window", () => {
-    expect(groupDatelessCampaigns([])).toEqual({ dated: [], singles: [], clusters: [] });
+  it("reads an empty search string as no filters", () => {
+    expect(parseCampaignFilters(new URLSearchParams())).toEqual(EMPTY_CAMPAIGN_FILTERS);
   });
 });
 
@@ -185,7 +365,20 @@ describe("campaignAmountLabel", () => {
   });
 });
 
-describe("campaignRegions", () => {
+describe("campaignAttr", () => {
+  it("reads a free-form attribute without trusting its type", () => {
+    const promo = promotion({
+      attrs_json: { cabin: " BUSINESS ", promo_code: "", price_floor: 899, junk: { a: 1 } },
+    });
+    expect(campaignAttr(promo, "cabin")).toBe("BUSINESS");
+    expect(campaignAttr(promo, "promo_code")).toBeNull();
+    expect(campaignAttr(promo, "price_floor")).toBe("899");
+    expect(campaignAttr(promo, "junk")).toBeNull();
+    expect(campaignAttr(promotion(), "cabin")).toBeNull();
+  });
+});
+
+describe("campaignRegions and campaignCountries", () => {
   it("reads the flat column, the market list and the resolved route", () => {
     expect(campaignRegions(promotion({ region: "europe" }))).toEqual(["europe"]);
     expect(
@@ -201,6 +394,15 @@ describe("campaignRegions", () => {
   it("does not mistake a city name for a region slug", () => {
     expect(campaignRegions(promotion({ region: null, markets: "londra, dubai" }))).toEqual([]);
   });
+
+  it("reads countries off the resolved route only", () => {
+    expect(
+      campaignCountries(
+        promotion({ route_json: { origin: { country: "Türkiye" }, dest: { country: "Japonya" } } }),
+      ).sort(),
+    ).toEqual(["Japonya", "Türkiye"]);
+    expect(campaignCountries(promotion())).toEqual([]);
+  });
 });
 
 describe("campaignFacetCounts", () => {
@@ -211,7 +413,7 @@ describe("campaignFacetCounts", () => {
   ];
 
   it("counts every value when nothing is filtered", () => {
-    expect(campaignFacetCounts(rows, EMPTY_CAMPAIGN_FILTERS, "airline")).toEqual({
+    expect(campaignFacetCounts(rows, EMPTY_CAMPAIGN_FILTERS, "airline", TODAY)).toEqual({
       TK: 2,
       PC: 1,
     });
@@ -220,17 +422,18 @@ describe("campaignFacetCounts", () => {
   it("counts a facet against every OTHER filter, not against itself", () => {
     const filters = { ...EMPTY_CAMPAIGN_FILTERS, airline: "TK" as string | null };
     // The type row is narrowed by the carrier...
-    expect(campaignFacetCounts(rows, filters, "campaignType")).toEqual({
+    expect(campaignFacetCounts(rows, filters, "campaignType", TODAY)).toEqual({
       FLASH_SALE: 1,
       EARLY_BOOKING: 1,
     });
     // ...but the carrier row still shows what the other carrier would give,
     // or clicking PC would be a click into a chip that reads 0.
-    expect(campaignFacetCounts(rows, filters, "airline")).toEqual({ TK: 2, PC: 1 });
+    expect(campaignFacetCounts(rows, filters, "airline", TODAY)).toEqual({ TK: 2, PC: 1 });
   });
 
   it("gives an unclassified row no chip at all", () => {
-    expect(campaignFacetCounts([promotion()], EMPTY_CAMPAIGN_FILTERS, "campaignType")).toEqual({});
+    expect(campaignFacetCounts([promotion()], EMPTY_CAMPAIGN_FILTERS, "campaignType", TODAY)).toEqual({});
+    expect(campaignFacetCounts([promotion()], EMPTY_CAMPAIGN_FILTERS, "campaignKind", TODAY)).toEqual({});
   });
 });
 
@@ -241,8 +444,8 @@ describe("reviewRequiredCount", () => {
       promotion({ id: "2", airline_code: "PC", review_required: true }),
       promotion({ id: "3", airline_code: "TK", review_required: false }),
     ];
-    expect(reviewRequiredCount(rows, EMPTY_CAMPAIGN_FILTERS)).toBe(2);
-    expect(reviewRequiredCount(rows, { ...EMPTY_CAMPAIGN_FILTERS, airline: "TK" })).toBe(1);
+    expect(reviewRequiredCount(rows, EMPTY_CAMPAIGN_FILTERS, TODAY)).toBe(2);
+    expect(reviewRequiredCount(rows, { ...EMPTY_CAMPAIGN_FILTERS, airline: "TK" }, TODAY)).toBe(1);
   });
 });
 
@@ -255,10 +458,11 @@ describe("campaignStatusStyle", () => {
     // Over is history, not an alarm: muted, never red.
     expect(campaignStatusStyle("EXPIRED").className).not.toContain("critical");
     expect(campaignStatusStyle("UNKNOWN").className).toContain("dashed");
+    expect(campaignStatusStyle("UNKNOWN").short).toBe("Tarihsiz");
   });
 
   it("falls back to UNKNOWN for a status this build has never heard of", () => {
-    expect(campaignStatusStyle("SOMETHING_NEW").short).toBe("Belirsiz");
+    expect(campaignStatusStyle("SOMETHING_NEW").short).toBe("Tarihsiz");
   });
 });
 
@@ -308,6 +512,8 @@ describe("labels", () => {
 
   it("translates field names and leaves an unmapped one visible", () => {
     expect(campaignFieldLabel("sale_ends")).toBe("Satış bitişi");
+    expect(campaignFieldLabel("ticketing_end")).toBe("Biletleme bitişi");
+    expect(campaignFieldLabel("campaign_kind")).toBe("Kampanya sınıfı");
     expect(campaignFieldLabel("some_new_column")).toBe("some_new_column");
   });
 
@@ -338,30 +544,37 @@ describe("relativeTimeTr", () => {
 });
 
 describe("campaignQueryString", () => {
-  it("carries the visible filters and the window to the API", () => {
+  it("carries the visible filters to the API", () => {
     const query = campaignQueryString(
       {
+        ...EMPTY_CAMPAIGN_FILTERS,
         airline: "TK",
+        campaignKind: "CAMPAIGN",
         campaignType: "FLASH_SALE",
         status: "ACTIVE_BOOKING",
         region: "europe",
+        country: "Türkiye",
         band: "high",
         reviewOnly: true,
+        salePeriod: "30",
       },
-      { from: "2026-08-17", to: "2026-10-11" },
+      TODAY,
     );
     const params = new URLSearchParams(query);
-    expect(params.get("date_from")).toBe("2026-08-17");
-    expect(params.get("date_to")).toBe("2026-10-11");
     expect(params.get("airline")).toBe("TK");
+    expect(params.get("campaign_kind")).toBe("CAMPAIGN");
     expect(params.get("campaign_type")).toBe("FLASH_SALE");
     expect(params.get("status")).toBe("ACTIVE_BOOKING");
     expect(params.get("region")).toBe("europe");
+    expect(params.get("country")).toBe("Türkiye");
     expect(params.get("band")).toBe("high");
     expect(params.get("review_required")).toBe("true");
+    // The one period filter the endpoint can express.
+    expect(params.get("date_from")).toBe(TODAY);
+    expect(params.get("date_to")).toBe("2026-10-03");
   });
 
   it("emits nothing for an unfiltered view", () => {
-    expect(campaignQueryString(EMPTY_CAMPAIGN_FILTERS)).toBe("");
+    expect(campaignQueryString(EMPTY_CAMPAIGN_FILTERS, TODAY)).toBe("");
   });
 });

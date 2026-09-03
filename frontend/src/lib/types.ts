@@ -1,5 +1,6 @@
 import type {
   CampaignBusinessClass,
+  CampaignKind,
   CampaignStatus,
   CampaignType,
   RouteScope,
@@ -428,6 +429,30 @@ export interface PromotionOut {
   evidence_json: Record<string, CampaignEvidence> | null;
   /** e.g. {"inferred_year": true} when the page said "30 Eylül" with no year. */
   date_flags_json: Record<string, unknown> | null;
+
+  /* --- Kampanya v2 (PR #72) ---------------------------------------------
+   *
+   * `campaign_kind` says whether the offer is a PRICE (CAMPAIGN) or a
+   * MECHANISM (PROMOTION). Null on the ~39 legacy rows that were never
+   * classified at all -- those rows have no `campaign_type` either, and the
+   * page shows them as unclassified rather than guessing a kind. */
+  campaign_kind: CampaignKind | null;
+  /** A ticketing deadline the carrier stated SEPARATELY from the sale window.
+   * Filled in almost never, and that is the information: an empty pair means
+   * nobody published one, never that it equals the booking window. */
+  ticketing_start: string | null;
+  ticketing_end: string | null;
+  /** The campaign's own announced period, when the carrier published one that
+   * is neither the sale nor the travel window. */
+  campaign_start: string | null;
+  campaign_end: string | null;
+  /** Does the carrier itself have a source row at tier `official`?
+   *
+   * Computed per request by the API, never stored. False on a legacy row is
+   * honest rather than pessimistic -- nobody ever filed a source for it, so
+   * nobody ever verified it. */
+  official_source_verified: boolean;
+
   /** Recorded edits, and how many pages told us about this campaign. */
   version_count: number;
   source_count: number;

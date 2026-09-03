@@ -28,14 +28,24 @@ export default defineConfig({
       include: [
         "src/components/pagination.tsx",
         "src/components/data-source-error.tsx",
-        // PR7: the campaign page's filtering/labelling rules and the two
-        // components built on top of them. The swimlane is deliberately not
-        // here -- it is a pixel-geometry surface, checked in a browser.
+        // Kampanya v2: the page's filtering/ordering/URL rules and every
+        // surface built on them. The swimlane that used to be excluded here as
+        // "a pixel-geometry surface" is gone entirely -- see
+        // components/campaigns-client.tsx for the measurement behind that.
+        //
+        // campaign-windows.tsx IS in the runner even though it draws bars: the
+        // thing being asserted is not where a pixel lands, it is that the sale
+        // and travel windows are two labelled tracks with different fills,
+        // which is the product's central data distinction (§11) and far too
+        // important to leave to a screenshot.
         "src/components/campaign-alert-strip.tsx",
         "src/components/campaign-analyst-table.tsx",
-        // The swimlane's clustered marker: geometry stays out of the runner,
-        // but the count, the list it opens and its keyboard exits do not.
-        "src/components/campaign-cluster-marker.tsx",
+        "src/components/campaign-expiring.tsx",
+        "src/components/campaign-feed.tsx",
+        "src/components/campaign-filters.tsx",
+        "src/components/campaign-summary.tsx",
+        "src/components/campaign-windows.tsx",
+        "src/components/campaigns-client.tsx",
         // Kokpit V2: the page's own rules (freshness, the forecast split,
         // level styling) plus every surface that carries real mapping,
         // ordering or arithmetic logic, plus the two chart primitives whose
