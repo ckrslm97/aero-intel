@@ -143,3 +143,25 @@ describe("kpiDeltaLabel", () => {
     expect(kpiDeltaLabel(null, null)).toBeNull();
   });
 });
+
+
+describe("formatMetricValue: olmayan hassasiyeti uydurmaz", () => {
+  it("yüzde değerini kaynağın taşıdığı kadar basar", () => {
+    // IATA'nın 2026 doluluk tahmini 84,0 -- ikinci ondalık kaynakta YOK.
+    expect(formatMetricValue(84, "%", "load_factor")).toBe("84");
+    expect(formatMetricValue(83.5, "%", "load_factor")).toBe("83,5");
+  });
+
+  it("fiyat ve birim maliyet ise kuruşunu KORUR", () => {
+    // Bir kotasyonun kuruşu kotasyonun parçası: 68,4 $/bbl diye fiyat yazılmaz.
+    expect(formatMetricValue(68.4, "$/bbl", "oil_price")).toBe("68,40");
+    expect(formatMetricValue(8.6, "¢/RPK", "yield_per_rpk")).toBe("8,60");
+    expect(formatMetricValue(10.08, "¢/ASK", "rask")).toBe("10,08");
+  });
+
+  it("kur paritesinde sondaki sıfır KORUNUR", () => {
+    // 1,085 ile 1,0850 aynı kotasyon değil: dördüncü hane hareket eden hane.
+    expect(formatMetricValue(1.085, "USD", "fx_eur_usd")).toBe("1,0850");
+    expect(formatMetricValue(48.3, "TRY", "fx_usd_try")).toBe("48,30");
+  });
+});

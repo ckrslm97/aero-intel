@@ -87,6 +87,31 @@ function isPreciseUnit(unit: string | null | undefined): boolean {
   return unit === "%" || unit.startsWith("¢") || unit.includes("/");
 }
 
+/** Up to two decimals, and not one more than the reading actually has.
+ *
+ * Used for PERCENTAGES only. `formatRate(v, 2)` pads, and IATA's 84.0% load
+ * factor came out as "%84,00" -- a second decimal that exists nowhere in the
+ * source and that a reader is entitled to take for a measurement to the
+ * hundredth of a point. A percentage carries the precision its source stated;
+ * 83,5 stays 83,5 and 84 stays 84.
+ *
+ * Prices and per-unit rates are NOT routed here and keep their padding: cents
+ * are part of a quote ("68,40 $/bbl"), and a unit cost the airline industry
+ * writes to two places ("8,60 ¢/RPK") loses meaning at one.
+ *
+ * FX is not routed here either: a cross quoted 1,0850 must keep its trailing
+ * zero, because the fourth decimal is the one that moves and "1,085" reads as
+ * a different, coarser quote.
+ */
+function formatUpToTwoDecimals(value: number): string {
+  return upToTwoFormatter.format(value);
+}
+
+const upToTwoFormatter = new Intl.NumberFormat("tr-TR", {
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 2,
+});
+
 /** THE precision rule for a KPI value -- every surface calls this one.
  *
  * /kpi/fx_eur_usd printed "1,1" (compact notation, one fraction digit) for the
@@ -114,6 +139,10 @@ export function formatMetricValue(
   if (metricKey?.startsWith(FX_METRIC_PREFIX)) {
     return formatRate(value, Math.abs(value) < FX_FOUR_DECIMAL_BELOW ? 4 : 2);
   }
+  // A PERCENTAGE is read to the precision its source states; a quoted PRICE is
+  // read to the cent. So "%" does not pad and "$/bbl" does -- see
+  // formatUpToTwoDecimals.
+  if (unit === "%") return formatUpToTwoDecimals(value);
   if (isPreciseUnit(unit)) return formatRate(value, 2);
   return formatCompactNumber(value);
 }

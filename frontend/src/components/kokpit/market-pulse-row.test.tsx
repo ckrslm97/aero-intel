@@ -195,12 +195,13 @@ describe("buildPulseCells", () => {
     // different and wrong claim.
     const cells = buildPulseCells(fullAnnual, null, null);
     expect(cells[2].deltas[0].valueLabel).toBe("+0,5pp");
-    // Two decimals, and the second one is not decoration: this cell used to
-    // print a percentage to ONE decimal while the KPI strip's copy of the same
-    // rule printed it to two and /kpi/load_factor printed it to none. The
-    // digits now come from `formatMetricValue` (lib/format.ts), which is the
-    // only place any surface asks how precise a percent is.
-    expect(cells[2].value).toBe("%84,00");
+    // One rule for every surface -- and it does not invent a digit. This cell
+    // used to print a percentage to ONE decimal while the KPI strip's copy
+    // printed it to two and /kpi/load_factor printed it to none; they all read
+    // `formatMetricValue` (lib/format.ts) now. IATA states this figure as
+    // 84,0, so a padded "84,00" would claim a hundredth of a point the source
+    // never measured.
+    expect(cells[2].value).toBe("%84");
   });
 
   it("colours only the cost base", () => {
