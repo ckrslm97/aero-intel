@@ -46,6 +46,11 @@ _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 # How much louder a keyword in the headline counts than one in the body.
 _TITLE_WEIGHT = 3
 
+# Minimum weak-tier score for a rule with no strong keyword hit. A single weak
+# word in the title scores _TITLE_WEIGHT and clears it on its own; a single one
+# in the body does not. See the comment in _best_rule.
+_WEAK_EVIDENCE_MIN = 2
+
 
 @lru_cache(maxsize=None)
 def _keyword_pattern(keywords: tuple[str, ...]) -> re.Pattern[str]:
@@ -362,6 +367,18 @@ _RISK_MASK: tuple[str, ...] = (
     "engine fire", "cabin fire", "cargo fire", "apu fire", "hangar fire",
     "fire warning", "fire indication", "fire extinguisher", "ceasefire",
     "open fire sale", "fire sale",
+    # A disaster REGION is a place, not an occurrence. Turkish economic and
+    # policy copy names the 2023 earthquake zone constantly -- housing supply,
+    # rent inflation, migration, reconstruction -- and every one of those
+    # articles carried a strong "deprem" hit in its headline. Production case:
+    # the central bank's "Deprem Bolgesi Konut Arzi ve Bolgesel Kira
+    # Enflasyonu" analysis sat on the risk radar as a live earthquake.
+    # "savas bolgesi" and "conflict zone" are deliberately NOT here: those are
+    # strong `war` keywords and mean the fighting, not a postcode.
+    "deprem bolgesi", "deprem bolgesinde", "deprem bolgesine", "deprem bolgesinden",
+    "deprem bolgeleri", "deprem bolgelerinde", "afet bolgesi", "afet bolgesinde",
+    "earthquake zone", "earthquake zones", "quake zone", "disaster zone",
+    "disaster zones",
     # "flood" as volume metaphor.
     "flood of", "flooded with", "flooded the market", "flooding the market",
     "flood the market", "floodgates", "flooding the zone",
@@ -818,9 +835,31 @@ def _best_rule(title_text: str, body_text: str, *, aircraft_discount: int = 0) -
     best_slug: str | None = None
     best_score = 0
     for rule in _RISK_RULES:
-        score = _score(_keyword_pattern(rule.strong), title_text, body_text)
+        strong = _score(_keyword_pattern(rule.strong), title_text, body_text)
+        weak = 0
         if has_context:
-            score += _score(_keyword_pattern(rule.weak), title_text, body_text)
+            weak = _score(_keyword_pattern(rule.weak), title_text, body_text)
+        # One weak word, once, somewhere in the body is not an event.
+        #
+        # `raw_content` is the whole fetched page, sidebar and related-links
+        # rail included, and the context words that license a weak match are
+        # searched across that same blob -- so a story can borrow "evacuation"
+        # from one teaser and "troops" from another and classify as a war.
+        # Measured on production: "Boeing MH-139A Grey Wolf cleared to guard US
+        # nuclear missile fields" -- a procurement milestone -- scored `war` on
+        # exactly one body occurrence of "troops", and because _best_rule then
+        # reported a match, risk_veto stood down and the military-aviation
+        # guard never got to fire. It sat on the radar through two full
+        # backfills.
+        #
+        # Strong keywords are unambiguous ("airstrike", "epicenter") and still
+        # count on a single mention. Weak ones ("war", "troops", "coup") have
+        # to earn it: in the HEADLINE, where _TITLE_WEIGHT alone clears this
+        # bar, or twice in the body. Real conflict coverage says "war" a dozen
+        # times; a related-articles rail says it once.
+        if strong == 0 and weak < _WEAK_EVIDENCE_MIN:
+            continue
+        score = strong + weak
         if rule.slug == "storm":
             score -= aircraft_discount
         if score > best_score:
