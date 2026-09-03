@@ -187,6 +187,18 @@ class HeuristicProvider:
         return extract_entity_mentions(title, content)
 
 
+#: The shape of an abbreviation being quoted rather than an airport being
+#: named: an article in front, a verb of speech behind.
+_ORGANISATION_ARTICLE: frozenset[str] = frozenset({"the", "a", "an"})
+_ORGANISATION_VERBS: frozenset[str] = frozenset(
+    {
+        "said", "says", "announced", "announces", "reported", "reports",
+        "confirmed", "confirms", "warned", "warns", "added", "adds",
+        "stated", "states", "told", "declined", "denied",
+    }
+)
+
+
 def _airport_match_is_credible(
     gram: str, cased: list[str], start: int, end: int
 ) -> bool:
@@ -200,11 +212,38 @@ def _airport_match_is_credible(
     code as "JAN" and the month as "Jan", so requiring the original token to
     be upper-case keeps "flights to JAN" and drops "Okinawa Jan 2027".
     """
-    if end != start:  # multi-token alias: not a bare code
+    if end != start:  # multi-token alias ("john f kennedy"): self-evidencing
         return True
-    if gram.upper() not in AMBIGUOUS_BARE_CODES:
+
+    # A single token has to look like a name where it stands. Capitalisation is
+    # the evidence, and it is required of every single-token alias rather than
+    # of a listed few -- a denylist cannot be finished, because world news is
+    # full of ordinary words that are also airport names and three-letter
+    # tokens that are also IATA codes, and they arrive faster than anyone can
+    # enumerate them. Two production cases, both on one Estonia risk card:
+    # "a decision taken at the NATO summit" put ALLIANCE MUNICIPAL AIRPORT on
+    # it, and an alert covering "Ida-Viru county" -- the hyphen is a token
+    # boundary, so "Ida" stood alone -- put IDAHO FALLS beside it.
+    if not cased[start][:1].isupper():
+        return False
+    if len(gram) != 3:
+        # A capitalised name ("Heathrow", "Tartu"). Nothing below applies.
         return True
-    return cased[start].isupper()
+    # A bare code: a wire writes it IDA, and the place-name fragment Ida.
+    if not cased[start].isupper():
+        return False
+    if gram.upper() in AMBIGUOUS_BARE_CODES:
+        return True
+
+    # An upper-case token that is the SUBJECT OF A DISCOURSE VERB is an
+    # organisation, not an airport: "The NBS said allied fighters were
+    # scrambled" is Latvia's armed forces, and it filed Changbaishan Airport
+    # (NBS) against a story about the Baltic. Airports do not speak. Both
+    # halves are required -- the article and the verb -- so "flights to JAN"
+    # and "Cascavel Airport (CAC)" are untouched.
+    before = cased[start - 1].lower() if start > 0 else ""
+    after = cased[end + 1].lower() if end + 1 < len(cased) else ""
+    return not (before in _ORGANISATION_ARTICLE and after in _ORGANISATION_VERBS)
 
 
 def extract_entity_mentions(title: str, content: str) -> list[EntityMention]:
@@ -1416,6 +1455,13 @@ def resolve_risk_location(
     """
     sentences = _folded_sentences(title, content)
     alias_index = _aliases_by_country()
+    folded_title = fold_text(title)
+    #: Aliases the HEADLINE itself contains, as whole words.
+    folded_title_words = {
+        alias
+        for alias in RISK_CITY_COUNTRY
+        if _first_mention_offset(folded_title, (alias,)) < len(folded_title)
+    }
 
     mentioned: list[MentionedLocation] = []
     seen: set[tuple[str, str]] = set()
@@ -1434,14 +1480,16 @@ def resolve_risk_location(
     # read -- but the capital's does, and a capital that is speaking is its
     # country speaking. Pass 2 consults these roles for exactly that.
     city_roles: dict[str, set[str]] = {}
-    city_matches: list[tuple[str, str, str]] = []
+    city_matches: list[tuple[str, str, str, bool]] = []
     for alias, (city_name, city_country) in RISK_CITY_COUNTRY.items():
         role = _place_role(sentences, (alias,))
         if role is None:
             continue
         remember(city_name, "city", role)
         city_roles.setdefault(city_country, set()).add(role)
-        city_matches.append((city_name, city_country, role))
+        city_matches.append(
+            (city_name, city_country, role, alias in folded_title_words)
+        )
 
     # ---- pass 2: countries ----------------------------------------------
     event_country: str | None = None
@@ -1515,16 +1563,39 @@ def resolve_risk_location(
                     break
 
     # ---- pass 3: which city, given the country --------------------------
+    #: Whether the resolved country is named in the HEADLINE. The headline
+    #: states the event; a place that appears only in the body is a place the
+    #: article also talks about, and must not be able to withdraw a placement
+    #: the headline made.
+    country_from_title = event_country is not None and _first_mention_offset(
+        folded_title, alias_index.get(event_country, (event_country,))
+    ) < len(folded_title)
     city: str | None = None
     conflicted = False
-    for city_name, city_country, role in city_matches:
+    for city_name, city_country, role, city_in_title in city_matches:
         if role == "source":
             # "Washington said" names Washington and places nothing.
             continue
         if event_country is not None and city_country != event_country:
             # §12: the article named a city that is not in the country it also
             # named. Recorded in `mentioned`, refused here.
-            conflicted = True
+            #
+            # A city in the body cannot outvote a country in the HEADLINE,
+            # though, and that is what "conflict" used to mean here. "Turkish
+            # F-16 fighters scramble after drones cross into Estonia's
+            # airspace" says where this happened in its first line; the body
+            # then mentions "the NATO summit in Ankara", locative and in
+            # another country, and the card lost Estonia -- 0.8 down to 0.5,
+            # below the map's pin threshold, published with no country at all.
+            # The headline names the event. A second place in the body is
+            # another place the article talks about.
+            #
+            # When the headline names BOTH, the conflict is real and stands:
+            # "Airlines cancel dozens of Taiwan and Hong Kong flights as
+            # Typhoon Bavi nears" is a two-jurisdiction event, and refusing to
+            # pin it to one of them is the honest outcome.
+            if city_in_title or not country_from_title:
+                conflicted = True
             continue
         if city is None:
             city = city_name

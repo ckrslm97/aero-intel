@@ -21,6 +21,7 @@ from app.llm.heuristic import (
     LOCATION_CONFIDENCE_AIRPORT_DERIVED,
     LOCATION_CONFIDENCE_CITY_CONFIRMED,
     LOCATION_CONFIDENCE_CONFLICT,
+    LOCATION_CONFIDENCE_COUNTRY,
     LOCATION_CONFIDENCE_SOURCE_ONLY,
     RISK_VETO_AIRCRAFT_OCCURRENCE,
     _RISK_CONTEXT,
@@ -2724,3 +2725,86 @@ def test_the_country_tie_break_follows_the_article_not_the_alias_table():
     )
     assert resolve(jordan_first) == "Jordan"
     assert resolve(lebanon_first) == "Lebanon"
+
+
+def test_a_body_city_cannot_withdraw_a_placement_the_headline_made():
+    """Production: "Turkish F-16 fighters scramble after drones cross into
+    Estonia's airspace" was published with NO country. Estonia resolved at 0.8
+    from the headline, then "the NATO summit in Ankara" -- locative, in another
+    country -- tripped the §12 consistency check and dropped it to 0.5, below
+    the map's pin threshold.
+
+    The headline states the event. A city that appears only in the body is
+    another place the article talks about.
+    """
+    title = "Turkish F-16 fighters scramble after drones cross into Estonia's airspace"
+    content = (
+        "Turkish Air Force F-16s deployed to Amari Air Base scrambled early on "
+        "September 1, 2026, after drones crossed into Estonian airspace. The "
+        "deployment follows a decision taken at the NATO summit in Ankara."
+    )
+    resolved = resolve_risk_location(title, content, extract_entity_mentions(title, content))
+    assert resolved.country == "Estonia"
+    assert resolved.confidence == LOCATION_CONFIDENCE_COUNTRY
+
+
+def test_a_headline_naming_two_jurisdictions_still_refuses_the_pin():
+    """The other half of the same rule, and the reason it is not "the headline
+    always wins": when the headline names both places, the article really is
+    about two jurisdictions and neither is the scene."""
+    title = "Airlines cancel dozens of Taiwan and Hong Kong flights as Typhoon Bavi nears"
+    content = (
+        "Airlines across Taiwan and Hong Kong have canceled dozens of flights as "
+        "Typhoon Bavi approaches, with disruptions affecting routes to Japan and "
+        "mainland China."
+    )
+    resolved = resolve_risk_location(title, content, extract_entity_mentions(title, content))
+    assert resolved.country == "Taiwan"
+    assert resolved.confidence == LOCATION_CONFIDENCE_CONFLICT
+
+
+@pytest.mark.parametrize(
+    ("title", "content", "expected"),
+    [
+        pytest.param(
+            "Estonia issues civil-defence alert",
+            "A cell broadcast reached residents of Lääne-Viru and Ida-Viru counties.",
+            [],
+            id="ida_viru_county_is_not_idaho_falls",
+        ),
+        pytest.param(
+            "Baltic states respond to drone incursion",
+            "The NBS said allied fighters were scrambled in response.",
+            [],
+            id="an_abbreviation_that_speaks_is_not_an_airport",
+        ),
+        pytest.param(
+            "NATO summit agrees new air policing rota",
+            "The decision was taken by the alliance at its summit.",
+            [],
+            id="the_alliance_is_not_alliance_municipal_airport",
+        ),
+        pytest.param(
+            "LATAM A320 leaves the runway at Cascavel",
+            "The aircraft landed at Cascavel Airport (CAC) after departing GRU.",
+            ["CAC", "GRU"],
+            id="codes_written_the_way_a_wire_writes_them",
+        ),
+        pytest.param(
+            "Heathrow retimes slots",
+            "Heathrow will retime slots; flights to JAN resume from ATL.",
+            ["LHR", "JAN", "ATL"],
+            id="a_capitalised_name_and_capitalised_codes",
+        ),
+    ],
+)
+def test_a_single_token_airport_alias_has_to_look_like_a_name(title, content, expected):
+    """Both halves of the rule, on real text. A denylist cannot be finished --
+    world news produces new three-letter tokens faster than anyone can
+    enumerate them -- so the evidence is how the article writes the word."""
+    found = [
+        entity.code
+        for entity in extract_entity_mentions(title, content)
+        if entity.entity_type == "airport"
+    ]
+    assert found == expected
