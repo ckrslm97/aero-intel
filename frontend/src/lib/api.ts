@@ -21,9 +21,34 @@ export class ApiError extends Error {
   constructor(
     message: string,
     public status: number,
+    /** `detail.code` from the API's error body, when it sent a machine-readable
+     * one. The status alone cannot separate two different facts that share it:
+     * GET /editions/{date} answers 404 both for "the paper for this day has not
+     * been assembled yet" (`not_prepared_yet`) and for "there is no such paper"
+     * (`not_found`), and only the server can tell them apart. This used to be
+     * thrown away here, so the page could render only one message for both and
+     * told a reader opening today's paper before the cron had run that the
+     * route did not exist. */
+    public code: string | null = null,
   ) {
     super(message);
     this.name = "ApiError";
+  }
+}
+
+/** The `code` out of a FastAPI error body, or null.
+ *
+ * Tolerant on purpose: an error response is exactly the case where the body
+ * may be HTML from a proxy, empty, or JSON of some other shape. A failure to
+ * read it must not replace the caller's real HTTP error with a parse error. */
+async function errorCode(res: Response): Promise<string | null> {
+  try {
+    const body: unknown = await res.json();
+    const detail = (body as { detail?: unknown } | null)?.detail;
+    const code = (detail as { code?: unknown } | null)?.code;
+    return typeof code === "string" ? code : null;
+  } catch {
+    return null;
   }
 }
 
@@ -45,7 +70,11 @@ export async function apiFetch<T>(
   });
 
   if (!res.ok) {
-    throw new ApiError(`API request failed: ${res.status}`, res.status);
+    throw new ApiError(
+      `API request failed: ${res.status}`,
+      res.status,
+      await errorCode(res),
+    );
   }
   return res.json() as Promise<T>;
 }

@@ -8,7 +8,6 @@ vi.mock("@/lib/api", () => ({ apiFetch, API_BASE_URL: "http://test/api/v1" }));
 
 const insights = (digest: { date: string; body: string; provider: string } | null) => ({
   airline_momentum: [],
-  new_route_signals: [],
   sentiment_by_category: [],
   digest,
 });

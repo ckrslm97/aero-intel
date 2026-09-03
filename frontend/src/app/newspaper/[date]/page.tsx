@@ -1,4 +1,5 @@
 import { Download } from "lucide-react";
+import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { ArticleCard } from "@/components/article-card";
@@ -20,6 +21,22 @@ const SECTION_LABELS: Record<string, string> = {
   top_story: "Öne Çıkanlar",
   ...CATEGORY_LABELS_TR,
 };
+
+/** The API's code for "this day's paper has not been assembled yet".
+ *
+ * GET /editions/{date} stopped assembling on demand (backend/app/api/v1/
+ * editions.py): reading the paper no longer publishes it. The assembly job
+ * runs from 03:00 UTC and, measured on this repo, actually starts 2-3 hours
+ * later -- so every morning there is a window in which today's row does not
+ * exist yet. "Günün Gazetesi" (components/newspaper-browser.tsx) links to the
+ * current UTC date, straight into that window.
+ *
+ * Mapping every 404 to notFound() answered that reader with "Bu rota
+ * bilinmiyor -- aradığınız sayfa taşınmış ya da hiç var olmamış olabilir",
+ * which is false twice over: the route is right and the paper is coming. Only
+ * the server can tell "not yet" from "never", and this is the code it uses to.
+ */
+const NOT_PREPARED = "not_prepared_yet";
 
 /** What the card will actually print for this article -- the same rule
  * ArticleCard uses (Turkish only when a translator really produced it). */
@@ -44,6 +61,13 @@ export default async function EditionPage({
     edition = await apiFetch<EditionOut>(`/editions/${date}`);
   } catch (err) {
     if (err instanceof ApiError && err.status === 404) {
+      // Only "not yet" gets a page of its own. Anything else 404 -- a past day
+      // nobody built, a date this route never had -- is genuinely not found,
+      // and saying "henüz hazırlanmadı" about 2024 would be the same lie in
+      // the other direction.
+      if (err.code === NOT_PREPARED) {
+        return <EditionNotPrepared date={date} />;
+      }
       notFound();
     }
     throw err;
@@ -149,6 +173,47 @@ export default async function EditionPage({
           Bu sayıda henüz haber yok.
         </p>
       )}
+    </div>
+  );
+}
+
+/** The honest wait. A date, a reason, and two ways onward -- because a reader
+ * who arrived here still wants today's news, and the archive has it. */
+function EditionNotPrepared({ date }: { date: string }) {
+  return (
+    <div className="flex flex-col gap-6">
+      <div className="flex flex-col gap-2">
+        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+          {new Date(date).toLocaleDateString("tr-TR", {
+            weekday: "long",
+            year: "numeric",
+            month: "long",
+            day: "numeric",
+          })}
+        </p>
+        <h1 className="text-2xl font-semibold tracking-tight">
+          Bu günün baskısı henüz hazırlanmadı
+        </h1>
+      </div>
+      <p className="rounded-lg border border-dashed border-border p-6 text-sm text-muted-foreground">
+        Günün gazetesi her sabah otomatik olarak derleniyor. Bu tarihin baskısı
+        henüz derlenmedi; kısa süre sonra tekrar deneyebilir ya da yayımlanmış
+        sayılara göz atabilirsiniz.
+      </p>
+      <div className="flex flex-wrap gap-3">
+        <Link
+          href="/newspaper"
+          className="rounded-md border border-border px-3 py-1.5 text-xs font-medium transition-colors hover:bg-accent"
+        >
+          Gazete
+        </Link>
+        <Link
+          href="/archive"
+          className="rounded-md border border-border px-3 py-1.5 text-xs font-medium transition-colors hover:bg-accent"
+        >
+          Arşiv
+        </Link>
+      </div>
     </div>
   );
 }

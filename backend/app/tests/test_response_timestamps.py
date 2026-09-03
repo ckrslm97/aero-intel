@@ -247,25 +247,20 @@ async def test_recommendations_stamps_the_window_it_compared(db_session):
 
 
 async def test_insights_names_a_window_per_aggregate(db_session):
-    """One `days` would misdescribe two thirds of this payload: momentum
-    compares 7-day halves, the other two run over 30 days."""
+    """One `days` would misdescribe half of this payload: momentum compares
+    7-day halves, the sentiment split runs over 30 days."""
     before = datetime.now(timezone.utc)
     payload = await insights.get_insights(response=Response(), db=db_session)
     after = datetime.now(timezone.utc)
 
     generated = _assert_stamped(payload, before=before, after=after)
     windows = payload["windows"]
-    assert set(windows) == {
-        "airline_momentum",
-        "new_route_signals",
-        "sentiment_by_category",
-    }
+    assert set(windows) == {"airline_momentum", "sentiment_by_category"}
     _assert_window(windows["airline_momentum"], generated, insights.MOMENTUM_WINDOW_DAYS)
-    _assert_window(windows["new_route_signals"], generated, insights.ROUTE_WINDOW_DAYS)
     _assert_window(
         windows["sentiment_by_category"], generated, insights.SENTIMENT_WINDOW_DAYS
     )
-    # Every aggregate is anchored to the SAME instant, not to three clocks read
+    # Every aggregate is anchored to the SAME instant, not to two clocks read
     # one round trip apart.
     assert {w["until"] for w in windows.values()} == {generated}
 

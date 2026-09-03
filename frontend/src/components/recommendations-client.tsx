@@ -2,7 +2,7 @@
 
 import { AnimatePresence } from "framer-motion";
 import { ChevronDown, CircleAlert, ExternalLink, Info, TriangleAlert } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { AirlineLogo } from "@/components/airline-logo";
 // Only the ordering helper: this page renders its own multi-select category
@@ -12,9 +12,19 @@ import { orderCategories } from "@/components/filters/category-chip-row";
 import { CountUp } from "@/components/motion/count-up";
 import { MotionItem, MotionList } from "@/components/motion/motion-list";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useUrlState } from "@/hooks/use-url-state";
 import { apiFetch } from "@/lib/api";
 import { formatDateTr } from "@/lib/format";
 import { airlineTabs, worldRegions } from "@/lib/nav";
+import {
+  parseRecommendationFilters,
+  PINNED_RECOMMENDATION_CATEGORY,
+  RECOMMENDATION_DAY_OPTIONS,
+  recommendationFiltersToSearchParams,
+  recommendationQuery,
+  type RecommendationDays,
+  type RecommendationFilters,
+} from "@/lib/recommendations";
 import { CATEGORY_BY_SLUG } from "@/lib/taxonomy";
 import type { ResponseWindow } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -85,13 +95,11 @@ const SEVERITY_META = {
   },
 } as const;
 
-// The windows the backend compares against the window before them.
-const DAY_OPTIONS = [7, 14, 30] as const;
-
 // Gelir Yönetimi is the portal's focus category, so it leads the row here the
-// same way it does everywhere else.
-const PINNED_CATEGORY = "revenue_management";
-const ORDERED_CATEGORIES = orderCategories(PINNED_CATEGORY);
+// same way it does everywhere else. The window rungs, the pinned slug and the
+// URL round-trip all live in lib/recommendations.ts, which is where the tests
+// can reach them.
+const ORDERED_CATEGORIES = orderCategories(PINNED_RECOMMENDATION_CATEGORY);
 
 const REGION_NAME: Record<string, string> = Object.fromEntries(
   worldRegions.map((r) => [r.slug, r.name]),
@@ -101,7 +109,7 @@ const AIRLINE_NAME: Record<string, string> = Object.fromEntries(
   airlineTabs.map((a) => [a.code, a.name]),
 );
 
-/** The lit-chip pattern shared with Gazete/İçgörüler. */
+/** The lit-chip pattern shared with Gazete/Hub/Risk Radarı. */
 const chip = (active: boolean) =>
   cn(
     "rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
@@ -126,31 +134,38 @@ function toggleValue(list: string[], value: string): string[] {
 }
 
 export function RecommendationsClient() {
-  const [days, setDays] = useState<number>(DAY_OPTIONS[0]);
-  // Gelir Yönetimi is the portal's focus category, so it is both pinned first
-  // and pre-selected; "Tümü" still clears back to every category.
-  const [category, setCategory] = useState<string[]>([PINNED_CATEGORY]);
-  const [region, setRegion] = useState<string[]>([]);
-  const [airline, setAirline] = useState<string[]>([]);
+  // All four filters are URL-owned. This tab's output is an argument someone
+  // makes to someone else ("TK, Avrupa, son 30 gün: bak"), and an argument you
+  // cannot link to is an argument you have to re-make by hand. Gelir Yönetimi
+  // is pre-selected; "Tümü" still clears back to every category, and the URL
+  // says so explicitly rather than by omission -- see ALL_CATEGORIES_PARAM.
+  const { params, replaceParams } = useUrlState();
+  const filters = useMemo(() => parseRecommendationFilters(params), [params]);
+  const { days, category, region, airline } = filters;
+
+  const setFilters = useCallback(
+    (next: Partial<RecommendationFilters>) => {
+      replaceParams(recommendationFiltersToSearchParams({ ...filters, ...next }, params));
+    },
+    [filters, params, replaceParams],
+  );
 
   const [items, setItems] = useState<Recommendation[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // The request, not the address bar -- see `recommendationQuery`. Repeated
+  // keys, one per selected value: FastAPI parses `?region=a&region=b` straight
+  // into a list. `days` stays single, because a comparison window is not a set.
+  const query = recommendationQuery(filters).toString();
+
   useEffect(() => {
     let cancelled = false;
     const controller = new AbortController();
-    const params = new URLSearchParams({ days: String(days) });
-    // Repeated keys, one per selected value -- FastAPI parses `?region=a&region=b`
-    // straight into a list. `days` stays single: a comparison window is not a
-    // set. An empty array appends nothing, which is exactly "no filter".
-    category.forEach((c) => params.append("category", c));
-    region.forEach((r) => params.append("region", r));
-    airline.forEach((a) => params.append("airline", a));
 
     // eslint-disable-next-line react-hooks/set-state-in-effect -- the fetch is driven by the filter change; the loading flag must flip with it
     setLoading(true);
-    apiFetch<RecommendationsOut>(`/recommendations?${params.toString()}`, {
+    apiFetch<RecommendationsOut>(`/recommendations?${query}`, {
       cache: "default",
       signal: controller.signal,
     })
@@ -171,7 +186,7 @@ export function RecommendationsClient() {
       cancelled = true;
       controller.abort();
     };
-  }, [days, category, region, airline]);
+  }, [query]);
 
   return (
     <div className="flex flex-col gap-8">
@@ -187,10 +202,10 @@ export function RecommendationsClient() {
           hangi bölge, hangi taşıyıcı. */}
       <div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-5">
         <FilterRow label="Dönem">
-          {DAY_OPTIONS.map((option) => (
+          {RECOMMENDATION_DAY_OPTIONS.map((option) => (
             <button
               key={option}
-              onClick={() => setDays(option)}
+              onClick={() => setFilters({ days: option as RecommendationDays })}
               className={chip(days === option)}
             >
               Son {option} gün
@@ -204,7 +219,7 @@ export function RecommendationsClient() {
         <FilterRow label="Kategori">
           <button
             type="button"
-            onClick={() => setCategory([])}
+            onClick={() => setFilters({ category: [] })}
             className={chip(category.length === 0)}
           >
             Tümü
@@ -213,7 +228,7 @@ export function RecommendationsClient() {
             <button
               key={c.slug}
               type="button"
-              onClick={() => setCategory((prev) => toggleValue(prev, c.slug))}
+              onClick={() => setFilters({ category: toggleValue(category, c.slug) })}
               className={chip(category.includes(c.slug))}
             >
               {c.label}
@@ -224,7 +239,7 @@ export function RecommendationsClient() {
         <FilterRow label="Bölge">
           <button
             type="button"
-            onClick={() => setRegion([])}
+            onClick={() => setFilters({ region: [] })}
             className={chip(region.length === 0)}
           >
             Tümü
@@ -233,7 +248,7 @@ export function RecommendationsClient() {
             <button
               key={r.slug}
               type="button"
-              onClick={() => setRegion((prev) => toggleValue(prev, r.slug))}
+              onClick={() => setFilters({ region: toggleValue(region, r.slug) })}
               className={chip(region.includes(r.slug))}
             >
               {r.name}
@@ -244,7 +259,7 @@ export function RecommendationsClient() {
         <FilterRow label="Havayolu">
           <button
             type="button"
-            onClick={() => setAirline([])}
+            onClick={() => setFilters({ airline: [] })}
             className={chip(airline.length === 0)}
           >
             Tümü
@@ -254,7 +269,7 @@ export function RecommendationsClient() {
               key={a.code}
               type="button"
               title={a.name}
-              onClick={() => setAirline((prev) => toggleValue(prev, a.code))}
+              onClick={() => setFilters({ airline: toggleValue(airline, a.code) })}
               className={cn(
                 chip(airline.includes(a.code)),
                 "flex items-center gap-1 tabular-nums",

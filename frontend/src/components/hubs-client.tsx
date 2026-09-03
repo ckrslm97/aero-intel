@@ -4,7 +4,7 @@ import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { ChevronDown, Map as MapIcon, Plane, Route } from "lucide-react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { AirlineLogo } from "@/components/airline-logo";
 import { ArticleCard } from "@/components/article-card";
@@ -21,9 +21,20 @@ const HubMap = dynamic(
   () => import("@/components/hub-map").then((m) => m.HubMap),
   { ssr: false, loading: () => <Skeleton className="h-[380px] w-full rounded-xl" /> },
 );
+import { useUrlState } from "@/hooks/use-url-state";
+import {
+  DEFAULT_HUB,
+  HUB_DAY_OPTIONS,
+  hubViewStateToSearchParams,
+  parseHubViewState,
+  type HubDays,
+  type HubView,
+  type HubViewState,
+} from "@/lib/hubs";
 import { fadeUpItem, reduceVariants } from "@/lib/motion";
 import { worldRegions } from "@/lib/nav";
 import { CATEGORY_BY_SLUG, categoryVar } from "@/lib/taxonomy";
+import { CATEGORY_SLUGS } from "@/lib/taxonomy.gen";
 import type {
   ArticleListOut,
   CountryOut,
@@ -32,13 +43,11 @@ import type {
 } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-const DAY_OPTIONS = [30, 90, 365] as const;
-
 const REGION_NAME: Record<string, string> = Object.fromEntries(
   worldRegions.map((r) => [r.slug, r.name]),
 );
 
-/** The lit-chip pattern shared across Gazete / İçgörüler / Öneriler. */
+/** The lit-chip pattern shared across Gazete / Öneriler / Risk Radarı. */
 const chip = (active: boolean) =>
   cn(
     "rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
@@ -56,13 +65,29 @@ const PANEL_PREVIEW = 5;
 const NOTE_CLAMP_THRESHOLD = 180;
 
 export function HubsClient() {
-  const [view, setView] = useState<"hubs" | "network-signals">("hubs");
-  const [days, setDays] = useState<number>(DAY_OPTIONS[1]);
-  const [selected, setSelected] = useState<string | null>("IST");
-  const [country, setCountry] = useState<string>("");
-  // "Konu dağılımı" filters this hub's own already-scoped story list rather
-  // than navigating away -- the panel's counts and the list stay one view.
-  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  // The whole view is URL-owned: tab, window, hub, country and the topic chip.
+  // All five change what is on screen, so all five have to survive a paste
+  // into a message -- and İçgörüler now deep-links straight to
+  // /hublar?view=network-signals, which only works because `view` lives here.
+  // See lib/hubs.ts for the parse/serialise pair (modelled on
+  // lib/campaigns.ts) and hooks/use-url-state.ts for the navigation.
+  const { params, replaceParams } = useUrlState();
+  const state = useMemo(() => parseHubViewState(params, CATEGORY_SLUGS), [params]);
+  const { view, days, hub: selected, country, category: selectedCategory } = state;
+
+  const setState = useCallback(
+    (next: Partial<HubViewState>) => {
+      replaceParams(hubViewStateToSearchParams({ ...state, ...next }, params));
+    },
+    [params, replaceParams, state],
+  );
+
+  const setView = useCallback((next: HubView) => setState({ view: next }), [setState]);
+  const setDays = useCallback((next: HubDays) => setState({ days: next }), [setState]);
+  const setCountry = useCallback(
+    (next: string) => setState({ country: next }),
+    [setState],
+  );
 
   const [overview, setOverview] = useState<HubOverviewOut | null>(null);
   const [detail, setDetail] = useState<HubDetailOut | null>(null);
@@ -70,7 +95,16 @@ export function HubsClient() {
   const [articles, setArticles] = useState<ArticleListOut | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // All three request effects below are gated on the tab that draws them.
+  // Ağ Sinyalleri renders none of this state (see the `view` branch in the
+  // JSX), and it is now a landing URL, not a place you arrive at after the
+  // overview has already loaded: İçgörüler links straight to
+  // /hublar?view=network-signals. Ungated, every reader following that link
+  // paid for /hubs, /taxonomy/countries, /articles and /hubs/IST on first
+  // paint and saw the results of none of them. `view` is in the deps, so
+  // switching back to Genel Bakış fetches then.
   useEffect(() => {
+    if (view !== "hubs") return;
     let cancelled = false;
     const controller = new AbortController();
     Promise.all([
@@ -97,36 +131,53 @@ export function HubsClient() {
       cancelled = true;
       controller.abort();
     };
-  }, [days]);
+  }, [days, view]);
 
-  // The detail panel and the story list answer the same question from two
-  // sides, so they move together: pick a hub or a country and both follow.
+  /** Does the overview list the hub the URL is asking for?
+   *
+   * `null` while the overview is still in flight -- neither known nor unknown
+   * yet, and printing "böyle bir hub yok" over a pending request would accuse
+   * a link that turns out to be fine. */
+  const hubIsKnown =
+    selected === null || overview === null
+      ? null
+      : overview.hubs.some((entry) => entry.code === selected);
+
+  /** The hub the DETAIL panel asks about: only once the overview has confirmed
+   * the code is one of ours. A hand-edited or stale `?hub=XYZ` would otherwise
+   * 404 into the generic "Haberler yüklenemedi", which blames the server for a
+   * bad link. Strict, because /hubs/{code} is the request that 404s. */
+  const hubForDetail = hubIsKnown === true ? selected : null;
+
+  /** The hub the STORY LIST narrows by. Optimistic, because `/articles` cannot
+   * 404 on a bad airport code -- it just matches nothing -- and waiting for the
+   * overview here would cost every ordinary page load a second, wasted
+   * unfiltered request before the real one. Only a code the overview has
+   * actively disowned is dropped. */
+  const hubForArticles = hubIsKnown === false ? null : selected;
+
+  // The story list. Its own effect and its own request: it answers a question
+  // (`airport` + `country` + `category`) that stays answerable even when the
+  // hub panel has nothing to show, so it must not wait on the overview.
   useEffect(() => {
+    if (view !== "hubs") return;
     let cancelled = false;
     const controller = new AbortController();
 
-    const params = new URLSearchParams({ limit: "12" });
-    if (selected) params.set("airport", selected);
-    if (country) params.set("country", country);
-    if (selectedCategory) params.set("category", selectedCategory);
+    // `query`, not `params` -- the hook's `params` is the address bar and this
+    // is the request. They carry different things (the request has `limit`,
+    // the URL has `view`) and one name for both is how they start drifting.
+    const query = new URLSearchParams({ limit: "12" });
+    if (hubForArticles) query.set("airport", hubForArticles);
+    if (country) query.set("country", country);
+    if (selectedCategory) query.set("category", selectedCategory);
 
-    const detailRequest = selected
-      ? apiFetch<HubDetailOut>(`/hubs/${selected}?days=${days}`, {
-          cache: "default",
-          signal: controller.signal,
-        })
-      : Promise.resolve(null);
-
-    Promise.all([
-      detailRequest,
-      apiFetch<ArticleListOut>(`/articles?${params.toString()}`, {
-        cache: "default",
-        signal: controller.signal,
-      }),
-    ])
-      .then(([hubDetail, articleData]) => {
+    apiFetch<ArticleListOut>(`/articles?${query.toString()}`, {
+      cache: "default",
+      signal: controller.signal,
+    })
+      .then((articleData) => {
         if (cancelled) return;
-        setDetail(hubDetail);
         setArticles(articleData);
       })
       .catch((err: unknown) => {
@@ -138,15 +189,46 @@ export function HubsClient() {
       cancelled = true;
       controller.abort();
     };
-  }, [selected, country, days, selectedCategory]);
+  }, [hubForArticles, country, selectedCategory, view]);
+
+  // The hub panel. Gated on the overview so an unrecognised `?hub=` never
+  // becomes a request: waiting one hop costs a panel that fades in slightly
+  // later, and buys a bad deep link an honest sentence instead of a server
+  // error it did not cause.
+  useEffect(() => {
+    if (view !== "hubs") return;
+    if (!hubForDetail) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- clearing a panel whose subject is gone; there is nothing to fetch
+      setDetail(null);
+      return;
+    }
+    let cancelled = false;
+    const controller = new AbortController();
+    apiFetch<HubDetailOut>(`/hubs/${hubForDetail}?days=${days}`, {
+      cache: "default",
+      signal: controller.signal,
+    })
+      .then((hubDetail) => {
+        if (cancelled) return;
+        setDetail(hubDetail);
+      })
+      .catch((err: unknown) => {
+        if (cancelled || (err as Error)?.name === "AbortError") return;
+        setError("Hub ayrıntısı yüklenemedi.");
+      });
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [hubForDetail, days, view]);
 
   /** Hub selection resets the category: the chips are that hub's own topic
    * mix, so carrying one into a newly-picked hub would silently over-filter
    * (or empty) its list. */
-  const selectHub = (code: string | null) => {
-    setSelected(code);
-    setSelectedCategory(null);
-  };
+  const selectHub = useCallback(
+    (code: string | null) => setState({ hub: code, category: null }),
+    [setState],
+  );
 
   const countriesByRegion = useMemo(() => {
     const groups = new Map<string, CountryOut[]>();
@@ -205,12 +287,31 @@ export function HubsClient() {
         </p>
       )}
 
+      {/* A deep link naming a hub we do not track. Said plainly and with a way
+          out: the alternative is a page that looks filtered to something and
+          shows nothing, with no clue that the link is the problem. */}
+      {hubIsKnown === false && (
+        <p className="flex flex-wrap items-center gap-2 rounded-lg border border-dashed border-border p-3 text-sm text-muted-foreground">
+          <span>
+            Bağlantıdaki <span className="font-mono font-medium">{selected}</span> izlenen
+            hub&apos;lar arasında değil; hiçbir hub seçili değil.
+          </span>
+          <button
+            type="button"
+            onClick={() => selectHub(DEFAULT_HUB)}
+            className={chip(false)}
+          >
+            {DEFAULT_HUB}&apos;a dön
+          </button>
+        </p>
+      )}
+
       <div className="flex flex-wrap items-center gap-x-5 gap-y-3 rounded-xl border border-border bg-card p-5">
         <div className="flex items-center gap-2">
           <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
             Dönem
           </span>
-          {DAY_OPTIONS.map((option) => (
+          {HUB_DAY_OPTIONS.map((option) => (
             <button
               key={option}
               type="button"
@@ -297,7 +398,7 @@ export function HubsClient() {
               detail={detail}
               selectedCategory={selectedCategory}
               onToggleCategory={(slug) =>
-                setSelectedCategory((prev) => (prev === slug ? null : slug))
+                setState({ category: selectedCategory === slug ? null : slug })
               }
             />
           )}
@@ -306,7 +407,9 @@ export function HubsClient() {
         <section className="flex flex-col gap-3">
           <h2 className="flex items-center gap-2 text-sm font-semibold">
             <Plane className="size-4 text-muted-foreground" />
-            {selected ? `${selected} haberleri` : "Haberler"}
+            {/* `hubForArticles`, not `selected`: an unrecognised ?hub= narrows
+                nothing, so a heading naming it would label an unfiltered list. */}
+            {hubForArticles ? `${hubForArticles} haberleri` : "Haberler"}
             {country && <span className="text-muted-foreground">· {country}</span>}
           </h2>
 

@@ -11,18 +11,23 @@ from app.core.db import get_db, run_with_own_session
 from app.services.insights_service import (
     airline_momentum,
     latest_digest,
-    new_route_signals,
     sentiment_by_category,
 )
 
 router = APIRouter(prefix="/insights", tags=["insights"])
 
-# The three aggregates' windows, named here because the payload now states
-# them. They were each a default buried in the service's signature, so the page
-# printed three differently-scoped numbers under one heading with nothing on
-# screen saying they were differently scoped.
+# The two aggregates' windows, named here because the payload states them.
+# They were each a default buried in the service's signature, so the page
+# printed differently-scoped numbers under one heading with nothing on screen
+# saying they were differently scoped.
+#
+# There is no route-signal window here any more. This payload used to carry a
+# `new_route_signals` block counted per ARTICLE, while GET /hubs/network-signals
+# counted the same announcements per EVENT -- so the two pages published two
+# different sizes for the same competitor activity, and the bigger one was the
+# one an analyst read on İçgörüler. New routes are now counted in exactly one
+# place: app/services/network_signals_service.py.
 MOMENTUM_WINDOW_DAYS = 7
-ROUTE_WINDOW_DAYS = 30
 SENTIMENT_WINDOW_DAYS = 30
 
 
@@ -32,7 +37,7 @@ async def get_insights(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     public_cache(response, AGGREGATES)
-    # ONE clock for the whole response: the same instant anchors all three SQL
+    # ONE clock for the whole response: the same instant anchors both SQL
     # windows and the `generated_at` the payload carries. Read separately
     # inside each aggregate (as it used to be), the stamp would describe a
     # window slightly different from any of the ones actually queried.
@@ -43,15 +48,14 @@ async def get_insights(
     # something it was already getting wrong. See app/api/window.py.
     now = datetime.now(timezone.utc)
 
-    # Four independent aggregates that used to cost four serial round trips.
+    # Three independent aggregates that used to cost three serial round trips.
     # Each gets its own session because one AsyncSession cannot back several
     # concurrent tasks (see `run_with_own_session`).
-    digest, momentum, routes, sentiment = await asyncio.gather(
+    digest, momentum, sentiment = await asyncio.gather(
         run_with_own_session(latest_digest, db),
         run_with_own_session(
             airline_momentum, db, window_days=MOMENTUM_WINDOW_DAYS, now=now
         ),
-        run_with_own_session(new_route_signals, db, days=ROUTE_WINDOW_DAYS, now=now),
         run_with_own_session(
             sentiment_by_category, db, days=SENTIMENT_WINDOW_DAYS, now=now
         ),
@@ -61,12 +65,10 @@ async def get_insights(
             now,
             {
                 "airline_momentum": window_of(now, MOMENTUM_WINDOW_DAYS),
-                "new_route_signals": window_of(now, ROUTE_WINDOW_DAYS),
                 "sentiment_by_category": window_of(now, SENTIMENT_WINDOW_DAYS),
             },
         ),
         "airline_momentum": momentum,
-        "new_route_signals": routes,
         "sentiment_by_category": sentiment,
         "digest": (
             {

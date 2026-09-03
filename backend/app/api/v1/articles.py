@@ -331,12 +331,21 @@ async def article_source_facets(
 @router.get("/daily-counts")
 async def daily_counts(
     days: int = Query(7, ge=1, le=31),
+    category: str | None = Query(
+        None,
+        description=(
+            "Category slug -- mirrors the list endpoint. The archive's date "
+            "strip counts and its 'open on the newest non-empty day' jump both "
+            "read this, so under a beat filter they describe the same rows the "
+            "list will render"
+        ),
+    ),
     response: Response = None,  # type: ignore[assignment]
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, int]:
     """Article count per UTC day, for the archive page's date strip."""
     public_cache(response, AGGREGATES)
-    return await ArticleRepository(db).count_by_day(days=days)
+    return await ArticleRepository(db).count_by_day(days=days, category=category)
 
 
 @router.get("/{article_id}/sources", response_model=list[ArticleSourceOut])

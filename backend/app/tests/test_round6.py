@@ -303,3 +303,57 @@ def test_publisher_suffix_is_stripped_only_when_it_is_a_credit():
     assert strip_publisher_suffix("Kısa - Simple Flying", "Simple Flying") == (
         "Kısa - Simple Flying"
     )
+
+
+async def test_count_by_day_narrows_to_one_category(db_session):
+    """The archive's date strip under a beat filter.
+
+    Both halves matter. The counts must describe the filtered beat (positive),
+    and they must NOT keep describing the whole day once a category is asked
+    for (negative) -- an unnarrowed tally would print a badge over a day whose
+    filtered list is empty, and the archive's "open on the newest non-empty
+    day" jump would land the reader exactly there.
+    """
+    source = await _source(db_session)
+    today = NOW.date()
+    yesterday = today - timedelta(days=1)
+
+    async def _categorised(url, category, published_at):
+        article = Article(
+            source_id=source.id, url=url, title="t", raw_content="body",
+            published_at=published_at, fetched_at=published_at,
+            content_hash=url, status="enriched",
+        )
+        db_session.add(article)
+        await db_session.flush()
+        db_session.add(
+            ArticleEnrichment(article_id=article.id, headline="h", category=category)
+        )
+        await db_session.flush()
+
+    # Today: two beats, only one of which is Gelir Yönetimi.
+    await _categorised("https://example.com/c-rm-1", "revenue_management", NOW)
+    await _categorised("https://example.com/c-fleet-1", "fleet", NOW)
+    # Yesterday: nothing but Filo -- the day the unfiltered strip would send a
+    # reader who asked for Gelir Yönetimi to.
+    await _categorised(
+        "https://example.com/c-fleet-2", "fleet", NOW - timedelta(days=1)
+    )
+    await db_session.commit()
+
+    repo = ArticleRepository(db_session)
+
+    unfiltered = await repo.count_by_day(days=7)
+    assert unfiltered[today.isoformat()] == 2
+    assert unfiltered[yesterday.isoformat()] == 1
+
+    filtered = await repo.count_by_day(days=7, category="revenue_management")
+    assert filtered[today.isoformat()] == 1
+    # Absent, not zero: a day with no rows in this beat is simply not a key,
+    # and the frontend fills the zero. A present-but-wrong 1 here would be the
+    # regression this test exists for.
+    assert yesterday.isoformat() not in filtered
+
+    # A beat nothing was filed under counts nothing at all, rather than
+    # falling back to the unfiltered tally.
+    assert await repo.count_by_day(days=7, category="regulatory") == {}

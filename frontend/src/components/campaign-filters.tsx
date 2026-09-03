@@ -31,7 +31,7 @@ import {
 import type { PromotionOut } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
-/** The lit-chip pattern shared with Gazete / İçgörüler / Risk Radarı. No new
+/** The lit-chip pattern shared with Gazete / Öneriler / Risk Radarı. No new
  * token, no new hue: the chrome stays neutral so the only saturated things on
  * this page are the status pills that earn it. */
 const chip = (active: boolean) =>

@@ -2,6 +2,11 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import {
+  currentParams,
+  resetNavigation,
+  setUrl,
+} from "@/lib/__fixtures__/next-navigation";
 import { riskFunnel, riskQuality, riskRejection } from "@/lib/__fixtures__/risk";
 import type { RiskRejection } from "@/lib/types";
 
@@ -9,6 +14,10 @@ import { RiskVerificationClient } from "./risk-verification-client";
 
 const apiFetch = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/api", () => ({ apiFetch, API_BASE_URL: "http://test/api/v1" }));
+
+// A real (fake) address bar: this screen reads ?days off it now, so the radar
+// can hand it the window the reader was actually looking at.
+vi.mock("next/navigation", async () => await import("@/lib/__fixtures__/next-navigation"));
 
 const STAGES = riskFunnel([
   { key: "toplam", label: "Toplam makale", passed: 400 },
@@ -56,6 +65,7 @@ describe("RiskVerificationClient", () => {
   beforeEach(() => {
     apiFetch.mockReset();
     requested.length = 0;
+    resetNavigation("/risk-radari/dogrulama");
   });
 
   it("draws the funnel and the rejections together", async () => {
@@ -160,5 +170,80 @@ describe("RiskVerificationClient", () => {
       expect.stringContaining("/risks/quality?days=14"),
       expect.anything(),
     );
+    // ...and the window is now in the address bar, so the way back to the
+    // radar can restore it.
+    expect(currentParams().get("days")).toBe("14");
+  });
+
+  it("audits the window the link names, not its own default", async () => {
+    // THE POINT OF ?days ON THIS SCREEN. The radar's "Veri doğrulama" link
+    // carries the window the reader was looking at; opening the funnel on its
+    // own 5-day default would audit a different set of days than the one just
+    // read -- two screens, two answers, under one question.
+    setUrl("/risk-radari/dogrulama?days=30&country=Yunanistan");
+    serve([irrelevant]);
+    render(<RiskVerificationClient />);
+
+    await screen.findByText("Ukraine strikes Russian pipeline station");
+    expect(apiFetch).toHaveBeenCalledWith(
+      expect.stringContaining("/risks/quality?days=30"),
+      expect.anything(),
+    );
+    expect(requested.every((path) => path.includes("days=30"))).toBe(true);
+    expect(screen.getByRole("button", { name: "30g" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
+    // The country rides along so the way back restores the radar's own view,
+    // and the screen says out loud that it is not applying it.
+    expect(screen.getByRole("link", { name: /Risk Radarı/ })).toHaveAttribute(
+      "href",
+      "/risk-radari?days=30&country=Yunanistan",
+    );
+    expect(screen.getByText(/ülkeye göre daralmaz/)).toBeInTheDocument();
+    // The negative half: the audit endpoints have no country filter, so the
+    // name must never reach one. Asking for it would silently return the
+    // unfiltered funnel under a heading that claims otherwise.
+    expect(requested.some((path) => path.includes("country"))).toBe(false);
+    expect(
+      apiFetch.mock.calls.some((call) => String(call[0]).includes("country")),
+    ).toBe(false);
+  });
+
+  it("drops a rejection reason the funnel does not publish", async () => {
+    // A hand-edited ?reason= must not empty the table while "Tümü" is still
+    // lit -- the same rule the campaign filters state for ?band=purple.
+    setUrl("/risk-radari/dogrulama?reason=uydurma_sebep");
+    serve([stale, irrelevant]);
+    render(<RiskVerificationClient />);
+
+    await screen.findByText("Ukraine strikes Russian pipeline station");
+    await waitFor(() =>
+      expect(requested.at(-1)).not.toContain("reason=uydurma_sebep"),
+    );
+    expect(screen.getByRole("button", { name: "Tümü" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    // ...and it leaves the address bar too. Dropped from the request but kept
+    // in the URL, the link would go on claiming a filter the table was not
+    // applying -- what archive-client calls "worse than no filter at all" --
+    // and forwarding it would pass the claim on.
+    await waitFor(() => expect(currentParams().has("reason")).toBe(false));
+  });
+
+  it("keeps a reason the funnel does publish in the URL", async () => {
+    // The negative half: the cleanup above must fire only for a reason the
+    // vocabulary disowns, never for a working shared link.
+    setUrl("/risk-radari/dogrulama?reason=not_current_event");
+    serve([stale, irrelevant]);
+    render(<RiskVerificationClient />);
+
+    await screen.findByText(/Southend Airport crash tragedy/);
+    await waitFor(() =>
+      expect(requested.at(-1)).toContain("reason=not_current_event"),
+    );
+    expect(currentParams().get("reason")).toBe("not_current_event");
   });
 });

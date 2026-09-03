@@ -1,14 +1,17 @@
 "use client";
 
-import { Download, Newspaper } from "lucide-react";
+import { Download, Newspaper, X } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { ArticleCard } from "@/components/article-card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useUrlState, writeParam } from "@/hooks/use-url-state";
 import { API_BASE_URL, apiFetch } from "@/lib/api";
 import { DISPLAY_TIME_ZONE, formatDayMonthTr } from "@/lib/format";
+import { CATEGORY_BY_SLUG } from "@/lib/taxonomy";
+import { CATEGORY_SLUGS } from "@/lib/taxonomy.gen";
 import type { ArticleListOut, ArticleOut, EditionSummaryOut } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -57,33 +60,88 @@ function dayLabel(iso: string): { weekday: string; date: string } {
   };
 }
 
+/** `?category=` off the address bar, or null.
+ *
+ * An unrecognised slug is dropped rather than passed through: `/articles`
+ * would answer a made-up category with an empty list, and the page would then
+ * show "bu günde haber toplanmamış" over an archive that is full. Same rule
+ * `parseCampaignFilters` states for `?band=purple`. */
+function readCategory(params: URLSearchParams): string | null {
+  const value = params.get("category");
+  return value && (CATEGORY_SLUGS as readonly string[]).includes(value) ? value : null;
+}
+
+/** `?date=` off the address bar, restricted to the days the strip actually
+ * offers. A date outside the window has no chip to light and no counts to
+ * check, so it falls back to the strip's own choice rather than rendering a
+ * selected day the reader cannot see selected. */
+function readDate(params: URLSearchParams, days: readonly string[]): string | null {
+  const value = params.get("date");
+  return value && days.includes(value) ? value : null;
+}
+
+/**
+ * ARŞİV -- the archive's one job is to be the place a beat can be read whole.
+ *
+ * `?category` AND `?date` ARE BOTH URL-OWNED, and that is the point of this
+ * screen. Gazete's "Arşivde tümü" link (components/gazete/news-section.tsx)
+ * writes `?category=<beat>` and is this page's only deep-link path: the paper
+ * prints the critical few and this is where the rest of that beat lives. The
+ * link used to write a param nothing here read -- the reader got an unfiltered
+ * single-day list with `category=` still in the address bar, which is worse
+ * than no filter at all, because the URL said the filter had been applied.
+ *
+ * THE COUNTS AND THE JUMP MOVE WITH THE FILTER. `/articles/daily-counts` takes
+ * the same `category`, so each day chip's badge counts the rows that day's
+ * list will actually render, and the "today is empty, open on the newest day
+ * that isn't" jump lands on the newest day with news IN THIS BEAT. Jumping on
+ * an unfiltered tally would drop the reader on a day that has news but none of
+ * the news they asked for -- an empty page reached by a rule they cannot see.
+ */
 export function ArchiveClient() {
-  const days = lastDays();
+  const { params, replaceParams } = useUrlState();
+  // Derived from the clock once per mount: a strip that re-derived "today"
+  // per render could disagree with itself across one paint.
+  const days = useMemo(() => lastDays(), []);
+
+  const category = readCategory(params);
+  const urlDate = readDate(params, days);
+
   const [counts, setCounts] = useState<Record<string, number> | null>(null);
-  const [selected, setSelected] = useState(days[0]);
+  /** Where the strip landed on its own, for as long as the URL names no day.
+   * The URL always wins when it names one -- this is the fallback, not a
+   * second source of truth. */
+  const [fallbackDay, setFallbackDay] = useState(days[0]);
+  const selected = urlDate ?? fallbackDay;
+
   const [items, setItems] = useState<ArticleOut[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [editions, setEditions] = useState<EditionSummaryOut[]>([]);
 
+  const setFilters = useCallback(
+    (next: { category?: string | null; date?: string | null }) => {
+      // Onto the current params, so an unrelated key someone linked with
+      // survives -- the same base-preserving serialise `lib/campaigns.ts` does.
+      const updated = new URLSearchParams(params.toString());
+      if (next.category !== undefined) writeParam(updated, "category", next.category);
+      // Clearing the day hands the choice back to the strip's own rule: stay
+      // where you are while that day still has news in the beat now selected,
+      // and jump to the newest day that does when it does not. Pinning the
+      // old day instead would strand a reader on a day the new beat is empty
+      // on; jumping unconditionally would move the page under someone who had
+      // not asked it to.
+      if (next.date !== undefined) writeParam(updated, "date", next.date);
+      replaceParams(updated);
+    },
+    [params, replaceParams],
+  );
+
+  // The edition list is a bonus section and never narrows: an edition is the
+  // whole day's paper, so filtering it by beat would print a headline whose
+  // story the filtered page cannot show.
   useEffect(() => {
     let cancelled = false;
-    apiFetch<Record<string, number>>(`/articles/daily-counts?days=${DAYS}`, {
-      cache: "default",
-    })
-      .then((data) => {
-        if (cancelled) return;
-        setCounts(data);
-        // If today is still empty, open the archive on the newest day that
-        // actually has news instead of an empty list.
-        setSelected((current) => {
-          if ((data[current] ?? 0) > 0) return current;
-          return days.find((d) => (data[d] ?? 0) > 0) ?? current;
-        });
-      })
-      .catch(() => {
-        if (!cancelled) setCounts({});
-      });
     apiFetch<EditionSummaryOut[]>("/editions", { cache: "default" })
       .then((data) => {
         if (!cancelled) setEditions(data);
@@ -94,15 +152,52 @@ export function ArchiveClient() {
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- days is derived from the clock, stable for the page's lifetime
   }, []);
+
+  // Counts re-fetch when the beat changes, because they are counts OF that
+  // beat. `days` is derived from the clock once per mount and is stable.
+  useEffect(() => {
+    let cancelled = false;
+    const controller = new AbortController();
+    const query = new URLSearchParams({ days: String(DAYS) });
+    if (category) query.set("category", category);
+
+    apiFetch<Record<string, number>>(`/articles/daily-counts?${query.toString()}`, {
+      cache: "default",
+      signal: controller.signal,
+    })
+      .then((data) => {
+        if (cancelled) return;
+        setCounts(data);
+        // If the day in view is empty in this beat, open on the newest day
+        // that isn't. Only the fallback moves: a day the reader put in the URL
+        // is a day they asked for, and silently walking away from it would
+        // make the address bar disagree with the page.
+        setFallbackDay((current) =>
+          (data[current] ?? 0) > 0
+            ? current
+            : (days.find((day) => (data[day] ?? 0) > 0) ?? current),
+        );
+      })
+      .catch(() => {
+        if (cancelled || controller.signal.aborted) return;
+        setCounts({});
+      });
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [category, days]);
 
   useEffect(() => {
     let cancelled = false;
     const controller = new AbortController();
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch driven by day selection; the loading flag must flip with it
+    const query = new URLSearchParams({ date: selected, limit: "100" });
+    if (category) query.set("category", category);
+
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch driven by day/beat selection; the loading flag must flip with it
     setLoading(true);
-    apiFetch<ArticleListOut>(`/articles?date=${selected}&limit=100`, {
+    apiFetch<ArticleListOut>(`/articles?${query.toString()}`, {
       cache: "default",
       signal: controller.signal,
     })
@@ -122,9 +217,10 @@ export function ArchiveClient() {
       cancelled = true;
       controller.abort();
     };
-  }, [selected]);
+  }, [selected, category]);
 
   const edition = editions.find((e) => e.edition_date === selected);
+  const categoryLabel = category ? (CATEGORY_BY_SLUG[category]?.label ?? category) : null;
 
   return (
     <div className="flex flex-col gap-6">
@@ -135,6 +231,30 @@ export function ArchiveClient() {
         </p>
       </div>
 
+      {/* The active beat, as a chip that can be taken off. A filter arriving
+          from another page's link has no control of its own on screen, so
+          without this the reader can see `category=` in the URL and has no way
+          to clear it but by editing the URL. */}
+      {categoryLabel && (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Filtre
+          </span>
+          <button
+            type="button"
+            onClick={() => setFilters({ category: null, date: null })}
+            aria-label={`${categoryLabel} filtresini kaldır`}
+            className="flex items-center gap-1 rounded-full bg-primary/12 px-2.5 py-1 text-xs font-medium text-primary ring-1 ring-primary/40 transition-colors hover:bg-primary/20 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring dark:glow-soft"
+          >
+            {categoryLabel}
+            <X className="size-3" aria-hidden />
+          </button>
+          <span className="text-[11px] text-muted-foreground">
+            Gün sayıları da bu başlığa göre sayılıyor.
+          </span>
+        </div>
+      )}
+
       {/* Date strip */}
       <div className="flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {days.map((iso) => {
@@ -144,7 +264,8 @@ export function ArchiveClient() {
           return (
             <button
               key={iso}
-              onClick={() => setSelected(iso)}
+              onClick={() => setFilters({ date: iso })}
+              aria-pressed={active}
               className={cn(
                 "flex min-w-[76px] shrink-0 flex-col items-center gap-0.5 rounded-lg border px-3 py-2 transition-colors",
                 active
@@ -226,8 +347,16 @@ export function ArchiveClient() {
         </div>
       ) : (
         <div className="rounded-lg border border-dashed border-border p-10 text-center">
-          <p className="text-sm font-medium text-foreground">Bu günde haber toplanmamış</p>
-          <p className="mt-1 text-sm text-muted-foreground">Başka bir gün seçin.</p>
+          <p className="text-sm font-medium text-foreground">
+            {categoryLabel
+              ? `Bu günde ${categoryLabel.toLocaleLowerCase("tr")} haberi toplanmamış`
+              : "Bu günde haber toplanmamış"}
+          </p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {categoryLabel
+              ? "Başka bir gün seçin ya da filtreyi kaldırın."
+              : "Başka bir gün seçin."}
+          </p>
         </div>
       )}
 

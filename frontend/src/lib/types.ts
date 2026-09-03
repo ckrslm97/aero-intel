@@ -364,12 +364,16 @@ export interface EventOut {
   days_until: number;
 }
 
-/* --- İçgörüler / new-route signals ------------------------------------- */
+/* --- New-route signals (Hub → Ağ Sinyalleri) ---------------------------- */
+/* These types used to be İçgörüler's. That page's per-article ledger is gone
+ * -- it published a second, larger count of the same announcements -- and the
+ * Hub page's Ağ Sinyalleri tab is the only surface that reads them now. See
+ * NetworkSignalGroup at the bottom of this file. */
 
 /** One resolved destination behind a route signal.
  *
  * Mirrors `airports_by_article` in
- * backend/app/services/insights_service.py exactly. The backend only emits an
+ * backend/app/services/network_signals_service.py exactly. The backend only emits an
  * airport it can find in the bundled reference table (app/data/airports.json),
  * so `lat`/`lon` are always real numbers -- an airport it cannot place is
  * dropped there rather than sent here without a position. That is what lets
@@ -397,6 +401,9 @@ export interface RouteSignalArticle {
   airports: SignalAirport[];
 }
 
+/** A region's new-route announcements. Named for its first consumer and still
+ * used by it: `NetworkSignalGroup` below is this shape, and GET
+ * /hubs/network-signals is now the ONLY endpoint that publishes it. */
 export interface RouteSignalGroup {
   region: string | null;
   count: number;
@@ -404,12 +411,17 @@ export interface RouteSignalGroup {
 }
 
 export interface InsightsOut extends Stamped {
-  /** One window PER aggregate: momentum compares 7-day halves while the other
-   * two run over 30 days, so a single `days` would misdescribe most of this
-   * payload. */
+  /** One window PER aggregate: momentum compares 7-day halves while sentiment
+   * runs over 30 days, so a single `days` would misdescribe half this payload.
+   *
+   * There is no `new_route_signals` window here, and no `new_route_signals`
+   * block below. /insights used to publish one counted per ARTICLE while GET
+   * /hubs/network-signals counted the same announcements per EVENT, so the two
+   * pages printed two different sizes for the same competitor activity. New
+   * routes are counted in exactly one place now -- see
+   * backend/app/api/v1/insights.py and the Hub page's Ağ Sinyalleri tab. */
   windows: {
     airline_momentum: ResponseWindow;
-    new_route_signals: ResponseWindow;
     sentiment_by_category: ResponseWindow;
   };
   airline_momentum: {
@@ -419,7 +431,6 @@ export interface InsightsOut extends Stamped {
     previous: number;
     delta: number;
   }[];
-  new_route_signals: RouteSignalGroup[];
   sentiment_by_category: {
     category: string;
     positive: number;
@@ -1001,9 +1012,10 @@ export interface Stamped {
 }
 
 /* --- Hub network signals -------------------------------------------------- */
-/** Same shape as InsightsOut['new_route_signals'], produced from pipeline v2
- * events instead of raw articles -- see
- * backend/app/services/network_signals_service.py. */
+/** One row per pipeline-v2 EVENT rather than per article -- see
+ * backend/app/services/network_signals_service.py. /insights used to publish a
+ * per-article count of the same announcements under the same shape; it no
+ * longer does, so this is the product's only new-route tally. */
 export type NetworkSignalGroup = RouteSignalGroup;
 
 /** GET /hubs/network-signals. An envelope, not a bare list: the tab prints a

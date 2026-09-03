@@ -73,8 +73,7 @@ async def test_network_signals_groups_a_new_route_event_by_region_and_resolves_a
     assert entry["slug"] == "tk-yeni-hat-evt"
     assert entry["airlines"] == ["TK"]
     # IST is the carrier's own hub (see app/hubs.py) so only LHR is the
-    # destination -- the same origin/destination correction insights_service
-    # already applies.
+    # destination -- `destination_airports`, in this module.
     assert [a["code"] for a in entry["airports"]] == ["LHR"]
 
 

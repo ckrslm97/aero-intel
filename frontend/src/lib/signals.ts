@@ -125,3 +125,48 @@ export function countBy<K extends keyof SignalFilters>(
   }
   return tally;
 }
+
+/* --- URL round-trip -------------------------------------------------------
+ * Modelled on `parseCampaignFilters` / `campaignFiltersToSearchParams` in
+ * lib/campaigns.ts. Sinyaller is an early-warning centre, and the message a
+ * desk actually sends is "şu an dört kritik risk sinyali var" with a link --
+ * a link that has to open on the same two chips the sender had lit.
+ */
+
+/** The query-string name of each axis. */
+const SIGNAL_PARAM_NAMES: Record<keyof SignalFilters, string> = {
+  kind: "kind",
+  severity: "severity",
+};
+
+/** Filters out of the address bar.
+ *
+ * A value outside the known set is dropped rather than kept: `?severity=pink`
+ * held verbatim would empty the list while both chip rows still read "Hepsi",
+ * which looks exactly like a broken build. */
+export function parseSignalFilters(params: URLSearchParams): SignalFilters {
+  const kind = params.get(SIGNAL_PARAM_NAMES.kind);
+  const severity = params.get(SIGNAL_PARAM_NAMES.severity);
+  return {
+    kind: KIND_ORDER.includes(kind as SignalKind) ? (kind as SignalKind) : null,
+    severity: SEVERITY_ORDER.includes(severity as SignalSeverity)
+      ? (severity as SignalSeverity)
+      : null,
+  };
+}
+
+/** Filters back into the address bar, onto `base` so unrelated params survive.
+ * A cleared axis deletes its key rather than writing an empty one, so an
+ * unfiltered page has a clean URL. */
+export function signalFiltersToSearchParams(
+  filters: SignalFilters,
+  base?: URLSearchParams,
+): URLSearchParams {
+  const params = new URLSearchParams(base?.toString() ?? "");
+  for (const [axis, name] of Object.entries(SIGNAL_PARAM_NAMES)) {
+    const value = filters[axis as keyof SignalFilters];
+    if (value) params.set(name, value);
+    else params.delete(name);
+  }
+  return params;
+}
