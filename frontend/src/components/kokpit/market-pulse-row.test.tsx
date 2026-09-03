@@ -1,5 +1,5 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type {
   AnnualPoint,
@@ -134,20 +134,26 @@ describe("buildPulseCells", () => {
     expect(cells[0].emptyNote).toBe("IATA serisi yüklenmedi");
   });
 
-  it("puts the three IATA cells on the annual clock and the two market cells on the live one", () => {
+  it("gives each cell the clock its own series actually runs on", () => {
     const cells = buildPulseCells(fullAnnual, fxBoard([pair()]), energyBoard([brent()]), [], NOW);
     expect(cells.map((cell) => cell.cadence)).toEqual([
       "annual",
       "annual",
       "annual",
       "live",
-      "live",
+      // Brent is a settled DAILY close, not a quote. It used to sit here as
+      // "live" and be judged by the FX cron's 30-minute window, so the fuel
+      // cell read "GECİKMELİ" from half an hour after the settlement until the
+      // next one -- nearly the whole day, over a current number.
+      "daily",
     ]);
     // The annual cells must never wear the live vocabulary.
     expect(cells[0].badge).toBe("IATA 2026T");
     expect(cells[0].asOfLabel).toBeNull();
-    expect(cells[3].badge).toBe("CANLI · 15dk");
+    expect(cells[3].badge).toBe("CANLI · 15 DK'DA BİR");
     expect(cells[3].asOfLabel).toBe("19:50");
+    // ...and neither may the daily one.
+    expect(cells[4].badge).toBe("GÜNLÜK KAPANIŞ · bugün");
   });
 
   it("stops saying CANLI once the reading falls outside the live window", () => {
@@ -157,12 +163,40 @@ describe("buildPulseCells", () => {
     // this current?".
     const stale = new Date("2026-09-01T12:00:00Z");
     const cells = buildPulseCells(fullAnnual, fxBoard([pair()]), energyBoard([brent()]), [], stale);
-    expect(cells[3].badge).toBe("GECİKMELİ");
-    expect(cells[4].badge).toBe("GECİKMELİ");
+    // And it says HOW late, the way the header does: one word over a
+    // forty-hour gap and over a forty-minute one is the same word for two very
+    // different numbers.
+    expect(cells[3].badge).toBe("GECİKMELİ · 40 sa");
+    expect(cells[4].badge).toBe("GÜNLÜK KAPANIŞ · 2 gün önce");
     // The reading itself is still printed with its own time -- it is real, it
     // is merely old.
     expect(cells[3].value).toBe("48,25");
     expect(cells[3].asOfLabel).toBe("19:50");
+  });
+
+  it("makes no freshness claim at all before the reader's clock has ticked", () => {
+    // Kokpit is pre-rendered with `revalidate: 60`. A badge decided against the
+    // RENDER's clock is a verdict frozen into cached HTML: production served an
+    // 18:03 UTC reading under "CANLI" at 18:41. With no client tick yet both
+    // live cells name their CADENCE -- a fact about the series -- and say
+    // nothing about this reading's age.
+    const cells = buildPulseCells(fullAnnual, fxBoard([pair()]), energyBoard([brent()]), [], null);
+    expect(cells[3].badge).toBe("15 DK'DA BİR");
+    expect(cells[4].badge).toBe("GÜNLÜK KAPANIŞ");
+    for (const cell of [cells[3], cells[4]]) {
+      expect(cell.badge).not.toContain("CANLI");
+      expect(cell.badge).not.toContain("GECİKMELİ");
+      // The stamp is a fact and is still printed: the cell goes quiet about
+      // freshness, not about the reading.
+      expect(cell.asOfLabel).not.toBeNull();
+    }
+  });
+
+  it("defaults to having no clock rather than to the render's own", () => {
+    // The default that caused the bug was `new Date()`. This one cannot lie:
+    // the worst it can do is withhold a badge for one frame.
+    const cells = buildPulseCells(fullAnnual, fxBoard([pair()]), energyBoard([brent()]));
+    expect(cells[3].badge).toBe("15 DK'DA BİR");
   });
 
   it("claims no IATA edition year when the annual board did not load", () => {
@@ -202,6 +236,32 @@ describe("buildPulseCells", () => {
     // 84,0, so a padded "84,00" would claim a hundredth of a point the source
     // never measured.
     expect(cells[2].value).toBe("%84");
+  });
+
+  it("lights the lamp for a LIVE READING, not for a live series", () => {
+    // The lamp and the value glow were keyed to `cadence`, which is a constant
+    // per cell -- so a KUR cell whose badge said "GECİKMELİ · 40 sa" still drew
+    // the lit dot and the glowing number. Colour is the only channel this row
+    // reserves for liveness, so that was the "canlı" claim the words had just
+    // stopped making, still standing in the one place nobody had looked.
+    const live = buildPulseCells(fullAnnual, fxBoard([pair()]), energyBoard([brent()]), [], NOW);
+    expect(live[3].lit).toBe(true);
+
+    // Late: the badge says so, and now so does the colour.
+    const stale = new Date("2026-09-01T12:00:00Z");
+    const late = buildPulseCells(fullAnnual, fxBoard([pair()]), energyBoard([brent()]), [], stale);
+    expect(late[3].badge).toBe("GECİKMELİ · 40 sa");
+    expect(late[3].lit).toBe(false);
+
+    // No clock yet -- the server render, and the first client frame. The badge
+    // withholds its verdict here, and the lamp has to withhold the same one or
+    // the pre-rendered HTML carries a lit liveness claim without the word.
+    const pending = buildPulseCells(fullAnnual, fxBoard([pair()]), energyBoard([brent()]), [], null);
+    expect(pending[3].lit).toBe(false);
+
+    // And the cadences that are never live, whatever the clock says.
+    expect(live[4].lit).toBe(false); // a settled daily close is not a live price
+    expect(live[0].lit).toBe(false); // an IATA annual series least of all
   });
 
   it("colours only the cost base", () => {
@@ -287,12 +347,22 @@ describe("threshold bands", () => {
 });
 
 describe("MarketPulseRow", () => {
+  // Two of these tests freeze the clock, and `useNow` keeps ONE module-level
+  // interval per period shared by every consumer -- so a frozen clock left
+  // behind would be the next test file's clock too.
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("prints the live values, both windows and the reading's own time", () => {
     render(
       <MarketPulseRow annual={fullAnnual} board={fxBoard([pair()])} energy={energyBoard([brent()])} />,
     );
     expect(screen.getByText("48,25")).toBeInTheDocument();
-    expect(screen.getByText("19:50")).toBeInTheDocument();
+    // The stamp NAMES its zone. It is UTC while the topbar clock two rows up is
+    // İstanbul, so a bare "19:50" beside a reader's 22:50 is three hours of
+    // error with nothing on screen able to catch it.
+    expect(screen.getAllByText("19:50 UTC").length).toBeGreaterThan(0);
     // Both live cells carry the same two windows -- the point of the row is
     // that they are comparable.
     expect(screen.getAllByText("1g")).toHaveLength(2);
@@ -309,6 +379,35 @@ describe("MarketPulseRow", () => {
       />,
     );
     expect(screen.getByText("Dikkat")).toBeInTheDocument();
+  });
+
+  it("draws no lit dot and no glow over a late reading", () => {
+    // The MARKUP half of the lamp fix. The bug lived in the class names --
+    // `bg-signal` and `dark:text-glow` were keyed to the cell's cadence, which
+    // never changes -- so this is the assertion that would have caught it, and
+    // the one the cell-level test above cannot make.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-01T12:00:00Z"));
+    const { container } = render(
+      <MarketPulseRow annual={fullAnnual} board={fxBoard([pair()])} energy={energyBoard([brent()])} />,
+    );
+    // The words already said it...
+    expect(screen.getByText("GECİKMELİ · 40 sa")).toBeInTheDocument();
+    // ...and now the colour does too, on the whole row.
+    expect(container.querySelectorAll(".bg-signal")).toHaveLength(0);
+    expect(container.querySelectorAll("[class*='text-glow']")).toHaveLength(0);
+  });
+
+  it("draws the lit dot when the reading really is live", () => {
+    // The positive half: the lamp still means something. Without this, keying
+    // `lit` to a constant `false` would pass the test above.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-30T20:05:00Z"));
+    const { container } = render(
+      <MarketPulseRow annual={fullAnnual} board={fxBoard([pair()])} energy={energyBoard([brent()])} />,
+    );
+    expect(screen.getByText("CANLI · 15 DK'DA BİR")).toBeInTheDocument();
+    expect(container.querySelectorAll(".bg-signal")).toHaveLength(1);
   });
 
   it("never prints a fabricated 0% for a pair with no history", () => {

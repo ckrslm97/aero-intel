@@ -1,12 +1,21 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  DISPLAY_TIME_ZONE,
   formatCompactNumber,
+  formatDateTr,
+  formatDayMonthTr,
+  formatDayTr,
   formatDeltaPoints,
   formatMetricValue,
+  formatMonthTr,
   formatRate,
+  formatShortDateTr,
   formatSignedPct,
+  formatStampTr,
   kpiDeltaLabel,
+  shiftDayIso,
+  utcDayIso,
 } from "./format";
 
 describe("formatCompactNumber", () => {
@@ -163,5 +172,82 @@ describe("formatMetricValue: olmayan hassasiyeti uydurmaz", () => {
     // 1,085 ile 1,0850 aynı kotasyon değil: dördüncü hane hareket eden hane.
     expect(formatMetricValue(1.085, "USD", "fx_eur_usd")).toBe("1,0850");
     expect(formatMetricValue(48.3, "TRY", "fx_usd_try")).toBe("48,30");
+  });
+});
+
+describe("dates in a named zone", () => {
+  it("prints one instant as one string, whatever the runtime's zone is", () => {
+    // THE BUG: these formatters were built per-component with no `timeZone`, so
+    // they formatted in whatever zone the RUNTIME was in -- UTC on the
+    // pre-render node, the reader's zone in the browser. The same article
+    // stamp was measured rendering three hours apart on two surfaces of this
+    // site. Pinning the zone is what makes the assertion below possible at
+    // all: it is true on a UTC CI box and on a laptop in İstanbul.
+    expect(DISPLAY_TIME_ZONE).toBe("Europe/Istanbul");
+    expect(formatStampTr("2026-09-03T11:32:00Z")).toBe("3 Eyl 2026 14:32");
+    expect(formatShortDateTr("2026-09-03T11:32:00Z")).toBe("3 Eyl 14:32");
+  });
+
+  it("keeps a DATE-ONLY value on the day it names", () => {
+    // "2026-09-04" parses as UTC midnight, which is 3 September in every zone
+    // west of Greenwich: the /newspaper/2026-09-04 masthead read "3 Eylül" for
+    // a reader in New York, one day off the route they had just clicked. The
+    // midday anchor leaves no offset from UTC-11 to UTC+12 able to move it.
+    expect(formatDayTr("2026-09-04")).toBe("4 Eylül 2026 Cuma");
+    // And an INSTANT is still read in the display zone rather than in UTC:
+    // 22:00 UTC is already the next day in İstanbul, and the page says so.
+    expect(formatDayTr("2026-09-03T22:00:00Z")).toBe("4 Eylül 2026 Cuma");
+  });
+
+  it("holds a stated campaign window on the day the carrier stated", () => {
+    // campaign-drawer.tsx anchored these at UTC MIDNIGHT and then formatted
+    // with no `timeZone`, so a ticketing period ending "2026-09-30" printed
+    // "29 Eyl 2026" in every zone west of Greenwich -- the answer off by a day
+    // on the row an analyst reads to decide whether a fare is still on sale.
+    expect(formatDateTr("2026-09-30")).toBe("30 Eyl 2026");
+    expect(formatDateTr("2026-09-04")).toBe("4 Eyl 2026");
+    // An instant is still read in the display zone: 22:00 UTC is already
+    // tomorrow in İstanbul.
+    expect(formatDateTr("2026-09-03T22:00:00Z")).toBe("4 Eyl 2026");
+  });
+
+  it("prints a month and a bare day in the same pinned zone", () => {
+    // An IATA edition published at 23:00Z on 30 November is a December edition
+    // in İstanbul and a November one in London; which month a publisher
+    // published in is not a fact about where the reader is sitting.
+    expect(formatMonthTr("2025-11-30T23:00:00Z")).toBe("Ara 2025");
+    expect(formatDayMonthTr("2026-09-03T21:30:00Z")).toBe("4 Eyl");
+  });
+
+  it("returns null rather than 'Invalid Date' for a value it cannot read", () => {
+    for (const value of [null, undefined, "", "not-a-date"]) {
+      expect(formatDayTr(value)).toBeNull();
+      expect(formatStampTr(value)).toBeNull();
+      expect(formatShortDateTr(value)).toBeNull();
+      expect(formatDateTr(value)).toBeNull();
+      expect(formatMonthTr(value)).toBeNull();
+      expect(formatDayMonthTr(value)).toBeNull();
+    }
+  });
+});
+
+describe("day keys", () => {
+  it("reads the day key in UTC, the calendar the backend keeps", () => {
+    // A day key is compared against dates the API decided (`_today()` in
+    // backend/app/api/v1/promotions.py is explicitly UTC), so it is the one
+    // date on this site that is NOT read in the display zone.
+    expect(utcDayIso(new Date("2026-09-03T23:59:59Z"))).toBe("2026-09-03");
+    expect(utcDayIso(new Date("2026-09-04T00:00:01Z"))).toBe("2026-09-04");
+  });
+
+  it("steps whole calendar days, not 24-hour blocks", () => {
+    expect(shiftDayIso("2026-09-03", 30)).toBe("2026-10-03");
+    expect(shiftDayIso("2026-09-03", -3)).toBe("2026-08-31");
+    // Across a DST transition: the local day either side of 29 March 2026 is
+    // 23 or 25 hours long, so arithmetic in a reader's zone lands a 60-day
+    // horizon one day out. These are calendar keys and stay calendar
+    // arithmetic.
+    expect(shiftDayIso("2026-03-28", 3)).toBe("2026-03-31");
+    expect(shiftDayIso("2026-10-24", 3)).toBe("2026-10-27");
   });
 });

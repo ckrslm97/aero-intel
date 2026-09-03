@@ -1,4 +1,8 @@
-import { freshnessOf, latestAsOf } from "@/lib/cockpit";
+"use client";
+
+import { useNow } from "@/hooks/use-now";
+import { freshnessOf, oldestAsOf } from "@/lib/cockpit";
+import { formatUtcTime } from "@/lib/format";
 import type { KokpitFxBoardOut } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -10,24 +14,36 @@ import { cn } from "@/lib/utils";
  * the fold while the hero was.
  *
  * The right-hand side is the only new claim here, and it is a claim, so it is
- * earned from data: "Canlı" appears when the FX board's newest reading is
+ * earned from data: "Canlı" appears when the FX board's OLDEST reading is
  * inside `LIVE_WINDOW_MINUTES`, and otherwise the band says exactly how late
  * it is. There is deliberately no "%98,7 veri sağlığı" figure -- no such
  * measurement exists in this system, and inventing one at the top of the page
  * would undermine every honest number below it.
+ *
+ * TWO THINGS MOVED HERE, and both were the same bug seen from different sides:
+ * a claim about NOW, decided somewhere that is not now.
+ *
+ *   * The clock. This was a server component, so `freshnessOf` compared the
+ *     data against the PRE-RENDER instant and that verdict was then cached for
+ *     `revalidate: 60` and beyond. Production served an 18:03 UTC reading under
+ *     a lit "Canlı" dot at 18:41. The verdict is now taken on the reader's own
+ *     clock, and before its first tick the band prints the stamp and makes no
+ *     freshness claim at all (see hooks/use-now.ts).
+ *
+ *   * The reading. This stamped itself with the FRESHEST pair on a board of
+ *     seven. One pair updating while another's cron had been failing for two
+ *     hours lit "Canlı" over a two-hour-old row. One badge over many readings
+ *     can only describe the worst of them, so it is `oldestAsOf` -- the only
+ *     board-wide stamp lib/cockpit.ts still exports; the per-pair detail lives
+ *     on the rows (fx-board-table.tsx).
  */
 export function CockpitHeader({ board }: { board: KokpitFxBoardOut | null }) {
-  const asOf = board ? latestAsOf(board.pairs) : null;
-  const freshness = freshnessOf(asOf);
+  const now = useNow();
+  const asOf = board ? oldestAsOf(board.pairs) : null;
+  const freshness = freshnessOf(asOf, now);
   const perSource = board?.pairs
-    .map(
-      (pair) =>
-        `${pair.currency_pair}: ${new Date(pair.as_of).toLocaleTimeString("tr-TR", {
-          timeZone: "UTC",
-          hour: "2-digit",
-          minute: "2-digit",
-        })} UTC`,
-    )
+    .map((pair) => `${pair.currency_pair}: ${formatUtcTime(pair.as_of) ?? "—"} UTC`)
+    .concat("Rozet panonun EN ESKİ okumasına göre verilir.")
     .join("\n");
 
   return (
@@ -67,17 +83,30 @@ export function CockpitHeader({ board }: { board: KokpitFxBoardOut | null }) {
           className="flex items-center gap-1.5 text-[11px] tabular-nums text-muted-foreground"
           title={perSource || undefined}
         >
+          {/* Three colours for four states, and the split is the point: green
+              is an earned claim, amber is an admitted problem, and MUTED is
+              "not judged yet" -- the pre-tick state must look like neither of
+              the other two, or the placeholder becomes a claim of its own. */}
           <span
             aria-hidden
-            style={{ "--glow-color": freshness.live ? "var(--good)" : "var(--warning)" } as React.CSSProperties}
+            style={
+              {
+                "--glow-color":
+                  freshness.state === "live" ? "var(--good)" : "var(--warning)",
+              } as React.CSSProperties
+            }
             className={cn(
               "size-1.5 rounded-full",
-              freshness.live ? "bg-good dark:glow-soft" : "bg-warning",
+              freshness.state === "live" && "bg-good dark:glow-soft",
+              freshness.state === "pending" && "bg-muted-foreground",
+              (freshness.state === "stale" || freshness.state === "missing") && "bg-warning",
             )}
           />
           {freshness.timeLabel ? (
             <>
-              {freshness.live && <span className="font-medium text-good">Canlı ·</span>}
+              {freshness.state === "live" && (
+                <span className="font-medium text-good">Canlı ·</span>
+              )}
               <span>Veri {freshness.timeLabel} UTC</span>
               {freshness.delayLabel && (
                 <span className="font-medium text-warning">· {freshness.delayLabel} gecikmeli</span>

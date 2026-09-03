@@ -4,33 +4,27 @@ import { memo } from "react";
 
 import { useArticleDrawer } from "@/components/article-drawer-context";
 import { Badge } from "@/components/ui/badge";
+import { DISPLAY_TIME_ZONE_TR, formatShortDateTr, formatStampTr } from "@/lib/format";
 import { isBreaking } from "@/lib/gazete";
 import { categoryVar, getCategory, getSubcategoryLabel } from "@/lib/taxonomy";
 import { cn } from "@/lib/utils";
 import type { ArticleOut } from "@/lib/types";
 
-// One formatter for the whole list. toLocaleString() builds a new
-// Intl.DateTimeFormat on every call, which is genuinely expensive and was
-// paid once per card per render -- 100 instantiations on the archive page.
-const PUBLISHED_FORMAT = new Intl.DateTimeFormat("tr-TR", {
-  dateStyle: "medium",
-  timeStyle: "short",
-});
-
-// The Gazete tile prints the whole stamp. It used to print the clock time
-// alone, because the list was grouped under sticky per-day headers that
-// carried the date; the paper is grouped by SECTION now, so a card that said
-// only "14:32" would not say which day.
-const GRID_DATE_FORMAT = new Intl.DateTimeFormat("tr-TR", {
-  day: "numeric",
-  month: "short",
-  hour: "2-digit",
-  minute: "2-digit",
-});
+// The formatters are shared (lib/format.ts), and shared for a reason beyond
+// tidiness: both of these were built here with NO `timeZone`, so a card
+// rendered on the pre-render node printed UTC and the same card rendered in the
+// browser printed the reader's zone -- one publication time, three hours apart,
+// depending on which surface of this site you read it on. `formatStampTr`
+// pins the zone, and the card NAMES it: an unlabelled "14:32" is only usable
+// if the reader already knows which clock it is on.
+//
+// (They stay module-level constants inside lib/format.ts for the original
+// reason too: `toLocaleString()` builds a new Intl.DateTimeFormat on every
+// call, which was 100 instantiations on the archive page.)
 
 function formatPublished(iso: string | null): string {
-  if (!iso) return "Tarih bilinmiyor";
-  return PUBLISHED_FORMAT.format(new Date(iso));
+  const stamp = formatStampTr(iso);
+  return stamp === null ? "Tarih bilinmiyor" : `${stamp} ${DISPLAY_TIME_ZONE_TR}`;
 }
 
 function ArticleCardComponent({
@@ -86,9 +80,11 @@ function ArticleCardComponent({
   // the six-hour window the timestamp is simply critical-coloured, which is
   // also why there is no "Son Dakika" strip on the page any more.
   if (variant === "grid") {
-    const stamp = article.published_at
-      ? GRID_DATE_FORMAT.format(new Date(article.published_at))
-      : null;
+    // The tile prints the whole stamp, not the clock time alone: the list used
+    // to be grouped under sticky per-day headers that carried the date, and the
+    // paper is grouped by SECTION now, so a card saying only "14:32" would not
+    // say which day.
+    const stamp = formatShortDateTr(article.published_at);
     const breaking = isBreaking(article.published_at);
     const subcategoryLabel = enrichment
       ? getSubcategoryLabel(enrichment.category, enrichment.subcategory)
@@ -141,7 +137,7 @@ function ArticleCardComponent({
               )}
               title={breaking ? "Son 6 saat içinde yayımlandı" : undefined}
             >
-              {stamp}
+              {stamp} {DISPLAY_TIME_ZONE_TR}
             </span>
           )}
         </div>

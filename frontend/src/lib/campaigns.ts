@@ -1,4 +1,4 @@
-import { formatRelativeTr } from "@/lib/format";
+import { formatRelativeTr, shiftDayIso, utcDayIso } from "@/lib/format";
 import {
   CAMPAIGN_STATUS_LABELS_TR,
   REGION_LABELS_TR,
@@ -198,20 +198,28 @@ export function campaignFacetValues(promo: PromotionOut, facet: CampaignFacet): 
 
 const MS_DAY = 86_400_000;
 
-/** Today as "YYYY-MM-DD" in the reader's own timezone.
+/** Today as "YYYY-MM-DD", IN UTC -- the calendar the backend keeps.
  *
- * A string, not a Date: every comparison in this module is a lexicographic
- * one between "YYYY-MM-DD" values, which is exactly the comparison the
- * backend makes between `date` objects and cannot drift by a timezone the way
- * a Date-to-Date comparison can. */
+ * This read the READER's calendar day, and the two are not the same day for
+ * three hours out of every twenty-four. `_today()` in
+ * backend/app/api/v1/promotions.py is explicitly UTC ("status buckets must not
+ * move because a cron ran at 23:40 local"), and every status, every sort key
+ * and every visibility decision the API makes is cut against it. So between
+ * 00:00 and 03:00 TRT the page contradicted the payload it was rendering: the
+ * API had already retired a campaign whose sale window closed yesterday, and
+ * the card beside it -- computing its own local "today", which was still
+ * yesterday -- counted down to it as if it were live.
+ *
+ * A string, not a Date: every comparison in this module is a lexicographic one
+ * between "YYYY-MM-DD" values, which is exactly the comparison the backend
+ * makes between `date` objects and cannot drift by a timezone the way a
+ * Date-to-Date comparison can.
+ *
+ * `now` is passed in rather than read here so the caller can supply a clock
+ * that TICKS (hooks/use-now.ts). A tab left open across UTC midnight was
+ * showing yesterday's countdown until it was reloaded. */
 export function todayIso(now: Date = new Date()): string {
-  const local = new Date(now.getTime() - now.getTimezoneOffset() * 60_000);
-  return local.toISOString().slice(0, 10);
-}
-
-function shiftIso(day: string, days: number): string {
-  const [y, m, d] = day.split("-").map(Number);
-  return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
+  return utcDayIso(now);
 }
 
 /** Whole days from `today` until `day`, negative once it is past. */
@@ -258,7 +266,7 @@ export function windowOverlaps(
 /** The [from, to] a period key means, relative to `today`. */
 export function periodRange(period: CampaignPeriod, today: string): [string, string] {
   if (period === "now") return [today, today];
-  return [today, shiftIso(today, Number(period))];
+  return [today, shiftDayIso(today, Number(period))];
 }
 
 /* --- filtering ----------------------------------------------------------- */

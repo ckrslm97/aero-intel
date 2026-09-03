@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { Collapse } from "@/components/ui/collapse";
 import { apiFetch } from "@/lib/api";
 import { daysUntilTr } from "@/lib/event-timeline";
+import { shiftDayIso, utcDayIso } from "@/lib/format";
 import {
   EVENT_IMPACT_META,
   EVENT_TYPE_GLOW,
@@ -30,10 +31,23 @@ const MAX_EVENTS = 8;
  */
 export const EVENT_RADAR_KEY = "aerointel_event_radar_expanded";
 
+/** The window's edges, as day keys, in the zone the ANSWER is signed in.
+ *
+ * This used to step the calendar in the READER's zone (`setDate` on a local
+ * Date) and then read the result off in UTC (`toISOString`) -- two clocks in
+ * three lines. The local step is worth exactly 24 hours except across a DST
+ * transition, where it is 23 or 25 and drags the UTC day-key it is read in
+ * onto the wrong day: a 60-day horizon that lands one day short or one day
+ * long, twice a year, for no stated reason.
+ *
+ * UTC end to end, and UTC specifically, because the number rendered beside
+ * every event on this strip is the backend's `days_until`, signed against a UTC
+ * "today" (`_today` in backend/app/api/v1/events.py). A window cut on one
+ * calendar and labelled from another can put "bugün" on an event the window
+ * itself excluded.
+ */
 function isoDay(offsetDays: number): string {
-  const date = new Date();
-  date.setDate(date.getDate() + offsetDays);
-  return date.toISOString().slice(0, 10);
+  return shiftDayIso(utcDayIso(), offsetDays);
 }
 
 /** "Event Radar" -- the curated demand events coming up.

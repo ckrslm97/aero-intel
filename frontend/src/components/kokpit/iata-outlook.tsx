@@ -2,6 +2,7 @@ import { ExternalLink } from "lucide-react";
 
 import { AnnualTrendChart } from "@/components/kokpit/annual-trend-chart-lazy";
 import { ANNUAL_KIND_LABELS_TR, ANNUAL_KIND_SUFFIX } from "@/lib/cockpit";
+import { formatMonthTr } from "@/lib/format";
 import type { AnnualSeries, IataIndicatorOut } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -17,9 +18,12 @@ function trNumber(value: number): string {
   return value.toLocaleString("tr-TR");
 }
 
-/** Short month + year of an IATA edition, e.g. "Ara 2025". */
+/** Short month + year of an IATA edition, e.g. "Ara 2025". Pinned: an edition
+ * published at 23:00Z on 30 November is a December edition in Istanbul and a
+ * November one in London, and which month IATA published in is not a fact
+ * about where the reader is sitting. */
 function editionLabel(iso: string): string {
-  return new Date(iso).toLocaleDateString("tr-TR", { month: "short", year: "numeric" });
+  return formatMonthTr(iso) ?? "—";
 }
 
 /**

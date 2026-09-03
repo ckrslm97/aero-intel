@@ -13,6 +13,7 @@ import { CountUp } from "@/components/motion/count-up";
 import { MotionItem, MotionList } from "@/components/motion/motion-list";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiFetch } from "@/lib/api";
+import { formatDateTr } from "@/lib/format";
 import { airlineTabs, worldRegions } from "@/lib/nav";
 import { CATEGORY_BY_SLUG } from "@/lib/taxonomy";
 import type { ResponseWindow } from "@/lib/types";
@@ -109,13 +110,12 @@ const chip = (active: boolean) =>
       : "border border-border text-muted-foreground hover:bg-accent",
   );
 
+/** Calendar and review evidence carry a bare date. The midday anchor that used
+ * to be open-coded here now lives in `formatDateTr`, which also pins the zone
+ * the label is read in -- the anchor alone kept the DAY right while the
+ * formatter still followed the runtime. */
 function formatEvidenceDate(iso: string | null): string | null {
-  if (!iso) return null;
-  // Calendar and review evidence carry a bare date; anchor it at midday UTC so
-  // the reader's timezone can't shift it onto the previous day.
-  const value = new Date(iso.includes("T") ? iso : `${iso}T12:00:00Z`);
-  if (Number.isNaN(value.getTime())) return null;
-  return value.toLocaleDateString("tr-TR", { day: "numeric", month: "short", year: "numeric" });
+  return formatDateTr(iso);
 }
 
 /** Add or remove one value from a multi-select filter. An empty array is the

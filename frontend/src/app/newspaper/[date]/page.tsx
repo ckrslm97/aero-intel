@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { ArticleCard } from "@/components/article-card";
 import { MotionItem, MotionList } from "@/components/motion/motion-list";
 import { API_BASE_URL, ApiError, apiFetch } from "@/lib/api";
+import { formatDayTr } from "@/lib/format";
 import { CATEGORY_LABELS_TR } from "@/lib/taxonomy.gen";
 import type { EditionOut } from "@/lib/types";
 
@@ -68,13 +69,15 @@ export default async function EditionPage({
     <div className="flex flex-col gap-10">
       <div className="flex flex-col gap-2">
         <div className="flex items-center justify-between gap-4">
+          {/* THE MASTHEAD DAY, and it must be the day in the URL.
+              `new Date("2026-09-04")` is UTC midnight, formatted with no
+              `timeZone` in whatever zone the renderer sits in -- so the edition
+              of the 4th was mastheaded "3 Eylül 2026 Perşembe" for every reader
+              west of Greenwich, one day off from the route they had just
+              clicked. `formatDayTr` anchors a date-only value at midday UTC and
+              pins the zone, which no offset from UTC-11 to UTC+12 can shift. */}
           <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            {new Date(edition.edition_date).toLocaleDateString("tr-TR", {
-              weekday: "long",
-              year: "numeric",
-              month: "long",
-              day: "numeric",
-            })}
+            {formatDayTr(edition.edition_date)}
           </p>
           {edition.pdf_available && (
             <a

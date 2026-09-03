@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 
 import { apiFetch } from "@/lib/api";
+import { formatDayTr } from "@/lib/format";
 import type { InsightsOut } from "@/lib/types";
 
 /** How much of the digest the paper prints. */
@@ -54,11 +55,9 @@ function providerLabel(provider: string): string {
   return provider === "heuristic" ? "Kural tabanlı özet" : "Yapay zekâ özeti";
 }
 
-const DATE_FORMAT = new Intl.DateTimeFormat("tr-TR", {
-  day: "numeric",
-  month: "long",
-  year: "numeric",
-});
+/** The digest's day, in the zone the rest of the paper prints in. Built here
+ * with no `timeZone`, this line could name a different day from the article
+ * stamps directly beneath it. */
 
 /** "Today's Intelligence" -- two or three sentences about the shape of the
  * day, above the sections.
@@ -91,7 +90,9 @@ export function TodayIntelligence() {
   const body = firstSentences(digest.body);
   if (!body) return null;
 
-  const date = new Date(`${digest.date}T12:00:00Z`);
+  // The digest's own day. `formatDayTr` carries the midday anchor that used to
+  // be open-coded here, so the label cannot slide onto the previous day.
+  const dayLabel = formatDayTr(digest.date);
 
   return (
     <section aria-label="Today's Intelligence" className="flex flex-col gap-2">
@@ -108,7 +109,7 @@ export function TodayIntelligence() {
           {providerLabel(digest.provider)}
         </span>
         <span className="text-[10px] tabular-nums text-muted-foreground">
-          {Number.isNaN(date.getTime()) ? digest.date : DATE_FORMAT.format(date)}
+          {dayLabel ?? digest.date}
         </span>
       </div>
       {/* Typography carries this, not a card: it is the paper's opening

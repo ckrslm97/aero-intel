@@ -11,6 +11,7 @@ import { MotionItem, MotionList, MotionRail } from "@/components/motion/motion-l
 import { Collapse } from "@/components/ui/collapse";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiFetch } from "@/lib/api";
+import { formatDayMonthTr } from "@/lib/format";
 import { useChartTheme } from "@/lib/chart-theme";
 import { airlineTabs, worldRegions } from "@/lib/nav";
 import type { InsightsOut, RouteSignalArticle } from "@/lib/types";
@@ -58,9 +59,12 @@ const AIRLINE_COLOR: Record<string, string> = Object.fromEntries(
  * show and for the residue. */
 const NO_IDENTITY = "var(--category-general)";
 
+/** `published_at` is an INSTANT, and printing it at day precision in whatever
+ * zone the runtime happens to be in is how one signal lands on two different
+ * days: 21:30Z is the 30th in London and the 31st in Istanbul. Pinned, like
+ * every other wall-clock date on this site (lib/format.ts). */
 function formatSignalDate(iso: string | null): string | null {
-  if (!iso) return null;
-  return new Date(iso).toLocaleDateString("tr-TR", { day: "numeric", month: "short" });
+  return formatDayMonthTr(iso);
 }
 
 /** The lit-chip pattern shared with Gazete/Öneriler: a selected filter burns

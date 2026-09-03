@@ -19,6 +19,7 @@ import {
 import { Pagination } from "@/components/pagination";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDataSource } from "@/hooks/use-data-source";
+import { useNow } from "@/hooks/use-now";
 import { API_BASE_URL, apiFetch } from "@/lib/api";
 import {
   campaignFiltersToSearchParams,
@@ -118,10 +119,18 @@ export function CampaignsClient() {
   const [feedLimit, setFeedLimit] = useState(FEED_PAGE_SIZE);
   const [selected, setSelected] = useState<PromotionOut | null>(null);
 
-  // Read once per mount. Every countdown and every period filter is measured
-  // from this, so it has to be stable across renders -- a page that re-derived
-  // "today" per render could show two different day counts in one paint.
-  const [today] = useState(() => todayIso());
+  // Every countdown and every period filter is measured from this, so it has to
+  // be stable ACROSS RENDERS -- a page re-deriving "today" per render could show
+  // two different day counts in one paint. It must not be stable across the
+  // DAY, though, which is what `useState(() => todayIso())` made it: a tab left
+  // open through UTC midnight kept counting down to yesterday, one day
+  // optimistic on every deadline on the page, until somebody reloaded it.
+  //
+  // A minute's resolution on a value that changes once a day is deliberate
+  // slack: the boundary is crossed within a minute of it happening, and the
+  // page re-renders 1 440 times a day rather than 86 400.
+  const now = useNow();
+  const today = useMemo(() => todayIso(now ?? undefined), [now]);
 
   const replaceParams = useCallback(
     (params: URLSearchParams) => {

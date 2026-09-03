@@ -1,8 +1,17 @@
+"use client";
+
 import { MicroTrend, type MicroTrendTone } from "@/components/charts/micro-trend";
 import { YearDots } from "@/components/charts/year-dots";
 import { Delta } from "@/components/ui/delta";
 import { StatusPill, statusToneOf, type StatusTone } from "@/components/ui/status-pill";
-import { ANNUAL_KIND_SUFFIX, annualScopeLabel, freshnessOf } from "@/lib/cockpit";
+import { useNow } from "@/hooks/use-now";
+import {
+  ANNUAL_KIND_SUFFIX,
+  annualScopeLabel,
+  dailyCloseBadge,
+  type Freshness,
+  freshnessOf,
+} from "@/lib/cockpit";
 import { formatMetricValue, formatUtcTime } from "@/lib/format";
 import type {
   AnnualPoint,
@@ -20,12 +29,24 @@ import { cn } from "@/lib/utils";
  * * `annual` -- IATA's global industry series. Published twice a year, eight
  *   yearly points, industry-wide, with the current year a forecast. Drawn as
  *   discrete dots.
+ * * `daily`  -- a settled DAILY CLOSE. One reading per trading day, final once
+ *   published. A continuous line, like `live`, because the series is
+ *   continuous -- but never lit and never called "canlı".
  * * `live`   -- a Yahoo series the cron re-reads every ~15 minutes. Drawn as a
- *   continuous line.
+ *   continuous line, and the only cadence allowed to glow.
  *
- * A cell never mixes them, and the two blocks are separated by a hairline seam
- * so a reader sees the boundary before reading a single label. */
-export type Cadence = "annual" | "live";
+ * `daily` exists because Brent was being judged as `live`: the fuel cell ran
+ * the 30-minute FX window (one cron period plus a missed run) over a number
+ * that changes once a day, so it read "GECİKMELİ" from half an hour after the
+ * settlement until the next one -- almost the entire day, over a perfectly
+ * current close. Calling it "CANLI · 15dk" instead would have been the
+ * opposite lie. A settled close is neither; it has its own vocabulary, in
+ * `dailyCloseBadge` (lib/cockpit.ts).
+ *
+ * A cell never mixes them, and the annual block is separated from the rest by
+ * a hairline seam so a reader sees the boundary before reading a single
+ * label. */
+export type Cadence = "annual" | "daily" | "live";
 
 export interface PulseDelta {
   /** "25→26T", "1g", "1h" -- the window, printed next to the number. */
@@ -39,9 +60,27 @@ export interface PulseCell {
   key: string;
   label: string;
   cadence: Cadence;
-  /** "IATA 2026T" or "CANLI · 15dk". */
+  /** Whether THIS READING is currently live -- not whether the series is.
+   *
+   * These are different questions and the cell used to answer the second one
+   * in the first one's voice: the lamp and the value glow were keyed to
+   * `cadence`, which is a constant per cell, so a KUR cell whose badge read
+   * "GECİKMELİ · 40 sa" still rendered a lit `bg-signal` dot over a glowing
+   * number. Colour is the one channel this row reserves for liveness, so a lit
+   * lamp on a forty-hour-old reading is exactly the badge this change exists
+   * to delete, left standing where the words no longer say it.
+   *
+   * Derived from `freshnessOf(...).state === "live"`, so it is false with no
+   * clock yet (`pending`) as well as when the reading is late -- the same
+   * three-state caution the header band takes (cockpit-header.tsx). `false`
+   * for every `daily` and `annual` cell by construction: a settled close is
+   * not a live price. */
+  lit: boolean;
+  /** "IATA 2026T", "CANLI · 15 DK'DA BİR", "GÜNLÜK KAPANIŞ · dün". */
   badge: string;
-  /** UTC HH:MM, live cells only. */
+  /** HH:MM of the reading in UTC -- the cell prints "UTC" beside it, because
+   * the topbar clock two rows up is on İstanbul time and an unlabelled "19:50"
+   * next to it is three hours of silent error. */
   asOfLabel: string | null;
   /** null when the series behind the cell did not load at all. */
   value: string | null;
@@ -123,17 +162,40 @@ const ANNUAL_CELLS: { key: string; label: string }[] = [
   { key: "load_factor", label: "DOLULUK" },
 ];
 
+/** How often the FX cron re-reads the pair. Stated on the cell whether or not
+ * the reading is current, because it is a fact about the SERIES rather than a
+ * claim about this reading. */
+const FX_CADENCE_TR = "15 DK'DA BİR";
+
 /** A live cell's badge is EARNED, not printed.
  *
  * "CANLI" used to be a constant: the cell said it whether the reading was
  * fifteen minutes or two days old, while the page header three centimetres
  * above correctly said "Gecikmeli · son 16:50" off the same timestamps. One
  * screen, two answers to "is this current?". `freshnessOf` is the header's own
- * rule (30 minutes, i.e. one missed cron run) and now decides both. */
-function liveBadge(asOf: string | null | undefined, suffix: string, now?: Date): string {
-  if (!asOf) return "VERİ YOK";
-  const fresh = freshnessOf(asOf, now ?? new Date());
-  return fresh.live ? `CANLI${suffix}` : "GECİKMELİ";
+ * rule (30 minutes, i.e. one missed cron run) and now decides both.
+ *
+ * The two states this grew are both refusals to guess:
+ *
+ *   * with no client clock yet (`pending`) the badge names the CADENCE and
+ *     stops -- "15 DK'DA BİR" is true of the series no matter what time it is,
+ *     while "CANLI" would be exactly the pre-rendered, cached liveness claim
+ *     this whole change exists to delete;
+ *   * a late reading now says HOW late, the same way the header does. A bare
+ *     "GECİKMELİ" over a two-day-old rate and over a forty-minute-old one is
+ *     the same word for two very different numbers.
+ */
+function liveBadge(fresh: Freshness): string {
+  switch (fresh.state) {
+    case "missing":
+      return "VERİ YOK";
+    case "pending":
+      return FX_CADENCE_TR;
+    case "live":
+      return `CANLI · ${FX_CADENCE_TR}`;
+    case "stale":
+      return `GECİKMELİ · ${fresh.delayLabel}`;
+  }
 }
 
 function annualCell(
@@ -145,6 +207,8 @@ function annualCell(
     key,
     label,
     cadence: "annual" as const,
+    // An annual series is never live, whatever the clock says.
+    lit: false,
     // No YEAR in the fallback badge. It used to read "IATA 2026T" even when
     // the series had not loaded at all -- a cell printing "—" for its value
     // while asserting which edition the missing number came from.
@@ -202,7 +266,11 @@ export function buildPulseCells(
   board: KokpitFxBoardOut | null,
   energy: EnergyBoardOut | null,
   signals: CockpitSignal[] = [],
-  now?: Date,
+  /** The reader's clock, or `null` when there is not one yet. Defaulting to
+   * `new Date()` is what let a cached server render claim liveness minutes
+   * after the fact; defaulting to "no clock" costs a badge one frame and
+   * cannot lie. */
+  now: Date | null = null,
 ): PulseCell[] {
   const byKey = new Map((annual?.series ?? []).map((entry) => [entry.metric_key, entry]));
   const cells = ANNUAL_CELLS.map((spec) =>
@@ -229,11 +297,17 @@ export function buildPulseCells(
 
   // --- cell 4: the anchor rate -------------------------------------------
   const usdTry = (board?.pairs ?? []).find((pair) => pair.currency_pair === "USD/TRY");
+  // ONE freshness reading feeds both the badge and the lamp. Computed twice --
+  // or, as it was, computed for the badge and guessed from `cadence` for the
+  // lamp -- the two channels can and did disagree: "GECİKMELİ · 40 sa" under a
+  // lit dot.
+  const usdTryFreshness = freshnessOf(usdTry?.as_of, now);
   cells.push({
     key: "fx_usd_try",
     label: "KUR",
     cadence: "live",
-    badge: liveBadge(usdTry?.as_of, " · 15dk", now),
+    lit: usdTryFreshness.state === "live",
+    badge: liveBadge(usdTryFreshness),
     asOfLabel: formatUtcTime(usdTry?.as_of),
     // Four decimals for a cross where the fourth digit is the one that moves,
     // two for a TRY or JPY rate where it is not. The cut used to be typed here
@@ -271,8 +345,12 @@ export function buildPulseCells(
   cells.push({
     key: "oil_price",
     label: "YAKIT · BRENT",
-    cadence: "live",
-    badge: liveBadge(brent?.as_of, "", now),
+    cadence: "daily",
+    // Never. A settled close draws a continuous line but is not a live price,
+    // so it gets the line and not the colour.
+    lit: false,
+    // A settled daily close, in its own vocabulary -- see `Cadence` above.
+    badge: dailyCloseBadge(brent?.as_of, now),
     asOfLabel: formatUtcTime(brent?.as_of),
     value: brent?.value != null ? formatMetricValue(brent.value, brent.unit) : null,
     unit: brent?.unit ?? null,
@@ -303,7 +381,6 @@ export function buildPulseCells(
 }
 
 function Cell({ cell, seam }: { cell: PulseCell; seam: boolean }) {
-  const isLive = cell.cadence === "live";
   // `min-h` and `shrink-0` throughout, where this was a hard `h-[104px]` with
   // shrinkable children. The five slots below add up to more than 104px once
   // the annual cells' YearDots (20px of dots + its own year labels) is counted,
@@ -332,15 +409,27 @@ function Cell({ cell, seam }: { cell: PulseCell; seam: boolean }) {
           {cell.label}
         </span>
         <span className="ml-auto flex shrink-0 items-center gap-1 text-[10px] text-muted-foreground">
-          {isLive ? (
-            <span aria-hidden className="size-1 rounded-full bg-signal" />
-          ) : (
-            // A filled square, not a dot: the annual cells must not borrow the
-            // live cells' vocabulary. No glow here either -- glow means live.
-            <span aria-hidden className="size-1 bg-muted-foreground" />
-          )}
+          {/* Shape says CADENCE, colour says THIS READING. A round lamp is a
+              series that keeps flowing (15-minute FX, daily closes); a filled
+              square is a series published a couple of times a year. The two
+              are independent on purpose: the shape is a fact about the series
+              and never changes, the colour is a claim about the number printed
+              below it and goes out the moment that number is late -- or before
+              the first client tick, when there is no clock to judge it with. */}
+          <span
+            aria-hidden
+            className={cn(
+              "size-1",
+              cell.cadence !== "annual" && "rounded-full",
+              cell.lit ? "bg-signal" : "bg-muted-foreground",
+            )}
+          />
           {cell.badge}
-          {cell.asOfLabel && <span className="tabular-nums">{cell.asOfLabel}</span>}
+          {/* The zone is NAMED. This stamp is UTC while the topbar clock three
+              rows up is İstanbul, so a bare "19:50" beside a reader's 22:50 is
+              three hours of error with nothing on screen to catch it. The
+              header band and the FX rows say "UTC" for the same reason. */}
+          {cell.asOfLabel && <span className="tabular-nums">{cell.asOfLabel} UTC</span>}
         </span>
       </div>
 
@@ -348,8 +437,10 @@ function Cell({ cell, seam }: { cell: PulseCell; seam: boolean }) {
         <span
           className={cn(
             "text-[26px] font-semibold leading-none tracking-tight tabular-nums",
-            // Only a live reading is allowed to glow.
-            isLive && cell.value !== null && "dark:text-glow",
+            // Only a LIVE READING glows -- not merely a reading from a live
+            // series. This was keyed to the cadence, so a forty-hour-old rate
+            // glowed under its own "GECİKMELİ" badge.
+            cell.lit && cell.value !== null && "dark:text-glow",
             cell.value === null && "text-muted-foreground",
           )}
         >
@@ -433,7 +524,11 @@ export function MarketPulseRow({
    * emptying the row. */
   signals?: CockpitSignal[];
 }) {
-  const cells = buildPulseCells(annual, board, energy, signals);
+  // The reader's clock, not the pre-render's: this row is inside a page cached
+  // for `revalidate: 60`, so "CANLI" decided at build time is a claim about a
+  // moment that has already passed by the time anyone reads it.
+  const now = useNow();
+  const cells = buildPulseCells(annual, board, energy, signals, now);
   return (
     <div
       aria-label="Piyasa nabzı"

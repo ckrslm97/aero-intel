@@ -28,6 +28,7 @@ import {
   overlayFade,
   reduceVariants,
 } from "@/lib/motion";
+import { DISPLAY_TIME_ZONE_TR, formatDateTr, formatStampTr } from "@/lib/format";
 import { worldRegions } from "@/lib/nav";
 import { categoryVar, getCategory, getSubcategoryLabel } from "@/lib/taxonomy";
 import type { ArticleOut } from "@/lib/types";
@@ -54,10 +55,17 @@ const SENTIMENT_META: Record<
   },
 };
 
-const PUBLISHED_FORMAT = new Intl.DateTimeFormat("tr-TR", {
-  dateStyle: "long",
-  timeStyle: "short",
-});
+/** The publication stamp, in the SAME zone and with the same label as the card
+ * this drawer opens from (components/article-card.tsx).
+ *
+ * It was built here with no `timeZone` at all, so it followed the runtime while
+ * the card beside it was pinned to Europe/Istanbul: one `article.published_at`,
+ * printed two ways, three hours apart, on one screen -- and only one of the two
+ * said which clock it was on. */
+function publishedStamp(iso: string | null): string {
+  const stamp = formatStampTr(iso);
+  return stamp === null ? "Tarih bilinmiyor" : `${stamp} ${DISPLAY_TIME_ZONE_TR}`;
+}
 
 /** Confidence -> the pill's Turkish word.
  *
@@ -264,11 +272,7 @@ export function ArticleAnalysisDrawer({
                     {sourceTierLabelTr(article.source.tier)}
                   </span>
                   <span aria-hidden>·</span>
-                  <span>
-                    {article.published_at
-                      ? PUBLISHED_FORMAT.format(new Date(article.published_at))
-                      : "Tarih bilinmiyor"}
-                  </span>
+                  <span>{publishedStamp(article.published_at)}</span>
                   <span aria-hidden>·</span>
                   <span>{article.reading_time_minutes} dk okuma</span>
                 </p>
@@ -370,18 +374,7 @@ export function ArticleAnalysisDrawer({
                         same outlet filed both. It was a publisher id dressed
                         as a judgement, so it is gone; the intelligence block
                         below is what replaces it. */}
-                    <Metric
-                      label="Doğrulama"
-                      value={
-                        enrichment.verified_at
-                          ? new Date(enrichment.verified_at).toLocaleDateString("tr-TR", {
-                              day: "numeric",
-                              month: "short",
-                              year: "numeric",
-                            })
-                          : "—"
-                      }
-                    />
+                    <Metric label="Doğrulama" value={formatDateTr(enrichment.verified_at) ?? "—"} />
                   </div>
 
                   {sourcesFor === article.id && (

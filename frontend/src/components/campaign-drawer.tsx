@@ -25,6 +25,7 @@ import {
   formatChangeValue,
   sourceTierLabel,
 } from "@/lib/campaigns";
+import { formatDateTr } from "@/lib/format";
 import { drawerPanel, drawerStagger, fadeUpItem, overlayFade, reduceVariants } from "@/lib/motion";
 import { worldRegions } from "@/lib/nav";
 import {
@@ -56,15 +57,14 @@ const DETECTED_FORMAT = new Intl.DateTimeFormat("tr-TR", {
   timeStyle: "short",
 });
 
-const DAY_FORMAT = new Intl.DateTimeFormat("tr-TR", { dateStyle: "medium" });
-
-function formatDay(iso: string | null): string | null {
-  if (!iso) return null;
-  const at = new Date(`${iso.slice(0, 10)}T00:00:00Z`);
-  return Number.isNaN(at.getTime()) ? null : DAY_FORMAT.format(at);
-}
-
 /** A window the carrier stated SEPARATELY from the sale and travel ones.
+ *
+ * The dates go through `formatDateTr` (lib/format.ts). They used to go through
+ * a local formatter that anchored the date-only value at UTC MIDNIGHT and then
+ * formatted with no `timeZone`, so a ticketing period ending "2026-09-30"
+ * printed "29 Eyl 2026" for every reader west of Greenwich -- on the one row an
+ * analyst reads to decide whether a fare is still on sale. The shared helper
+ * anchors at MIDDAY, which no offset from UTC-11 to UTC+12 can move.
  *
  * Almost always empty, and that emptiness is the information: a filled
  * ticketing or campaign period means the carrier published one, never that we
@@ -72,8 +72,8 @@ function formatDay(iso: string | null): string | null {
  * least one edge exists -- an always-present "Belirtilmedi" here would be two
  * more lines of nothing in a panel whose job is the four dates above it. */
 function statedRange(start: string | null, end: string | null): string | null {
-  const from = formatDay(start);
-  const to = formatDay(end);
+  const from = formatDateTr(start);
+  const to = formatDateTr(end);
   if (!from && !to) return null;
   if (from && to) return `${from} → ${to}`;
   return from ? `${from} → belirtilmedi` : `belirtilmedi → ${to}`;
@@ -513,7 +513,11 @@ export function CampaignDrawer({
                     <li key={version.version_no} className="flex flex-col gap-1">
                       <span className="flex items-center gap-1.5 text-[10px] font-medium tabular-nums text-muted-foreground">
                         <CalendarClock className="size-3" aria-hidden />
-                        {DAY_FORMAT.format(new Date(version.created_at))}
+                        {/* A record timestamp like the four above it, so it
+                            follows the same rule and names the same clock --
+                            it was the one stamp in this panel formatted in the
+                            reader's own zone, and unlabelled. */}
+                        {`${DETECTED_FORMAT.format(new Date(version.created_at))} UTC`}
                         <span className="rounded-full bg-muted px-1.5 text-[10px]">
                           v{version.version_no}
                         </span>

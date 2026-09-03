@@ -21,6 +21,7 @@ import { CountUp } from "@/components/motion/count-up";
 import { MotionItem, MotionList } from "@/components/motion/motion-list";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiFetch } from "@/lib/api";
+import { formatDateTr } from "@/lib/format";
 import type { ArticleListOut, ArticleOut } from "@/lib/types";
 import { digestParagraphs, digestSpans } from "@/lib/digest";
 import { cn } from "@/lib/utils";
@@ -87,13 +88,10 @@ function formatTimestamp(iso: string): string {
   return COLLECTED_STAMP.format(new Date(iso));
 }
 
+/** A date-only value, via the shared formatter: same midday anchor this used
+ * to open-code, plus the zone pin it did not have. */
 function formatDate(iso: string | null): string | null {
-  if (!iso) return null;
-  return new Date(iso + "T12:00:00Z").toLocaleDateString("tr-TR", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-  });
+  return formatDateTr(iso);
 }
 
 /** A bar that draws itself to its real width once, on mount, and then holds.

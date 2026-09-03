@@ -12,7 +12,7 @@ import {
   useChartTheme,
   valueAxis,
 } from "@/lib/chart-theme";
-import { formatMetricValue } from "@/lib/format";
+import { DISPLAY_TIME_ZONE, formatMetricValue } from "@/lib/format";
 import type { KpiHistoryPointOut, KpiPeriod } from "@/lib/types";
 
 interface KpiDetailChartProps {
@@ -46,7 +46,11 @@ export function KpiDetailChart({ history, period, unit, metricKey }: KpiDetailCh
   const option = useMemo(() => {
     const base = baseOption(theme, reduceMotion);
 
-    const dateFormat = DATE_FORMAT_BY_PERIOD[period];
+    // The zone is PINNED, and to the same zone the table under this chart
+    // prints (lib/format.ts). Left unpinned it followed the runtime, so the
+    // 11:32 UTC reading the history table names sat under a "14:00" bar on the
+    // 1w axis three centimetres above it -- one reading, two clocks, one page.
+    const dateFormat = { timeZone: DISPLAY_TIME_ZONE, ...DATE_FORMAT_BY_PERIOD[period] };
     const labels = history.map((p) =>
       new Date(p.as_of).toLocaleString("tr-TR", dateFormat),
     );

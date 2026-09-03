@@ -6,7 +6,13 @@ import { useEffect, useState } from "react";
 import { KpiDetailChart } from "@/components/charts/kpi-detail-chart";
 import { Badge } from "@/components/ui/badge";
 import { API_BASE_URL, apiFetch } from "@/lib/api";
-import { formatMetricValue, kpiDeltaLabel } from "@/lib/format";
+import {
+  DISPLAY_TIME_ZONE_TR,
+  formatMetricValue,
+  formatShortDateTr,
+  formatStampTr,
+  kpiDeltaLabel,
+} from "@/lib/format";
 import { KPI_ICONS } from "@/lib/kpi-icons";
 import type { KpiDetailOut, KpiPeriod } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -154,19 +160,20 @@ export function KpiDetailClient({ metricKey }: { metricKey: string }) {
               )}
             </div>
           )}
+          {/* The zone is PINNED and then stated. Formatted with no `timeZone`,
+              this stamp read three hours apart from the same reading on
+              /gazete, because one surface was rendered on a UTC node and the
+              other in the reader's browser -- and "itibarıyla" over a time
+              whose clock is unnamed is a measurement a reader cannot place. */}
           <p className="text-xs text-muted-foreground">
-            {new Date(detail.as_of).toLocaleString("tr-TR", {
-              dateStyle: "medium",
-              timeStyle: "short",
-            })}{" "}
-            itibarıyla
+            {formatStampTr(detail.as_of) ?? "Tarih bilinmiyor"} {DISPLAY_TIME_ZONE_TR} itibarıyla
           </p>
         </div>
 
         {detail.corroborations.length > 0 && (
           <div className="flex flex-col gap-1.5 text-sm">
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Çapraz doğrulama kaynakları
+              Çapraz doğrulama kaynakları ({DISPLAY_TIME_ZONE_TR})
             </p>
             {detail.corroborations.map((c) => (
               <div key={c.source} className="flex items-center gap-2">
@@ -206,10 +213,7 @@ export function KpiDetailClient({ metricKey }: { metricKey: string }) {
                 {/* The second reading's own timestamp. Without it a refused
                     comparison ("Karşılaştırılamaz") is unanswerable. */}
                 <span className="text-xs text-muted-foreground">
-                  {new Date(c.as_of).toLocaleString("tr-TR", {
-                    dateStyle: "short",
-                    timeStyle: "short",
-                  })}
+                  {formatShortDateTr(c.as_of) ?? "—"}
                 </span>
               </div>
             ))}
@@ -282,7 +286,8 @@ export function KpiDetailClient({ metricKey }: { metricKey: string }) {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                  <th className="px-2 py-2 font-semibold">Tarih</th>
+                  {/* One zone, named once, for the whole column. */}
+                  <th className="px-2 py-2 font-semibold">Tarih ({DISPLAY_TIME_ZONE_TR})</th>
                   <th className="px-2 py-2 font-semibold">Değer</th>
                   <th className="px-2 py-2 font-semibold">Kaynak</th>
                 </tr>
@@ -291,10 +296,7 @@ export function KpiDetailClient({ metricKey }: { metricKey: string }) {
                 {historyNewestFirst.map((point) => (
                   <tr key={point.as_of}>
                     <td className="px-2 py-2 text-muted-foreground">
-                      {new Date(point.as_of).toLocaleString("tr-TR", {
-                        dateStyle: "medium",
-                        timeStyle: "short",
-                      })}
+                      {formatStampTr(point.as_of) ?? "—"}
                     </td>
                     <td className="px-2 py-2 font-medium">
                       {formatMetricValue(point.value, detail.unit, detail.metric_key)}

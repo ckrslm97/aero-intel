@@ -52,7 +52,12 @@ const forecast = (overrides: Partial<FxForecastOut> = {}): FxForecastOut => ({
   ...overrides,
 });
 
-const NOW = new Date("2026-09-01T00:00:00Z").getTime();
+/** Two days after every fixture reading, so a row's staleness mark is earned
+ * rather than assumed. `NOW` is the milliseconds form `nearestForecast` takes;
+ * `NOW_AT` is the Date `buildFxRows` takes, and they are the same instant --
+ * one clock per test file, or the assertions stop being about one page. */
+const NOW_AT = new Date("2026-09-01T00:00:00Z");
+const NOW = NOW_AT.getTime();
 
 const ALL_PAIRS = [
   pair("USD/TRY", 48.2505),
@@ -66,7 +71,7 @@ const ALL_PAIRS = [
 
 describe("buildFxRows", () => {
   it("keeps the owner's pairs in the owner's order, the peg last", () => {
-    const rows = buildFxRows(board(ALL_PAIRS), [], NOW);
+    const rows = buildFxRows(board(ALL_PAIRS), [], NOW_AT);
     expect(rows.map((row) => row.pair)).toEqual([
       "USD/TRY",
       "EUR/TRY",
@@ -82,7 +87,7 @@ describe("buildFxRows", () => {
     // own /kpi detail pages; they are simply not on the executive board. On
     // the running page GBP/USD was a row of dashes end to end, under a 9px
     // divider that measured 2,39:1 on the light surface.
-    const rows = buildFxRows(board(ALL_PAIRS), [], NOW).map((row) => row.pair);
+    const rows = buildFxRows(board(ALL_PAIRS), [], NOW_AT).map((row) => row.pair);
     expect(rows).not.toContain("GBP/USD");
     expect(rows).not.toContain("EUR/GBP");
   });
@@ -91,16 +96,16 @@ describe("buildFxRows", () => {
     // This is what lets the frontend ship ahead of the ingest change: the row
     // appears the day the first reading lands, and until then the table does
     // not claim to be watching a pair it has no reading for.
-    expect(buildFxRows(board(ALL_PAIRS), [], NOW).some((row) => row.pair === "GBP/TRY")).toBe(false);
+    expect(buildFxRows(board(ALL_PAIRS), [], NOW_AT).some((row) => row.pair === "GBP/TRY")).toBe(false);
 
-    const withGbpTry = buildFxRows(board([...ALL_PAIRS, pair("GBP/TRY", 65.2307)]), [], NOW);
+    const withGbpTry = buildFxRows(board([...ALL_PAIRS, pair("GBP/TRY", 65.2307)]), [], NOW_AT);
     expect(withGbpTry.map((row) => row.pair)).toContain("GBP/TRY");
     // And it lands in the owner's slot, fourth, not appended at the end.
     expect(withGbpTry.findIndex((row) => row.pair === "GBP/TRY")).toBe(3);
   });
 
   it("uses four decimals for a cross and two for a TRY or JPY rate", () => {
-    const rows = new Map(buildFxRows(board(ALL_PAIRS), [], NOW).map((row) => [row.pair, row]));
+    const rows = new Map(buildFxRows(board(ALL_PAIRS), [], NOW_AT).map((row) => [row.pair, row]));
     expect(rows.get("USD/TRY")?.value).toBe("48,25");
     expect(rows.get("USD/JPY")?.value).toBe("147,20");
     expect(rows.get("EUR/USD")?.value).toBe("1,0842");
@@ -118,7 +123,7 @@ describe("buildFxRows", () => {
           forecast({ currency_pair: "EUR/USD", value: 1.12, institution: "JPMorgan" }),
           forecast({ currency_pair: "USD/TRY", value: 52 }),
         ],
-        NOW,
+        NOW_AT,
       ).map((row) => [row.pair, row]),
     );
     expect(rows.get("EUR/USD")?.value).toBe("1,0842");
@@ -128,7 +133,7 @@ describe("buildFxRows", () => {
   });
 
   it("gives the peg a badge and no deltas, trend or history page", () => {
-    const peg = buildFxRows(board([]), [], NOW).find((row) => row.pair === "USD/SAR");
+    const peg = buildFxRows(board([]), [], NOW_AT).find((row) => row.pair === "USD/SAR");
     // The badge is the backend's own string -- never one this component wrote.
     expect(peg?.pegLabel).toBe("Sabit · 3,75 (SAMA)");
     expect(peg?.dayPct).toBeNull();
@@ -137,10 +142,44 @@ describe("buildFxRows", () => {
     expect(peg?.metricKey).toBeNull();
   });
 
+  it("marks a stale row on the ROW, not only in the page header", () => {
+    // The header carries one badge for the whole board and it now describes the
+    // OLDEST reading (`oldestAsOf`), which is the only thing one badge can
+    // honestly say about seven pairs -- but "the worst row is two days behind"
+    // still does not say WHICH row. One pair's cron failing while the rest
+    // succeed is the normal shape of this outage, and every row was drawn
+    // identically.
+    const rows = new Map(
+      buildFxRows(
+        board([pair("USD/TRY", 48.2505), pair("EUR/TRY", 56.41, { as_of: "2026-09-01T00:00:00Z" })]),
+        [],
+        NOW_AT,
+      ).map((row) => [row.pair, row]),
+    );
+    expect(rows.get("USD/TRY")?.delayLabel).toBe("28 sa");
+    // The pair whose reading IS current carries no mark -- the mark has to mean
+    // something, so it cannot be on every row.
+    expect(rows.get("EUR/TRY")?.delayLabel).toBeNull();
+    // A rate that has not moved since 1986 cannot be late.
+    expect(rows.get("USD/SAR")?.delayLabel).toBeNull();
+  });
+
+  it("marks nothing at all before the reader's clock has ticked", () => {
+    // An unjudged row is drawn as an unjudged row. The opposite default --
+    // judging against the render's own clock -- is exactly what let a cached
+    // pre-render vouch for readings it had never seen.
+    const rows = buildFxRows(board(ALL_PAIRS), [], null);
+    expect(rows.every((row) => row.delayLabel === null)).toBe(true);
+    // ...and the readings themselves are still there. The table goes quiet
+    // about freshness, not about the data.
+    expect(rows[0].value).toBe("48,25");
+    expect(rows[0].asOfLabel).toBe("19:50");
+  });
+
   it("keeps a row with no published forecast, dashed rather than hidden", () => {
     // The row's presence says "we watch this pair"; the dash says "nobody has
     // published a target". Hiding it would conceal both facts at once.
-    const rows = buildFxRows(board(ALL_PAIRS), [forecast()], NOW);
+    const rows = buildFxRows(board(ALL_PAIRS), [forecast()], NOW_AT);
     expect(rows.find((row) => row.pair === "USD/TRY")?.forecast).not.toBeNull();
     expect(rows.find((row) => row.pair === "USD/JPY")?.forecast).toBeNull();
   });
@@ -241,12 +280,39 @@ describe("nearestForecast", () => {
 });
 
 describe("FxBoardTable", () => {
+  it("draws a late row muted and says how late it is", () => {
+    // FROZEN, like every other assertion in this file. `FxBoardTable` reads its
+    // clock from `useNow`, i.e. from `Date.now()`, so left alone this test was
+    // measured against the machine's own date -- it passed only because that
+    // date happens to be past the fixture's, and on a box whose clock sits
+    // before 2026-08-30T20:20Z the row is not late at all and both assertions
+    // below flip. One clock per test file, or the assertions stop being about
+    // one page.
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW_AT);
+    try {
+      render(<FxBoardTable board={board([pair("USD/TRY", 48.2505)])} forecasts={[]} />);
+      // The fixture reading is dated 2026-08-30 against a 2026-09-01 clock, so
+      // this row is genuinely, enormously late -- the case that used to render
+      // identically to a row read a minute ago. The mark is found by the
+      // tooltip it carries, which names the row's OWN reading rather than the
+      // board's: the whole point of moving this out of the page header.
+      const mark = screen.getByTitle("Bu paritenin son okuması 19:50 UTC");
+      expect(mark).toHaveTextContent(/gecikmeli$/);
+      // And the value it sits next to is muted, so the row reads as doubtful at
+      // a glance rather than only on inspection.
+      expect(screen.getByText("48,25")).toHaveClass("text-muted-foreground");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("carries each row's own reading time in its tooltip", () => {
     // `asOfLabel` was computed for every row and then rendered nowhere, so the
     // nine rows shared one collective freshness stamp in the page header and a
     // pair whose cron run had failed looked exactly as current as one whose
     // had not.
-    const rows = buildFxRows(board(ALL_PAIRS), [], NOW);
+    const rows = buildFxRows(board(ALL_PAIRS), [], NOW_AT);
     expect(rows[0].title).toContain("19:50 UTC");
   });
 
