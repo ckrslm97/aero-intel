@@ -22,6 +22,7 @@ import { MotionItem, MotionList } from "@/components/motion/motion-list";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiFetch } from "@/lib/api";
 import type { ArticleListOut, ArticleOut } from "@/lib/types";
+import { digestParagraphs, digestSpans } from "@/lib/digest";
 import { cn } from "@/lib/utils";
 
 const THY_RED = "#c70a20";
@@ -356,9 +357,21 @@ export function BizClient() {
             </span>
             <span className="text-[10px] text-muted-foreground">{data.digest.date}</span>
           </div>
-          <p className="whitespace-pre-line text-sm leading-relaxed text-muted-foreground">
-            {data.digest.body}
-          </p>
+          <div className="flex flex-col gap-2 text-sm leading-relaxed text-muted-foreground">
+            {digestParagraphs(data.digest.body).map((paragraph, index) => (
+              <p key={index}>
+                {digestSpans(paragraph).map((span, spanIndex) =>
+                  span.strong ? (
+                    <strong key={spanIndex} className="font-semibold text-foreground">
+                      {span.text}
+                    </strong>
+                  ) : (
+                    <span key={spanIndex}>{span.text}</span>
+                  ),
+                )}
+              </p>
+            ))}
+          </div>
         </div>
       )}
 
