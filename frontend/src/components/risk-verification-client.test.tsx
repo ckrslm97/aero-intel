@@ -163,7 +163,9 @@ describe("RiskVerificationClient", () => {
     render(<RiskVerificationClient />);
 
     await screen.findByText("Ukraine strikes Russian pipeline station");
-    await userEvent.click(screen.getByRole("button", { name: "14g" }));
+    // "14g" is what the chip PRINTS; "Son 14 gün" is what it is called.
+    // The two-character label is a space constraint, not a name.
+    await userEvent.click(screen.getByRole("button", { name: "Son 14 gün" }));
 
     await waitFor(() => expect(requested.at(-1)).toContain("days=14"));
     expect(apiFetch).toHaveBeenCalledWith(
@@ -190,7 +192,7 @@ describe("RiskVerificationClient", () => {
       expect.anything(),
     );
     expect(requested.every((path) => path.includes("days=30"))).toBe(true);
-    expect(screen.getByRole("button", { name: "30g" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Son 30 gün" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
@@ -222,7 +224,11 @@ describe("RiskVerificationClient", () => {
     await waitFor(() =>
       expect(requested.at(-1)).not.toContain("reason=uydurma_sebep"),
     );
-    expect(screen.getByRole("button", { name: "Tümü" })).toHaveAttribute(
+    // Named by the axis it clears, not by the one word it prints -- this page
+    // has a second chip row whose "Tümü" would otherwise be indistinguishable.
+    expect(
+      screen.getByRole("button", { name: "Tüm elenme nedenleri" }),
+    ).toHaveAttribute(
       "aria-pressed",
       "true",
     );

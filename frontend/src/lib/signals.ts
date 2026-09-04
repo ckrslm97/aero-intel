@@ -6,6 +6,7 @@
  * a severity was arrived at. Nothing in this file re-derives a severity, and
  * nothing invents one for a stream that has none.
  */
+import { SEVERITY_LADDER } from "@/lib/severity";
 import type { SignalKind, SignalOut, SignalSeverity } from "@/lib/types";
 
 /** Display order for the kind chips. Risk and Rakip first because they are the
@@ -30,49 +31,21 @@ export const SEVERITY_ORDER: readonly SignalSeverity[] = [
 
 /** Severity -> how loudly the card is drawn.
  *
+ * DERIVED, not declared. The rungs, their labels, their hues and the rule that
+ * `unknown` is neutral rather than green all live in lib/severity.ts, which is
+ * the app's single severity ladder. This alias stays because it is the name
+ * the Sinyaller components already import; what it must never become again is
+ * a SECOND table that can drift from the first one (it was one of six, and the
+ * six disagreed -- see the note at the top of lib/severity.ts).
+ *
  * Only the top three take a hue. A list where every row is coloured tells a
  * reader nothing about which one to read first -- the same rule
- * kokpit/alert-center.tsx and campaign-alert-strip.tsx already set, kept here
- * rather than re-decided.
- *
- * `unknown` is deliberately neutral rather than green: a signal whose driver
- * could not be read must not look like an all-clear.
+ * kokpit/alert-center.tsx and campaign-alert-strip.tsx already set.
  */
 export const SEVERITY_STYLES: Record<
   SignalSeverity,
   { pill: string; dot: string; text: string; glowVar: string }
-> = {
-  critical: {
-    pill: "bg-critical/12 text-critical ring-1 ring-critical/35",
-    dot: "bg-critical",
-    text: "text-critical",
-    glowVar: "var(--critical)",
-  },
-  high: {
-    pill: "bg-warning/12 text-warning ring-1 ring-warning/35",
-    dot: "bg-warning",
-    text: "text-warning",
-    glowVar: "var(--warning)",
-  },
-  medium: {
-    pill: "bg-signal/10 text-signal ring-1 ring-signal/30",
-    dot: "bg-signal",
-    text: "text-signal",
-    glowVar: "var(--signal)",
-  },
-  low: {
-    pill: "bg-muted text-muted-foreground ring-1 ring-border",
-    dot: "bg-muted-foreground",
-    text: "text-muted-foreground",
-    glowVar: "var(--muted-foreground)",
-  },
-  unknown: {
-    pill: "bg-muted text-muted-foreground ring-1 ring-border",
-    dot: "bg-muted-foreground",
-    text: "text-muted-foreground",
-    glowVar: "var(--muted-foreground)",
-  },
-};
+> = SEVERITY_LADDER;
 
 export function severityStyle(severity: string) {
   return SEVERITY_STYLES[severity as SignalSeverity] ?? SEVERITY_STYLES.unknown;

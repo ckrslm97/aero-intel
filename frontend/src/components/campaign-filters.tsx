@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 
 import { AirlineLogo } from "@/components/airline-logo";
 import { Collapse } from "@/components/ui/collapse";
+import { FilterChip, FilterChipGroup } from "@/components/ui/filter-chip";
 import {
   CAMPAIGN_PERIOD_LABELS_TR,
   CAMPAIGN_PERIODS,
@@ -30,17 +31,6 @@ import {
 } from "@/lib/taxonomy.gen";
 import type { PromotionOut } from "@/lib/types";
 import { cn } from "@/lib/utils";
-
-/** The lit-chip pattern shared with Gazete / Öneriler / Risk Radarı. No new
- * token, no new hue: the chrome stays neutral so the only saturated things on
- * this page are the status pills that earn it. */
-const chip = (active: boolean) =>
-  cn(
-    "flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
-    active
-      ? "bg-primary/12 text-primary ring-1 ring-primary/40"
-      : "border border-border text-muted-foreground hover:bg-accent",
-  );
 
 /** Which dimensions live in the collapsed panel. Seven filter rows on screen
  * at once is a control surface, not a page: the owner's brief asks for three
@@ -68,14 +58,18 @@ function extendedCount(filters: CampaignFilters): number {
   ).length;
 }
 
+/** One labelled filter axis.
+ *
+ * A thin wrapper over `FilterChipGroup` rather than a div and a span: the
+ * `role="group"` + `aria-labelledby` pairing is what tells a screen reader
+ * that these eleven chips are the REGION axis. This panel stacks up to nine
+ * such rows, and without the pairing they read as nine undifferentiated lists
+ * of nouns -- with nine buttons in them all called "Tümü". */
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex flex-wrap items-center gap-1">
-      <span className="w-[5.5rem] shrink-0 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-        {label}
-      </span>
+    <FilterChipGroup label={label} className="gap-1" labelClassName="w-[5.5rem]">
       {children}
-    </div>
+    </FilterChipGroup>
   );
 }
 
@@ -146,18 +140,21 @@ export function CampaignFilterBar({
     label: string,
   ) => (
     <Row label={label}>
-      <button type="button" onClick={() => clear(key)} className={chip(!filters[key])}>
+      <FilterChip
+        active={!filters[key]}
+        onClick={() => clear(key)}
+        label={`Tüm ${label.toLocaleLowerCase("tr-TR")}leri`}
+      >
         Tümü
-      </button>
+      </FilterChip>
       {CAMPAIGN_PERIODS.map((period) => (
-        <button
+        <FilterChip
           key={period}
-          type="button"
+          active={filters[key] === period}
           onClick={() => toggle(key, period as CampaignPeriod)}
-          className={chip(filters[key] === period)}
         >
           {CAMPAIGN_PERIOD_LABELS_TR[period]}
-        </button>
+        </FilterChip>
       ))}
     </Row>
   );
@@ -183,72 +180,69 @@ export function CampaignFilterBar({
 
       {carriers.length > 0 && (
         <Row label="Taşıyıcı">
-          <button
-            type="button"
+          <FilterChip
+            active={!filters.airline}
             onClick={() => clear("airline")}
-            className={chip(!filters.airline)}
+            label="Tüm taşıyıcılar"
           >
             Tümü
-          </button>
+          </FilterChip>
           {carriers.map((carrier) => (
-            <button
+            <FilterChip
               key={carrier.code}
-              type="button"
-              title={carrier.name}
+              active={filters.airline === carrier.code}
               onClick={() => toggle("airline", carrier.code)}
-              className={chip(filters.airline === carrier.code)}
+              title={carrier.name}
             >
               <AirlineLogo code={carrier.code} name={carrier.name} className="size-3" />
               {carrier.code}
               <span className="tabular-nums opacity-70">{counts.airline[carrier.code]}</span>
-            </button>
+            </FilterChip>
           ))}
         </Row>
       )}
 
       {kinds.length > 0 && (
         <Row label="Tür">
-          <button
-            type="button"
+          <FilterChip
+            active={!filters.campaignKind}
             onClick={() => clear("campaignKind")}
-            className={chip(!filters.campaignKind)}
+            label="Tüm kampanya türleri"
           >
             Tümü
-          </button>
+          </FilterChip>
           {kinds.map((kind) => (
-            <button
+            <FilterChip
               key={kind}
-              type="button"
+              active={filters.campaignKind === kind}
               onClick={() => toggle("campaignKind", kind)}
-              className={chip(filters.campaignKind === kind)}
             >
               {CAMPAIGN_KIND_LABELS_TR[kind]}
               <span className="tabular-nums opacity-70">{counts.kind[kind]}</span>
-            </button>
+            </FilterChip>
           ))}
         </Row>
       )}
 
       {statuses.length > 0 && (
         <Row label="Durum">
-          <button
-            type="button"
+          <FilterChip
+            active={!filters.status}
             onClick={() => clear("status")}
-            className={chip(!filters.status)}
+            label="Tüm durumlar"
           >
             Tümü
-          </button>
+          </FilterChip>
           {statuses.map((status) => (
-            <button
+            <FilterChip
               key={status}
-              type="button"
-              title={campaignStatusStyle(status).label}
+              active={filters.status === status}
               onClick={() => toggle("status", status)}
-              className={chip(filters.status === status)}
+              title={campaignStatusStyle(status).label}
             >
               {campaignStatusStyle(status).short}
               <span className="tabular-nums opacity-70">{counts.status[status]}</span>
-            </button>
+            </FilterChip>
           ))}
         </Row>
       )}
@@ -273,92 +267,88 @@ export function CampaignFilterBar({
         <div className="flex flex-col gap-1.5 border-t border-border pt-2">
           {countries.length > 0 && (
             <Row label="Ülke">
-              <button
-                type="button"
+              <FilterChip
+                active={!filters.country}
                 onClick={() => clear("country")}
-                className={chip(!filters.country)}
+                label="Tüm ülkeler"
               >
                 Tümü
-              </button>
+              </FilterChip>
               {countries.map((country) => (
-                <button
+                <FilterChip
                   key={country}
-                  type="button"
+                  active={filters.country === country}
                   onClick={() => toggle("country", country)}
-                  className={chip(filters.country === country)}
                 >
                   {country}
                   <span className="tabular-nums opacity-70">{counts.country[country]}</span>
-                </button>
+                </FilterChip>
               ))}
             </Row>
           )}
 
           {regions.length > 0 && (
             <Row label="Bölge">
-              <button
-                type="button"
+              <FilterChip
+                active={!filters.region}
                 onClick={() => clear("region")}
-                className={chip(!filters.region)}
+                label="Tüm bölgeler"
               >
                 Tümü
-              </button>
+              </FilterChip>
               {regions.map((region) => (
-                <button
+                <FilterChip
                   key={region.slug}
-                  type="button"
+                  active={filters.region === region.slug}
                   onClick={() => toggle("region", region.slug)}
-                  className={chip(filters.region === region.slug)}
                 >
                   {region.name}
                   <span className="tabular-nums opacity-70">{counts.region[region.slug]}</span>
-                </button>
+                </FilterChip>
               ))}
             </Row>
           )}
 
           {scopes.length > 0 && (
             <Row label="Rota">
-              <button
-                type="button"
+              <FilterChip
+                active={!filters.routeScope}
                 onClick={() => clear("routeScope")}
-                className={chip(!filters.routeScope)}
+                label="Tüm rota kapsamları"
               >
                 Tümü
-              </button>
+              </FilterChip>
               {scopes.map((scope) => (
-                <button
+                <FilterChip
                   key={scope}
-                  type="button"
+                  active={filters.routeScope === scope}
                   onClick={() => toggle("routeScope", scope)}
-                  className={chip(filters.routeScope === scope)}
                 >
                   {ROUTE_SCOPE_LABELS_TR[scope]}
                   <span className="tabular-nums opacity-70">{counts.scope[scope]}</span>
-                </button>
+                </FilterChip>
               ))}
             </Row>
           )}
 
           {types.length > 0 && (
             <Row label="Kampanya türü">
-              <button
-                type="button"
+              <FilterChip
+                active={!filters.campaignType}
                 onClick={() => clear("campaignType")}
-                className={chip(!filters.campaignType)}
+                label="Tüm kampanya tipleri"
               >
                 Tümü
-              </button>
+              </FilterChip>
               {types.map((type) => (
-                <button
+                <FilterChip
                   key={type}
-                  type="button"
+                  active={filters.campaignType === type}
                   onClick={() => toggle("campaignType", type)}
-                  className={chip(filters.campaignType === type)}
                 >
                   {CAMPAIGN_TYPE_LABELS_TR[type as CampaignType]}
                   <span className="tabular-nums opacity-70">{counts.type[type]}</span>
-                </button>
+                </FilterChip>
               ))}
             </Row>
           )}
@@ -368,38 +358,36 @@ export function CampaignFilterBar({
 
           {(bands.length > 0 || counts.review > 0) && (
             <Row label="Güven">
-              <button
-                type="button"
+              <FilterChip
+                active={!filters.band}
                 onClick={() => clear("band")}
-                className={chip(!filters.band)}
+                label="Tüm güven bantları"
               >
                 Tümü
-              </button>
+              </FilterChip>
               {bands.map((band) => (
-                <button
+                <FilterChip
                   key={band}
-                  type="button"
+                  active={filters.band === band}
                   onClick={() => toggle("band", band)}
-                  className={chip(filters.band === band)}
                 >
                   {confidenceBandLabel(band)}
                   <span className="tabular-nums opacity-70">{counts.band[band]}</span>
-                </button>
+                </FilterChip>
               ))}
               {counts.review > 0 && (
-                <button
-                  type="button"
-                  aria-pressed={filters.reviewOnly}
+                <FilterChip
+                  active={filters.reviewOnly}
                   onClick={() => onChange({ ...filters, reviewOnly: !filters.reviewOnly })}
                   title="Güven eşiğinin altında kalan, insan incelemesi bekleyen kayıtlar"
-                  className={cn(
-                    chip(filters.reviewOnly),
-                    !filters.reviewOnly && "border-warning/40 text-warning",
-                  )}
+                  // Unlit, this chip is amber rather than the row's neutral
+                  // grey: it is the only chip here that names a data-quality
+                  // problem, and it has to be findable before it is pressed.
+                  className={cn(!filters.reviewOnly && "border-warning/40 text-warning")}
                 >
                   İnceleme gerekli
                   <span className="tabular-nums opacity-70">{counts.review}</span>
-                </button>
+                </FilterChip>
               )}
             </Row>
           )}

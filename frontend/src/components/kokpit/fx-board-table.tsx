@@ -343,12 +343,30 @@ export function FxBoardTable({
           )}
         </DenseTd>
         {row.pegLabel ? (
-          // The badge takes the three columns the peg has nothing to put in.
-          <DenseTd colSpan={3} className="hidden sm:table-cell">
-            <span className="rounded-full bg-secondary px-1.5 py-px text-[10px] font-medium text-secondary-foreground">
-              {row.pegLabel}
-            </span>
-          </DenseTd>
+          // THREE CELLS, carrying the THREE VISIBILITY CLASSES of the three
+          // cells they stand in for -- not one `colSpan={3}`.
+          //
+          // A `display:none` cell is removed from the table's column grid
+          // entirely, so the grid is four columns wide below `sm` and five
+          // below `lg`. The peg row used to claim 1 + 1 + 3 + 1 = six slots
+          // regardless, so on every viewport under `lg` its "Tahmin" cell was
+          // pushed out past the last real column and the badge landed under
+          // the "1G" heading. Matching the normal row's visibility cell for
+          // cell is the only version that lines up at every breakpoint, and it
+          // is testable: the peg row and a normal row must produce the same
+          // number of VISIBLE cells.
+          <>
+            <DenseTd>
+              <span className="rounded-full bg-secondary px-1.5 py-px text-[10px] font-medium text-secondary-foreground">
+                {row.pegLabel}
+              </span>
+            </DenseTd>
+            {/* The peg has no day delta, no week delta and no trend, and says
+                so by being empty rather than by printing a dash it would have
+                had to invent. The badge above already carries the reason. */}
+            <DenseTd className="hidden sm:table-cell" />
+            <DenseTd className="hidden lg:table-cell" />
+          </>
         ) : (
           <>
             <DenseTd>

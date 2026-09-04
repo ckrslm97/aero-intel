@@ -13,7 +13,7 @@ import {
   TypePill,
   UntranslatedTag,
 } from "@/components/risk/risk-meta";
-import { SeverityPill } from "@/components/risk/severity-pill";
+import { SeverityPill } from "@/components/ui/severity-pill";
 import { worldRegions } from "@/lib/nav";
 import { headlinePresentation, partitionByVisibility } from "@/lib/risk";
 import type { RiskCountry, RiskItem } from "@/lib/types";

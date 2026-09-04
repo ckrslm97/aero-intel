@@ -18,7 +18,7 @@ import {
   TYPE_ORDER,
 } from "@/components/risk/risk-meta";
 import { RiskTrendChart } from "@/components/risk/risk-trend-chart-lazy";
-import { severityMeta } from "@/components/risk/severity-pill";
+import { FilterChip, FilterChipGroup } from "@/components/ui/filter-chip";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDataSource } from "@/hooks/use-data-source";
@@ -32,8 +32,15 @@ import {
   UNKNOWN_COUNTRY,
   type RiskFilters,
 } from "@/lib/risk";
+import { severityMeta } from "@/lib/severity";
 import type { RiskCountry, RiskItem, RiskRadarOut, RiskTrendOut } from "@/lib/types";
 import { cn } from "@/lib/utils";
+
+/** The 48px gutter every filter row's label sits in, so the seven rows line up
+ * as a column rather than as seven independently-indented lines. Passed to
+ * `FilterChipGroup`, which owns the `role="group"` + `aria-labelledby` pairing
+ * these labels exist for. */
+const FILTER_LABEL_CLASS = "w-12 text-[11px] tracking-wide";
 
 // echarts only needed once the map renders -- Faz 14, same pattern as
 // newspaper-browser.tsx's RegionMap.
@@ -67,17 +74,6 @@ const RiskMap = dynamic(
 const DAY_WINDOWS = [5, 7, 14, 30, 90] as const;
 const DEFAULT_DAYS = 5;
 const TREND_DAYS = 30;
-
-/** The lit-chip pattern shared with Gazete/Hub/Öneriler. Note there is
- * no REGION_GLOW anywhere on this page: the chrome stays neutral so the only
- * saturated things on screen are the few item cards that earn it. */
-const chip = (active: boolean) =>
-  cn(
-    "flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
-    active
-      ? "bg-primary/12 text-primary ring-1 ring-primary/40 dark:glow-soft"
-      : "border border-border text-muted-foreground hover:bg-accent",
-  );
 
 export function RiskRadarClient() {
   const router = useRouter();
@@ -347,18 +343,21 @@ export function RiskRadarClient() {
         <>
           <div className="flex flex-col gap-3 rounded-lg border border-border bg-background/50 p-3">
             <div className="flex flex-wrap items-center gap-1.5">
-              <FilterLabel>Dönem</FilterLabel>
-              {DAY_WINDOWS.map((window) => (
-                <button
-                  key={window}
-                  type="button"
-                  onClick={() => setUrlState({ days: window })}
-                  aria-pressed={days === window}
-                  className={chip(days === window)}
-                >
-                  {window}g
-                </button>
-              ))}
+              <FilterChipGroup label="Dönem" labelClassName={FILTER_LABEL_CLASS}>
+                {DAY_WINDOWS.map((window) => (
+                  <FilterChip
+                    key={window}
+                    active={days === window}
+                    onClick={() => setUrlState({ days: window })}
+                    // "30g" is unreadable out loud; the accessible name says
+                    // the whole thing while the chip keeps the two characters
+                    // this dense row has space for.
+                    label={`Son ${window} gün`}
+                  >
+                    {window}g
+                  </FilterChip>
+                ))}
+              </FilterChipGroup>
 
               <span className="ml-auto flex items-center gap-1.5">
                 <label className="relative flex items-center">
@@ -389,143 +388,149 @@ export function RiskRadarClient() {
             </div>
 
             <div className="flex flex-wrap items-center gap-1.5">
-              <FilterLabel>Aile</FilterLabel>
-              <button
-                type="button"
-                onClick={() => {
-                  setFamily(null);
-                  setType(null);
-                }}
-                className={chip(!family)}
-              >
-                Tümü
-              </button>
-              {Object.entries(FAMILY_META).map(([slug, label]) => (
-                <button
-                  key={slug}
-                  type="button"
+              <FilterChipGroup label="Aile" labelClassName={FILTER_LABEL_CLASS}>
+                <FilterChip
+                  active={!family}
                   onClick={() => {
-                    const next = family === slug ? null : slug;
-                    setFamily(next);
-                    // A type chip from the other family would silently return
-                    // zero rows; clear it rather than show an empty page.
-                    if (next && type && TYPE_META[type]?.family !== next) setType(null);
+                    setFamily(null);
+                    setType(null);
                   }}
-                  className={chip(family === slug)}
+                  label="Tüm risk aileleri"
                 >
-                  {label}
-                  <span className="ml-0.5 tabular-nums opacity-70">
-                    {data.family_counts[slug] ?? 0}
-                  </span>
-                </button>
-              ))}
+                  Tümü
+                </FilterChip>
+                {Object.entries(FAMILY_META).map(([slug, label]) => (
+                  <FilterChip
+                    key={slug}
+                    active={family === slug}
+                    onClick={() => {
+                      const next = family === slug ? null : slug;
+                      setFamily(next);
+                      // A type chip from the other family would silently return
+                      // zero rows; clear it rather than show an empty page.
+                      if (next && type && TYPE_META[type]?.family !== next) setType(null);
+                    }}
+                  >
+                    {label}
+                    <span className="ml-0.5 tabular-nums opacity-70">
+                      {data.family_counts[slug] ?? 0}
+                    </span>
+                  </FilterChip>
+                ))}
+              </FilterChipGroup>
 
               <span className="mx-1 h-4 w-px bg-border" aria-hidden />
 
-              <FilterLabel>Akış</FilterLabel>
-              <button
-                type="button"
-                onClick={() => setOnlyNew((value) => !value)}
-                aria-pressed={onlyNew}
-                title="İlk haberi son 24 saat içinde yayımlanan sinyaller"
-                className={chip(onlyNew)}
-              >
-                Yeni
-              </button>
-              <button
-                type="button"
-                onClick={() => setOnlyUpdated((value) => !value)}
-                aria-pressed={onlyUpdated}
-                title="Daha eski olaylar; son 24 saatte yeni haber eklenmiş"
-                className={chip(onlyUpdated)}
-              >
-                Güncellendi
-              </button>
+              <FilterChipGroup label="Akış" labelClassName={FILTER_LABEL_CLASS}>
+                <FilterChip
+                  active={onlyNew}
+                  onClick={() => setOnlyNew((value) => !value)}
+                  title="İlk haberi son 24 saat içinde yayımlanan sinyaller"
+                >
+                  Yeni
+                </FilterChip>
+                <FilterChip
+                  active={onlyUpdated}
+                  onClick={() => setOnlyUpdated((value) => !value)}
+                  title="Daha eski olaylar; son 24 saatte yeni haber eklenmiş"
+                >
+                  Güncellendi
+                </FilterChip>
+              </FilterChipGroup>
             </div>
 
             {availableTypes.length > 0 && (
-              <div className="flex flex-wrap items-center gap-1.5">
-                <FilterLabel>Tür</FilterLabel>
-                <button type="button" onClick={() => setType(null)} className={chip(!type)}>
+              <FilterChipGroup label="Tür" labelClassName={FILTER_LABEL_CLASS}>
+                <FilterChip
+                  active={!type}
+                  onClick={() => setType(null)}
+                  label="Tüm risk türleri"
+                >
                   Tümü
-                </button>
+                </FilterChip>
                 {availableTypes.map((slug) => {
                   const meta = TYPE_META[slug];
                   const Icon = meta.icon;
                   return (
-                    <button
+                    <FilterChip
                       key={slug}
-                      type="button"
+                      active={type === slug}
                       onClick={() => setType(type === slug ? null : slug)}
-                      className={chip(type === slug)}
                     >
                       <Icon className="size-3.5" aria-hidden />
                       {meta.label}
                       <span className="ml-0.5 tabular-nums opacity-70">
                         {data.type_counts[slug] ?? 0}
                       </span>
-                    </button>
+                    </FilterChip>
                   );
                 })}
-              </div>
+              </FilterChipGroup>
             )}
 
             {(availableSeverities.length > 0 || availableRegions.length > 0) && (
               <div className="flex flex-wrap items-center gap-1.5">
-                <FilterLabel>Şiddet</FilterLabel>
-                <button type="button" onClick={() => setSeverity(null)} className={chip(!severity)}>
-                  Tümü
-                </button>
-                {availableSeverities.map((slug) => {
-                  const meta = severityMeta(slug);
-                  const Icon = meta.icon;
-                  return (
-                    <button
-                      key={slug}
-                      type="button"
-                      onClick={() => setSeverity(severity === slug ? null : slug)}
-                      className={chip(severity === slug)}
-                    >
-                      <Icon className="size-3.5" aria-hidden />
-                      {meta.label}
-                    </button>
-                  );
-                })}
+                <FilterChipGroup label="Şiddet" labelClassName={FILTER_LABEL_CLASS}>
+                  <FilterChip
+                    active={!severity}
+                    onClick={() => setSeverity(null)}
+                    label="Tüm şiddet seviyeleri"
+                  >
+                    Tümü
+                  </FilterChip>
+                  {availableSeverities.map((slug) => {
+                    const meta = severityMeta(slug);
+                    const Icon = meta.icon;
+                    return (
+                      <FilterChip
+                        key={slug}
+                        active={severity === slug}
+                        onClick={() => setSeverity(severity === slug ? null : slug)}
+                      >
+                        <Icon className="size-3.5" aria-hidden />
+                        {meta.label}
+                      </FilterChip>
+                    );
+                  })}
+                </FilterChipGroup>
 
                 {availableRegions.length > 0 && (
                   <>
                     <span className="mx-1 h-4 w-px bg-border" aria-hidden />
-                    <FilterLabel>Bölge</FilterLabel>
-                    <button
-                      type="button"
-                      onClick={() => setRegion(null)}
-                      className={chip(!region)}
-                    >
-                      Tümü
-                    </button>
-                    {availableRegions.map((r) => (
-                      <button
-                        key={r.slug}
-                        type="button"
-                        onClick={() => setRegion(region === r.slug ? null : r.slug)}
-                        className={chip(region === r.slug)}
+                    <FilterChipGroup label="Bölge" labelClassName={FILTER_LABEL_CLASS}>
+                      <FilterChip
+                        active={!region}
+                        onClick={() => setRegion(null)}
+                        label="Tüm bölgeler"
                       >
-                        {r.name}
-                      </button>
-                    ))}
+                        Tümü
+                      </FilterChip>
+                      {availableRegions.map((r) => (
+                        <FilterChip
+                          key={r.slug}
+                          active={region === r.slug}
+                          onClick={() => setRegion(region === r.slug ? null : r.slug)}
+                        >
+                          {r.name}
+                        </FilterChip>
+                      ))}
+                    </FilterChipGroup>
                   </>
                 )}
               </div>
             )}
 
             {country && (
-              <div className="flex flex-wrap items-center gap-1.5">
-                <FilterLabel>Ülke</FilterLabel>
-                <button type="button" onClick={() => setCountry(null)} className={chip(true)}>
+              <FilterChipGroup label="Ülke" labelClassName={FILTER_LABEL_CLASS}>
+                <FilterChip
+                  active
+                  onClick={() => setCountry(null)}
+                  label={`${country} filtresini kaldır`}
+                >
                   {country}
                   <X className="size-3" aria-hidden />
-                </button>
-              </div>
+                </FilterChip>
+              </FilterChipGroup>
             )}
           </div>
 
@@ -637,13 +642,7 @@ export function RiskRadarClient() {
   );
 }
 
-function FilterLabel({ children }: { children: React.ReactNode }) {
-  return (
-    <span className="w-12 shrink-0 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-      {children}
-    </span>
-  );
-}
+
 
 function Kpi({
   label,
@@ -803,7 +802,7 @@ function LiveFeed({
                 <span className="flex flex-wrap items-center gap-1.5">
                   <span
                     aria-hidden
-                    className={cn("size-2 rounded-full", severityMeta(item.severity).dotClassName)}
+                    className={cn("size-2 rounded-full", severityMeta(item.severity).dot)}
                   />
                   <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
                     {severityMeta(item.severity).label}

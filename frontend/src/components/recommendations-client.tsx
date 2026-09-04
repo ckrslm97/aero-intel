@@ -1,7 +1,6 @@
 "use client";
 
-import { AnimatePresence } from "framer-motion";
-import { ChevronDown, CircleAlert, ExternalLink, Info, TriangleAlert } from "lucide-react";
+import { ChevronDown, ExternalLink } from "lucide-react";
 import { useCallback, useMemo } from "react";
 
 import { AirlineLogo } from "@/components/airline-logo";
@@ -12,6 +11,7 @@ import { DataSourceError, StaleDataBanner } from "@/components/data-source-error
 import { orderCategories } from "@/components/filters/category-chip-row";
 import { CountUp } from "@/components/motion/count-up";
 import { MotionItem, MotionList } from "@/components/motion/motion-list";
+import { FilterChip, FilterChipGroup } from "@/components/ui/filter-chip";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDataSource } from "@/hooks/use-data-source";
 import { useUrlState } from "@/hooks/use-url-state";
@@ -27,6 +27,7 @@ import {
   type RecommendationDays,
   type RecommendationFilters,
 } from "@/lib/recommendations";
+import { severityMeta } from "@/lib/severity";
 import { CATEGORY_BY_SLUG } from "@/lib/taxonomy";
 import type { ResponseWindow } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -74,28 +75,15 @@ interface RecommendationsOut {
 // its gradient border and its badge, so a high-severity item visibly burns
 // hotter than a low one -- in dark mode especially.
 //
-// Color still never carries the meaning on its own: every badge is icon +
-// word, exactly as before.
-const SEVERITY_META = {
-  high: {
-    label: "Yüksek",
-    icon: TriangleAlert,
-    className: "bg-critical/12 text-critical ring-1 ring-critical/40",
-    glow: "var(--critical)",
-  },
-  medium: {
-    label: "Orta",
-    icon: CircleAlert,
-    className: "bg-warning/12 text-warning ring-1 ring-warning/40",
-    glow: "var(--warning)",
-  },
-  low: {
-    label: "Düşük",
-    icon: Info,
-    className: "bg-good/12 text-good ring-1 ring-good/35",
-    glow: "var(--good)",
-  },
-} as const;
+// The table itself is GONE, and its removal is the point of this round. It was
+// a fourth private copy of the ladder and the only one that gave `low` the
+// --good token: a low-importance recommendation was drawn in the same green
+// the rest of the app uses for "this is going well", while "Yüksek" here took
+// --critical red and "Yüksek" on /sinyaller took --warning amber. Both facts
+// were wrong about the same words. lib/severity.ts now answers both.
+//
+// Color still never carries the meaning on its own: the badge is icon + word,
+// exactly as before.
 
 // Gelir Yönetimi is the portal's focus category, so it leads the row here the
 // same way it does everywhere else. The window rungs, the pinned slug and the
@@ -110,15 +98,6 @@ const REGION_NAME: Record<string, string> = Object.fromEntries(
 const AIRLINE_NAME: Record<string, string> = Object.fromEntries(
   airlineTabs.map((a) => [a.code, a.name]),
 );
-
-/** The lit-chip pattern shared with Gazete/Hub/Risk Radarı. */
-const chip = (active: boolean) =>
-  cn(
-    "rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
-    active
-      ? "bg-primary/12 text-primary ring-1 ring-primary/40 dark:glow-soft"
-      : "border border-border text-muted-foreground hover:bg-accent",
-  );
 
 /** Calendar and review evidence carry a bare date. The midday anchor that used
  * to be open-coded here now lives in `formatDateTr`, which also pins the zone
@@ -192,13 +171,13 @@ export function RecommendationsClient() {
       <div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-5">
         <FilterRow label="Dönem">
           {RECOMMENDATION_DAY_OPTIONS.map((option) => (
-            <button
+            <FilterChip
               key={option}
+              active={days === option}
               onClick={() => setFilters({ days: option as RecommendationDays })}
-              className={chip(days === option)}
             >
               Son {option} gün
-            </button>
+            </FilterChip>
           ))}
         </FilterRow>
 
@@ -206,63 +185,58 @@ export function RecommendationsClient() {
             repeated query params, so "Avrupa + Orta Doğu" is one question
             rather than two page loads. "Tümü" is the clear-all. */}
         <FilterRow label="Kategori">
-          <button
-            type="button"
+          <FilterChip
+            active={category.length === 0}
             onClick={() => setFilters({ category: [] })}
-            className={chip(category.length === 0)}
+            label="Tüm kategoriler"
           >
             Tümü
-          </button>
+          </FilterChip>
           {ORDERED_CATEGORIES.map((c) => (
-            <button
+            <FilterChip
               key={c.slug}
-              type="button"
+              active={category.includes(c.slug)}
               onClick={() => setFilters({ category: toggleValue(category, c.slug) })}
-              className={chip(category.includes(c.slug))}
             >
               {c.label}
-            </button>
+            </FilterChip>
           ))}
         </FilterRow>
 
         <FilterRow label="Bölge">
-          <button
-            type="button"
+          <FilterChip
+            active={region.length === 0}
             onClick={() => setFilters({ region: [] })}
-            className={chip(region.length === 0)}
+            label="Tüm bölgeler"
           >
             Tümü
-          </button>
+          </FilterChip>
           {worldRegions.map((r) => (
-            <button
+            <FilterChip
               key={r.slug}
-              type="button"
+              active={region.includes(r.slug)}
               onClick={() => setFilters({ region: toggleValue(region, r.slug) })}
-              className={chip(region.includes(r.slug))}
             >
               {r.name}
-            </button>
+            </FilterChip>
           ))}
         </FilterRow>
 
         <FilterRow label="Havayolu">
-          <button
-            type="button"
+          <FilterChip
+            active={airline.length === 0}
             onClick={() => setFilters({ airline: [] })}
-            className={chip(airline.length === 0)}
+            label="Tüm havayolları"
           >
             Tümü
-          </button>
+          </FilterChip>
           {airlineTabs.map((a) => (
-            <button
+            <FilterChip
               key={a.code}
-              type="button"
+              active={airline.includes(a.code)}
               title={a.name}
               onClick={() => setFilters({ airline: toggleValue(airline, a.code) })}
-              className={cn(
-                chip(airline.includes(a.code)),
-                "flex items-center gap-1 tabular-nums",
-              )}
+              className="tabular-nums"
             >
               <span
                 className={cn(
@@ -273,7 +247,7 @@ export function RecommendationsClient() {
                 <AirlineLogo code={a.code} name={a.name} className="size-4" />
               </span>
               {a.code}
-            </button>
+            </FilterChip>
           ))}
         </FilterRow>
       </div>
@@ -302,15 +276,21 @@ export function RecommendationsClient() {
         <MotionList
           className={cn("flex flex-col gap-5 transition-opacity", loading && "opacity-60")}
         >
-          {/* popLayout: filter changes swap the whole set, so outgoing cards
-              must leave the flow instead of shoving the incoming ones down. */}
-          <AnimatePresence mode="popLayout" initial={false}>
-            {items.map((item) => (
-              <MotionItem key={item.id} lift exit="exit" variant="scalePop">
-                <RecommendationCard item={item} />
-              </MotionItem>
-            ))}
-          </AnimatePresence>
+          {/* NO `AnimatePresence`, and no `exit`. It was here on the argument
+              that filter changes swap the whole set, so outgoing cards should
+              leave the flow rather than shove the incoming ones down -- but in
+              this stack (framer-motion 12 + React 19) the exit-complete
+              callback never fires, so an "outgoing" card never left at all. A
+              reader who picked a category watched the elenen cards sit in the
+              list beside the matching ones: the filter row looked like it did
+              nothing. A filter that does not filter is a worse failure than a
+              set that swaps without a 160ms fade. Entrances stay.
+              See components/ui/drawer-shell.tsx for the same measurement. */}
+          {items.map((item) => (
+            <MotionItem key={item.id} lift variant="scalePop">
+              <RecommendationCard item={item} />
+            </MotionItem>
+          ))}
         </MotionList>
       ) : (
         <div className="rounded-lg border border-dashed border-border p-10 text-center">
@@ -334,20 +314,22 @@ export function RecommendationsClient() {
 }
 
 /** Label above its chips, not beside them: the rows carry up to eleven chips
- * each, and a fixed-width inline label pushed them into one cramped line. */
+ * each, and a fixed-width inline label pushed them into one cramped line.
+ *
+ * `FilterChipGroup` rather than a bare div and span, so the label is tied to
+ * the chips by `role="group"` + `aria-labelledby` instead of merely sitting
+ * above them. Four such rows stack here, three of them ending in a button that
+ * says only "Tümü". */
 function FilterRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex flex-col gap-1.5">
-      <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-        {label}
-      </span>
-      <div className="flex flex-wrap gap-1.5">{children}</div>
-    </div>
+    <FilterChipGroup label={label} stacked>
+      {children}
+    </FilterChipGroup>
   );
 }
 
 function RecommendationCard({ item }: { item: Recommendation }) {
-  const severity = SEVERITY_META[item.severity] ?? SEVERITY_META.low;
+  const severity = severityMeta(item.severity);
   const SeverityIcon = severity.icon;
   const categoryLabel = item.category ? CATEGORY_BY_SLUG[item.category]?.label : null;
   const regionLabel = item.region ? (REGION_NAME[item.region] ?? item.region) : null;
@@ -363,14 +345,14 @@ function RecommendationCard({ item }: { item: Recommendation }) {
     // border-gradient carries the same hue around the frame. No bg-card here
     // -- border-gradient paints the surface itself (see globals.css).
     <article
-      style={{ "--glow-color": severity.glow } as React.CSSProperties}
+      style={{ "--glow-color": severity.glowVar } as React.CSSProperties}
       className="border-gradient glow-edge flex h-full flex-col gap-3 rounded-xl p-5"
     >
       <div className="flex flex-wrap items-center gap-2">
         <span
           className={cn(
             "flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold",
-            severity.className,
+            severity.pill,
           )}
         >
           <SeverityIcon className="size-3" />

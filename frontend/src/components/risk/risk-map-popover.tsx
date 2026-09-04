@@ -1,13 +1,13 @@
 "use client";
 
-import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import { motion, useReducedMotion } from "framer-motion";
 import { X } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 
 import { CoverageBadge, TypePill } from "@/components/risk/risk-meta";
-import { severityMeta } from "@/components/risk/severity-pill";
 import { chipPop, overlayFade, reduceVariants } from "@/lib/motion";
+import { severityMeta } from "@/lib/severity";
 import type { RiskItem } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -100,13 +100,17 @@ export function RiskMapPopover({
   const place = city ? `${country} · ${city}` : country;
 
   return createPortal(
-    <AnimatePresence>
+    // No `AnimatePresence`: nothing here has ever played an exit (the whole
+    // component is unmounted by its parent, taking the wrapper with it), and
+    // in this stack an exit that DID start would never complete -- leaving
+    // this `fixed inset-0` overlay across the map. See
+    // components/ui/drawer-shell.tsx.
+    <>
       <motion.div
         key="risk-map-overlay"
         variants={reduceMotion ? reduceVariants(overlayFade) : overlayFade}
         initial="hidden"
         animate="show"
-        exit="exit"
         onClick={onClose}
         // Light enough that the map behind stays legible: this is a list about
         // the marker you just clicked, so hiding the marker would be
@@ -155,7 +159,7 @@ export function RiskMapPopover({
                   <TypePill item={item} />
                   <span
                     aria-hidden
-                    className={cn("size-2 rounded-full", severityMeta(item.severity).dotClassName)}
+                    className={cn("size-2 rounded-full", severityMeta(item.severity).dot)}
                   />
                   <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
                     {severityMeta(item.severity).label}
@@ -173,7 +177,7 @@ export function RiskMapPopover({
           ))}
         </ul>
       </motion.div>
-    </AnimatePresence>,
+    </>,
     document.body,
   );
 }

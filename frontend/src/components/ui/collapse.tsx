@@ -1,6 +1,6 @@
 "use client";
 
-import { AnimatePresence, motion } from "framer-motion";
+import { motion } from "framer-motion";
 
 import { collapseSection, useMeasuredHeight } from "@/lib/motion";
 import { cn } from "@/lib/utils";
@@ -15,8 +15,15 @@ import { cn } from "@/lib/utils";
  *
  * This is a straight de-duplication: `hubs-client.tsx` and `insights-client.tsx`
  * carried byte-identical `Expandable` components, and the Alert Merkezi needed
- * a third. Behaviour is unchanged -- `reduceMotion` is now read here instead of
- * being threaded in as a prop, which is the only difference at the call sites.
+ * a third. `reduceMotion` is now read here instead of being threaded in as a
+ * prop, which is the only difference at the call sites.
+ *
+ * CLOSING IS INSTANT, and that is a fix rather than a regression. The open
+ * height animates; the close used to be handed to `AnimatePresence`, whose
+ * exit-complete callback never fires in this stack (framer-motion 12 + React
+ * 19) -- so a "closed" section stayed mounted at its full measured height and
+ * simply never went away. See components/ui/drawer-shell.tsx for the
+ * measurement.
  */
 export function Collapse({
   open,
@@ -34,19 +41,16 @@ export function Collapse({
   // client -- see components/motion/motion-preferences.tsx.
   const variants = collapseSection(measuredHeight);
 
+  if (!open) return null;
+
   return (
-    <AnimatePresence initial={false}>
-      {open && (
-        <motion.div
-          variants={variants}
-          initial="hidden"
-          animate="show"
-          exit="exit"
-          className={cn("overflow-hidden", className)}
-        >
-          <div ref={contentRef}>{children}</div>
-        </motion.div>
-      )}
-    </AnimatePresence>
+    <motion.div
+      variants={variants}
+      initial="hidden"
+      animate="show"
+      className={cn("overflow-hidden", className)}
+    >
+      <div ref={contentRef}>{children}</div>
+    </motion.div>
   );
 }

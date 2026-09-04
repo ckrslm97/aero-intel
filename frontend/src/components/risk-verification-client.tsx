@@ -7,13 +7,13 @@ import { useCallback, useEffect, useMemo } from "react";
 import { DataSourceError, LastUpdatedStamp, StaleDataBanner } from "@/components/data-source-error";
 import { RiskFunnel } from "@/components/risk/risk-funnel";
 import { RiskRejectionsTable } from "@/components/risk/risk-rejections-table";
+import { FilterChip, FilterChipGroup } from "@/components/ui/filter-chip";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDataSource } from "@/hooks/use-data-source";
 import { readNumber, useUrlState, writeParam } from "@/hooks/use-url-state";
 import { apiFetch } from "@/lib/api";
 import { rejectionFilterOptions } from "@/lib/risk";
 import type { RiskQualityOut, RiskRejection } from "@/lib/types";
-import { cn } from "@/lib/utils";
 
 /** Mirrors DAY_WINDOWS in risk-radar-client.tsx and DEFAULT_WINDOW_DAYS in
  * backend/app/api/v1/risks.py. The funnel has to be readable against the same
@@ -26,14 +26,6 @@ const DEFAULT_DAYS = 5;
  * the screen's own working size -- enough to scan a window's rejections, small
  * enough that the table stays a table. */
 const ROW_LIMIT = 100;
-
-const chip = (active: boolean) =>
-  cn(
-    "flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
-    active
-      ? "bg-primary/12 text-primary ring-1 ring-primary/40 dark:glow-soft"
-      : "border border-border text-muted-foreground hover:bg-accent",
-  );
 
 /** Risk Radarı → Veri doğrulama.
  *
@@ -199,20 +191,19 @@ export function RiskVerificationClient() {
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-1.5">
-          <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-            Dönem
-          </span>
+        <FilterChipGroup label="Dönem">
           {DAY_WINDOWS.map((window) => (
-            <button
+            <FilterChip
               key={window}
-              type="button"
+              active={days === window}
               onClick={() => setDays(window)}
-              aria-pressed={days === window}
-              className={chip(days === window)}
+              // "30g" is unreadable out loud; the accessible name says the
+              // whole thing while the chip keeps the two characters the row
+              // has room for.
+              label={`Son ${window} gün`}
             >
               {window}g
-            </button>
+            </FilterChip>
           ))}
           {/* Said out loud rather than left to be discovered. The radar's
               country filter travels in the link so the way back restores it,
@@ -226,7 +217,7 @@ export function RiskVerificationClient() {
               tamamını sayar.
             </span>
           )}
-        </div>
+        </FilterChipGroup>
 
         {/* The sentence the whole screen is built to make defensible. Three of
             the four gates publish rows nobody measured, and a funnel that did
@@ -285,31 +276,28 @@ export function RiskVerificationClient() {
           )}
         </div>
 
-        <div className="flex flex-wrap items-center gap-1.5">
-          <button
-            type="button"
+        <FilterChipGroup label="Elenme nedeni">
+          <FilterChip
+            active={activeReason === null}
             onClick={() => selectReason(null)}
-            aria-pressed={activeReason === null}
-            className={chip(activeReason === null)}
+            label="Tüm elenme nedenleri"
           >
             Tümü
-          </button>
+          </FilterChip>
           {options.map((option) => (
-            <button
+            <FilterChip
               key={option.reason}
-              type="button"
+              active={activeReason === option.reason}
               onClick={() =>
                 selectReason(activeReason === option.reason ? null : option.reason)
               }
-              aria-pressed={activeReason === option.reason}
               title={option.reason}
-              className={chip(activeReason === option.reason)}
             >
               {option.label}
               <span className="ml-0.5 tabular-nums opacity-70">{option.count}</span>
-            </button>
+            </FilterChip>
           ))}
-        </div>
+        </FilterChipGroup>
 
         {rejected.stale && (
           <StaleDataBanner

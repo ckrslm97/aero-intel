@@ -12,6 +12,16 @@ import { useCallback, useRef, useState } from "react";
  * `<MotionConfig reducedMotion="user">` (components/motion/motion-preferences.tsx);
  * never branch on `useReducedMotion()` to choose a VARIANT SET, because that
  * hook disagrees with itself across the server/client boundary.
+ *
+ * THERE ARE NO `exit` VARIANTS IN THIS FILE, and adding one would be a bug
+ * rather than a feature. Every `exit` needs an `AnimatePresence` to drive it,
+ * and in this stack (framer-motion 12 + React 19) an exit animation runs and
+ * then never reports completion -- so the "leaving" subtree is never
+ * unmounted. Measured three separate times here, on three different surfaces:
+ * a drawer left a full-screen invisible backdrop swallowing every click, a
+ * filtered card list kept the cards the filter had just excluded, and a hub
+ * panel stopped updating after the second switch. The app animates things IN
+ * and removes them outright. See components/ui/drawer-shell.tsx.
  */
 
 /** Stagger parent. Children play ~50ms apart, capped by the child's own delay. */
@@ -30,11 +40,6 @@ export const fadeUpItem: Variants = {
     y: 0,
     transition: { duration: 0.28, ease: [0.22, 1, 0.36, 1] },
   },
-  exit: {
-    opacity: 0,
-    y: -8,
-    transition: { duration: 0.18 },
-  },
 };
 
 /** Card interaction spec: lift on hover, press in on tap. */
@@ -48,10 +53,17 @@ export const cardHover = {
 export const overlayFade: Variants = {
   hidden: { opacity: 0 },
   show: { opacity: 1, transition: { duration: 0.2 } },
-  exit: { opacity: 0, transition: { duration: 0.15 } },
 };
 
-/** Slide-over panel, entering from the right edge. */
+/** Slide-over panel, entering from the right edge.
+ *
+ * NO `exit` key any more, and its absence is deliberate. Every drawer in this
+ * app is mounted and unmounted outright rather than wrapped in
+ * `AnimatePresence` -- measured three times in this stack (framer-motion 12 +
+ * React 19), the exit animation runs and its completion callback never fires,
+ * so the subtree is never unmounted and a `fixed inset-0` backdrop is left
+ * over the page forever. Leaving a dead `exit` variant here would be an
+ * invitation to wire it back up. See components/ui/drawer-shell.tsx. */
 export const drawerPanel: Variants = {
   hidden: { x: "100%", opacity: 0.6 },
   show: {
@@ -59,7 +71,16 @@ export const drawerPanel: Variants = {
     opacity: 1,
     transition: { type: "spring", stiffness: 320, damping: 34 },
   },
-  exit: { x: "100%", opacity: 0.6, transition: { duration: 0.2 } },
+};
+
+/** The same panel entering from the LEFT edge -- the mobile navigation. */
+export const drawerPanelLeft: Variants = {
+  hidden: { x: "-100%", opacity: 0.6 },
+  show: {
+    x: 0,
+    opacity: 1,
+    transition: { type: "spring", stiffness: 320, damping: 34 },
+  },
 };
 
 /** Measure an element's natural height, for collapse animations.
@@ -122,7 +143,6 @@ export function collapseSection(height: number): Variants {
   return {
     hidden: { height: 0, opacity: 0 },
     show: { height, opacity: 1, transition: { duration: 0.24 } },
-    exit: { height: 0, opacity: 0, transition: { duration: 0.18 } },
   };
 }
 
@@ -144,12 +164,6 @@ export const scalePopItem: Variants = {
     scale: 1,
     y: 0,
     transition: { type: "spring", stiffness: 420, damping: 30, mass: 0.7 },
-  },
-  exit: {
-    opacity: 0,
-    scale: 0.97,
-    y: -6,
-    transition: { duration: 0.16 },
   },
 };
 
