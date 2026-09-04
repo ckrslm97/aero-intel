@@ -187,9 +187,14 @@ export function Sidebar({
  * is the whole viewport, and the menu read as having locked the app. All five
  * of those are `DrawerShell`'s job now.
  *
- * `md:hidden` on the shell rather than on each layer: the drawer is only ever
- * opened by a control that is itself hidden at `md`, but a viewport resize
- * while it is open must not leave a 288px panel beside the desktop rail.
+ * `md:hidden` ON BOTH LAYERS, panel AND backdrop. The drawer is only ever
+ * opened by a control that is itself hidden at `md`, but `app-shell.tsx` does
+ * not close it on resize, so a phone rotated to landscape (390 -> 844px, past
+ * the 768px breakpoint) crosses the breakpoint with the menu open. Hiding only
+ * the panel there hides the close button along with it and leaves a
+ * full-viewport black-and-blur backdrop -- plus the shell's body scroll lock --
+ * over an app the reader can no longer reach. Tab does not help either: the
+ * trap pulls focus back into the panel that is now `display:none`.
  */
 export function MobileSidebar({
   open,
@@ -206,6 +211,7 @@ export function MobileSidebar({
       label="Ana menü"
       side="left"
       className="w-72 max-w-[85vw] border-sidebar-border bg-sidebar text-sidebar-foreground md:hidden"
+      overlayClassName="md:hidden"
     >
       <Brand>
         <button

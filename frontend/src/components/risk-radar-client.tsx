@@ -32,7 +32,7 @@ import {
   UNKNOWN_COUNTRY,
   type RiskFilters,
 } from "@/lib/risk";
-import { severityMeta } from "@/lib/severity";
+import { SEVERITY_LADDER, severityMeta } from "@/lib/severity";
 import type { RiskCountry, RiskItem, RiskRadarOut, RiskTrendOut } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -704,10 +704,14 @@ function HotSpots({
         {top.map((group, index) => {
           const { high, medium, low } = group.severity_counts;
           const total = Math.max(1, high + medium + low);
+          // Hues off the ladder, not typed in here: this bar sits on the same
+          // screen as the map legend and the SeverityPill, and while it kept
+          // its own table it drew "yüksek" in --critical while the pill beside
+          // it drew the same word in --warning.
           const parts: { key: string; n: number; className: string }[] = [
-            { key: "high", n: high, className: "bg-critical" },
-            { key: "medium", n: medium, className: "bg-warning" },
-            { key: "low", n: low, className: "bg-muted-foreground/40" },
+            { key: "high", n: high, className: SEVERITY_LADDER.high.dot },
+            { key: "medium", n: medium, className: SEVERITY_LADDER.medium.dot },
+            { key: "low", n: low, className: SEVERITY_LADDER.low.dot },
           ];
           const active = selected === group.country;
           return (

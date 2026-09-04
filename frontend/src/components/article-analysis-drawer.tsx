@@ -25,6 +25,7 @@ import { confidenceBand } from "@/lib/risk";
 import { drawerStagger, fadeUpItem } from "@/lib/motion";
 import { DISPLAY_TIME_ZONE_TR, formatDateTr, formatStampTr } from "@/lib/format";
 import { worldRegions } from "@/lib/nav";
+import { SEVERITY_LADDER } from "@/lib/severity";
 import { categoryVar, getCategory, getSubcategoryLabel } from "@/lib/taxonomy";
 import type { ArticleOut } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -76,15 +77,15 @@ const CONFIDENCE_LABEL: Record<string, string> = {
   low: "Düşük",
 };
 
-/** The intelligence band's pill, on the status palette rather than on a fifth
- * scale of its own. The word is always printed, so colour is never the only
- * carrier -- same rule as ui/status-pill.tsx. */
-const INTELLIGENCE_BAND_STYLES: Record<ScoreBand, string> = {
-  critical: "border-critical/40 bg-critical/10 text-critical",
-  high: "border-warning/40 bg-warning/10 text-warning",
-  medium: "border-primary/40 bg-primary/10 text-primary",
-  low: "border-border bg-muted text-muted-foreground",
-};
+/** The intelligence band's pill, straight off the severity ladder.
+ *
+ * `ScoreBand`'s four words ARE the ladder's four words -- Kritik, Yüksek,
+ * Orta, Düşük (lib/gazete.ts `SCORE_BAND_LABELS_TR`) -- so a table of its own
+ * meant the same word in two colours on one site: this one drew "Orta" in
+ * --primary blue while every other surface drew it in --signal amber. Either
+ * the words differ or the palette does; they cannot both be shared and both be
+ * free. The word is always printed, so colour is never the only carrier. */
+const intelligenceBandClass = (band: ScoreBand) => SEVERITY_LADDER[band].pill;
 
 /** In-app analysis for one article.
  *
@@ -362,8 +363,8 @@ export function ArticleAnalysisDrawer({
             <div className="flex flex-wrap items-center gap-2">
               <span
                 className={cn(
-                  "rounded-full border px-2.5 py-0.5 text-[11px] font-semibold",
-                  INTELLIGENCE_BAND_STYLES[intelligenceBand],
+                  "rounded-full px-2.5 py-0.5 text-[11px] font-semibold",
+                  intelligenceBandClass(intelligenceBand),
                 )}
               >
                 {SCORE_BAND_LABELS_TR[intelligenceBand]}

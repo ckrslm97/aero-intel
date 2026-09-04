@@ -109,4 +109,32 @@ describe("mobil menü", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(document.activeElement).toBe(trigger);
   });
+
+  it("panel md'de gizleniyorsa arka perde de gizlenir", async () => {
+    // THE REGRESSION. `md:hidden` was handed to the shell as panel classes
+    // only, and `DrawerShell`'s backdrop took no classes from the caller at
+    // all. `app-shell.tsx` does not close the menu on resize, so a phone
+    // rotated to landscape (390 -> 844px, past the 768px breakpoint) hid the
+    // panel -- close button included -- and left a full-viewport black-and-blur
+    // layer, plus the body scroll lock, over an app nothing could reach.
+    //
+    // Stated as a RULE rather than as two class assertions: whatever
+    // visibility the panel is given, the backdrop is given too. jsdom applies
+    // no media queries, so the class string is the only evidence there is --
+    // and it is the evidence that was missing when this broke.
+    mockPathname.value = "/";
+    const user = userEvent.setup();
+    const { container } = render(<Shell />);
+    await user.click(screen.getByRole("button", { name: "Menü" }));
+
+    const panel = screen.getByRole("dialog", { name: "Ana menü" });
+    const backdrop = container.querySelector(".fixed.inset-0");
+    expect(backdrop).not.toBeNull();
+    expect(panel).toHaveClass("md:hidden");
+    expect(backdrop).toHaveClass("md:hidden");
+
+    // ...and the backdrop is not merely a copy of the panel: it must not have
+    // taken the panel's 288px width along with the breakpoint.
+    expect(backdrop).not.toHaveClass("w-72");
+  });
 });

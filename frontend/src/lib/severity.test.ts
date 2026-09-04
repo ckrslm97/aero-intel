@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { statusToneOf } from "@/components/ui/status-pill";
+import { chartTheme, severityChartColor } from "@/lib/chart-theme";
 import {
   SEVERITY_LADDER,
   priorityToSeverity,
@@ -35,6 +36,21 @@ describe("severity ladder", () => {
         expect(value).not.toContain("good");
       }
     }
+  });
+
+  it("gives the five rungs five different glyphs", () => {
+    // `critical` and `high` both drew TriangleAlert, so every surface that
+    // renders the icon WITHOUT the word -- campaign-alert-strip.tsx prints its
+    // label `sr-only` -- separated the two loudest rungs by hue alone. That is
+    // the one thing this file's docblock forbids, and it was happening at the
+    // top of the ladder, where a misread costs the most.
+    const glyphs = RUNGS.map((rung) => SEVERITY_LADDER[rung].icon);
+    expect(new Set(glyphs).size).toBe(RUNGS.length);
+    // Named individually as well, so a failure says WHICH pair collapsed.
+    expect(SEVERITY_LADDER.critical.icon).not.toBe(SEVERITY_LADDER.high.icon);
+    expect(SEVERITY_LADDER.high.icon).not.toBe(SEVERITY_LADDER.medium.icon);
+    expect(SEVERITY_LADDER.medium.icon).not.toBe(SEVERITY_LADDER.low.icon);
+    expect(SEVERITY_LADDER.low.icon).not.toBe(SEVERITY_LADDER.unknown.icon);
   });
 
   it("separates the rungs a reader has to act on", () => {
@@ -96,6 +112,37 @@ describe("one ladder, every consumer", () => {
     // ...and anything else falls to neutral, NEVER to good.
     for (const value of ["severe", "", null, undefined]) {
       expect(statusToneOf(value)).toBe("neutral");
+    }
+  });
+
+  it("hands a canvas the same hue the CSS tokens give the rung", () => {
+    // THE REGRESSION THIS PINS. The risk map paints into an ECharts canvas,
+    // which cannot resolve `var(--warning)`, so it kept a severity->hex table
+    // of its own -- and when the ladder moved `high` off --critical the map did
+    // not move with it. On ONE screen, amber then meant "Yüksek" in the pill
+    // and "Orta" in the map legend, which is the exact confusion this ladder
+    // exists to end.
+    for (const isDark of [false, true]) {
+      const theme = chartTheme(isDark);
+      expect(severityChartColor(theme, "critical")).toBe(theme.critical);
+      expect(severityChartColor(theme, "high")).toBe(theme.warning);
+      expect(severityChartColor(theme, "medium")).toBe(theme.signal);
+      expect(severityChartColor(theme, "low")).toBe(theme.mutedForeground);
+      expect(severityChartColor(theme, "unknown")).toBe(theme.mutedForeground);
+
+      // The negative half: `high` is NOT the top rung's red, and no two of the
+      // three loud rungs share a hex.
+      expect(severityChartColor(theme, "high")).not.toBe(theme.critical);
+      const loud = ["critical", "high", "medium"].map((rung) =>
+        severityChartColor(theme, rung),
+      );
+      expect(new Set(loud).size).toBe(3);
+
+      // An unreadable severity gets the neutral gray, never a band it did not
+      // earn and never --good.
+      expect(severityChartColor(theme, "severe")).toBe(theme.mutedForeground);
+      expect(severityChartColor(theme, null)).toBe(theme.mutedForeground);
+      expect(severityChartColor(theme, "low")).not.toBe(theme.good);
     }
   });
 });

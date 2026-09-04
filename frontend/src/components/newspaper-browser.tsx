@@ -15,6 +15,7 @@ import { EventTimeline } from "@/components/gazete/event-timeline";
 import { NewsSection } from "@/components/gazete/news-section";
 import { TodayIntelligence } from "@/components/gazete/today-intelligence";
 import { Collapse } from "@/components/ui/collapse";
+import { FilterChip, FilterChipGroup, filterChipClass } from "@/components/ui/filter-chip";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDataSource } from "@/hooks/use-data-source";
 import { apiFetch } from "@/lib/api";
@@ -200,30 +201,32 @@ export function NewspaperBrowser() {
           />
 
           <div className="flex flex-wrap items-center gap-1.5">
-            {WINDOW_OPTIONS.map((option) => (
-              <button
-                key={option.id}
-                onClick={() => updateFilters({ window: option.id })}
-                className={cn(
-                  "rounded-full px-2 py-1 text-[11px] font-medium tabular-nums transition-colors",
-                  filters.window === option.id
-                    ? "bg-secondary text-secondary-foreground"
-                    : "text-muted-foreground hover:bg-accent",
-                )}
-              >
-                {option.label}
-              </button>
-            ))}
+            {/* The group's name is real but not drawn: this row shares a line
+                with the category bar and the Filtreler toggle, and a visible
+                "DÖNEM" pushes that toggle onto a second line. `sr-only` keeps
+                the name in the accessibility tree, which is the half that was
+                missing -- these were bare buttons with no group and no
+                pressed state at all. */}
+            <FilterChipGroup label="Dönem" labelClassName="sr-only" className="gap-1.5">
+              {WINDOW_OPTIONS.map((option) => (
+                <FilterChip
+                  key={option.id}
+                  active={filters.window === option.id}
+                  onClick={() => updateFilters({ window: option.id })}
+                  className="tabular-nums"
+                >
+                  {option.label}
+                </FilterChip>
+              ))}
+            </FilterChipGroup>
+            {/* A disclosure, not a filter: `aria-expanded`, so it borrows the
+                chip's measure and focus ring through the class helper rather
+                than the component, which would claim `aria-pressed` too. */}
             <button
               type="button"
               onClick={() => setFiltersOpen((open) => !open)}
               aria-expanded={filtersOpen}
-              className={cn(
-                "ml-1 flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors",
-                filtersOpen || activeExtras > 0
-                  ? "bg-secondary text-secondary-foreground"
-                  : "text-muted-foreground hover:bg-accent",
-              )}
+              className={filterChipClass(filtersOpen || activeExtras > 0, "ml-1")}
             >
               <SlidersHorizontal className="size-3.5" aria-hidden />
               Filtreler
@@ -237,37 +240,41 @@ export function NewspaperBrowser() {
         <Collapse open={filtersOpen}>
           <div className="flex flex-col gap-2 pt-2">
             {subcategories.length > 0 && (
-              <FilterRow label="Alt kategori">
-                <Chip
-                  label="Tümü"
+              <FilterChipGroup label="Alt kategori" labelClassName="w-20">
+                <FilterChip
                   active={!subcategorySlug}
                   onClick={() => updateFilters({ subcategory: null })}
-                />
+                  label="Tüm alt kategoriler"
+                >
+                  Tümü
+                </FilterChip>
                 {subcategories.map((s) => (
-                  <Chip
+                  <FilterChip
                     key={s.slug}
-                    label={s.label}
                     active={subcategorySlug === s.slug}
                     onClick={() =>
                       updateFilters({
                         subcategory: subcategorySlug === s.slug ? null : s.slug,
                       })
                     }
-                  />
+                  >
+                    {s.label}
+                  </FilterChip>
                 ))}
-              </FilterRow>
+              </FilterChipGroup>
             )}
 
-            <FilterRow label="Bölge">
-              <Chip
-                label="Tümü"
+            <FilterChipGroup label="Bölge" labelClassName="w-20">
+              <FilterChip
                 active={!regionSlug}
                 onClick={() => updateFilters({ region: null, country: null })}
-              />
+                label="Tüm bölgeler"
+              >
+                Tümü
+              </FilterChip>
               {EVENT_REGIONS.map((r) => (
-                <Chip
+                <FilterChip
                   key={r.slug}
-                  label={r.name}
                   active={regionSlug === r.slug}
                   // Switching region drops the country with it: a country
                   // picked from Avrupa makes no sense pinned under Asya.
@@ -277,7 +284,9 @@ export function NewspaperBrowser() {
                       country: null,
                     })
                   }
-                />
+                >
+                  {r.name}
+                </FilterChip>
               ))}
               {/* Country, revealed by a region. A flat select of every country
                   in the archive is 60 options a reader scrolls; scoped to the
@@ -318,17 +327,12 @@ export function NewspaperBrowser() {
                 type="button"
                 onClick={() => setShowMap((open) => !open)}
                 aria-expanded={showMap}
-                className={cn(
-                  "ml-1 flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors",
-                  showMap
-                    ? "bg-secondary text-secondary-foreground"
-                    : "text-muted-foreground hover:bg-accent",
-                )}
+                className={filterChipClass(showMap, "ml-1")}
               >
                 <MapIcon className="size-3.5" aria-hidden />
                 Harita
               </button>
-            </FilterRow>
+            </FilterChipGroup>
 
             {showMap && (
               <RegionMap
@@ -339,34 +343,44 @@ export function NewspaperBrowser() {
 
             {/* Carrier filter -- entity-based, so a rival's fleet or finance
                 news is caught too, not only stories filed under Rakip. */}
-            <FilterRow label="Havayolu">
+            <FilterChipGroup label="Havayolu" labelClassName="w-20">
               {(
                 [
                   ["RIVALS", "Ana Rakipler"],
                   ["ALL", "Tüm Taşıyıcılar"],
                 ] as const
               ).map(([value, label]) => (
-                <Chip
+                <FilterChip
                   key={value}
-                  label={label}
                   active={filters.airline === value}
                   onClick={() =>
                     updateFilters({ airline: filters.airline === value ? null : value })
                   }
-                />
+                >
+                  {label}
+                </FilterChip>
               ))}
               <span aria-hidden className="mx-0.5 h-4 w-px bg-border" />
               {[TK, ...RIVALS].map((a) => {
                 const active = filters.airline === a.code;
                 return (
+                  // The carrier chips burn in their OWN brand colour, so like
+                  // filters/category-chip-row.tsx they compose the chip's
+                  // classes and override only the lit fill -- the measure, the
+                  // focus ring and `aria-pressed` stay the app's.
                   <button
                     key={a.code}
+                    type="button"
                     title={a.name}
+                    aria-pressed={active}
                     onClick={() => updateFilters({ airline: active ? null : a.code })}
                     style={active ? { backgroundColor: a.color, borderColor: a.color } : undefined}
-                    className={cn(
-                      "flex items-center gap-1 rounded-full border px-2 py-1 text-[11px] font-semibold tabular-nums transition-colors",
-                      active ? "text-white" : "border-transparent text-muted-foreground hover:bg-accent",
+                    className={filterChipClass(
+                      active,
+                      cn(
+                        "font-semibold tabular-nums",
+                        active ? "bg-transparent text-white ring-0" : "border-transparent",
+                      ),
                     )}
                   >
                     <span
@@ -387,7 +401,7 @@ export function NewspaperBrowser() {
                     airlineTabs.find((a) => a.code === filters.airline)?.name}
                 </span>
               )}
-            </FilterRow>
+            </FilterChipGroup>
           </div>
         </Collapse>
       </div>
@@ -421,38 +435,11 @@ export function NewspaperBrowser() {
   );
 }
 
-function FilterRow({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex flex-wrap items-center gap-1.5">
-      <span className="w-20 shrink-0 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-        {label}
-      </span>
-      {children}
-    </div>
-  );
-}
-
-function Chip({
-  label,
-  active,
-  onClick,
-}: {
-  label: string;
-  active: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors",
-        active
-          ? "bg-secondary text-secondary-foreground"
-          : "text-muted-foreground hover:bg-accent",
-      )}
-    >
-      {label}
-    </button>
-  );
-}
+/* The local `Chip` and `FilterRow` that used to live here are gone.
+ *
+ * They were the eighth copy of the app's filter chip and the one that mattered
+ * most: five chip rows on the busiest filter surface in the product, none of
+ * them announcing `aria-pressed`, none of them in a `role="group"` naming the
+ * axis, and none with a visible focus ring -- so a keyboard reader tabbing
+ * this panel could neither see where they were nor hear which chip was
+ * narrowing the page. `ui/filter-chip.tsx` is the one definition now. */

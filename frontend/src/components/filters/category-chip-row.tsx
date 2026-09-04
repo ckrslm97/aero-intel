@@ -3,7 +3,7 @@
 import { motion, useReducedMotion } from "framer-motion";
 
 import { filterChipClass } from "@/components/ui/filter-chip";
-import { chipPop, chipStagger, reduceVariants } from "@/lib/motion";
+import { chipPop, chipStagger } from "@/lib/motion";
 import { CATEGORIES, CATEGORY_BY_SLUG, categoryVar, type CategoryDef } from "@/lib/taxonomy";
 import { cn } from "@/lib/utils";
 
@@ -70,8 +70,14 @@ export function CategoryChipRow({
   const reduceMotion = useReducedMotion();
   const ordered = rowCategories(slugs, pinned);
 
-  const stagger = reduceMotion ? reduceVariants(chipStagger) : chipStagger;
-  const pop = reduceMotion ? reduceVariants(chipPop) : chipPop;
+  // The variant SETS are used as written. `useReducedMotion()` disagrees with
+  // itself across the server/client boundary, so picking a different set with
+  // it strands the server's `opacity: 0` in the markup; the preference is
+  // honoured once by `<MotionConfig reducedMotion="user">`. The `transition`
+  // branches further down are a different thing -- a transition emits no
+  // markup, so it has nothing to mismatch on.
+  const stagger = chipStagger;
+  const pop = chipPop;
 
   /** A selected chip burns in its own category color rather than in the one
    * neutral primary fill every row used to share -- the whole point of having

@@ -22,7 +22,7 @@ import { cn } from "@/lib/utils";
  * seven below the fold. 24px plus the row's own 6px gap is the honest ceiling
  * for this control surface, and it is more than the 17px it replaces.)
  */
-export function filterChipClass(active: boolean, className?: ClassValue) {
+export function filterChipClass(active: boolean | undefined, className?: ClassValue) {
   return cn(
     "inline-flex min-h-6 items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
     // A VISIBLE focus ring, on every chip. Five of the seven copies had none at
@@ -39,12 +39,16 @@ export function filterChipClass(active: boolean, className?: ClassValue) {
 /**
  * One filter chip: a toggle that narrows the list beside it.
  *
- * WHAT IT REPLACES. Seven near-identical local `chip()` helpers across seven
+ * WHAT IT REPLACES. Eight near-identical local `chip()` helpers across eight
  * pages, in four different sizes, of which two carried a focus ring. More
  * importantly they were rendered as PLAIN buttons: of the thirty-odd chips on
  * this site only five announced their state, so a screen reader read a filter
  * row as a list of buttons with no way to tell which one was doing the
- * filtering. `aria-pressed` is not optional here -- it IS the chip's state.
+ * filtering. `aria-pressed` is the chip's state, not a decoration on it.
+ *
+ * The eighth was `newspaper-browser.tsx`, and it was the one that mattered
+ * most: five chip rows on the busiest filter surface in the product, with no
+ * pressed state, no group naming the axis and no focus ring between them.
  *
  * `label` overrides the accessible name and exists mainly for the "Tümü"
  * chips. There are nine of them on the campaign page alone, all reading
@@ -61,8 +65,14 @@ export function FilterChip({
   className,
   children,
 }: {
-  /** Drives both the lit styling and `aria-pressed`. */
-  active: boolean;
+  /** Drives both the lit styling and `aria-pressed`.
+   *
+   * OMIT IT for a chip that is an ACTION rather than a toggle -- "İstanbul'a
+   * dön", "Temizle". Those have no pressed state, and passing `active={false}`
+   * had a screen reader announce them as "toggle button, not pressed", which
+   * invites a reader to press them again to un-press. `aria-pressed` is then
+   * left off entirely and the button is announced as a plain button. */
+  active?: boolean;
   onClick: () => void;
   /** Accessible name, when the visible text is not enough on its own. */
   label?: string;
@@ -74,7 +84,8 @@ export function FilterChip({
     <button
       type="button"
       onClick={onClick}
-      aria-pressed={active}
+      // Written only when the caller says this chip HAS a pressed state.
+      aria-pressed={active === undefined ? undefined : active}
       aria-label={label}
       title={title}
       className={filterChipClass(active, className)}

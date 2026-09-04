@@ -45,14 +45,23 @@ const TONES: Record<StatusTone, { icon: LucideIcon; className: string }> = {
  *
  * Kokpit had five separate meta tables saying the same thing in five slightly
  * different ways; this is the Kokpit-wide one. The severity tables OUTSIDE
- * Kokpit have since come along too -- the risk radar's pill, the öneriler
- * card's badge and the campaign alert strip all read lib/severity.ts now, so
- * this pill and those three cannot disagree about a word again.
+ * Kokpit have since come along too -- the risk radar's pill, its MAP and its
+ * hot-spot bar, the öneriler card's badge, the campaign alert strip and the
+ * article drawer's intelligence band all read lib/severity.ts now, so this
+ * pill and those cannot disagree about a word again.
  *
- * `lib/events.ts` EVENT_IMPACT_META is the one that is still its own table,
- * and deliberately: an event's `impact_level` grades DEMAND EFFECT, not risk.
- * A high-impact air show is good news. Folding it into the severity ladder
- * would be the same category error the ladder was built to stop.
+ * TWO TABLES ARE STILL THEIR OWN, and the honest list is short enough to
+ * write down:
+ *
+ *   * `lib/events.ts` EVENT_IMPACT_META, deliberately: an event's
+ *     `impact_level` grades DEMAND EFFECT, not risk -- a high-impact air show
+ *     is good news -- and it says so in its own words ("Yüksek etki"), so it
+ *     is not the ladder's word wearing a second colour. Folding it in would be
+ *     the category error the ladder was built to stop.
+ *   * `kokpit/alert-center.tsx` PRIORITY_META, which is not deliberate: it is
+ *     simply not folded in yet. Its top two rungs already agree with the
+ *     ladder's glyph and hue; its MEDIUM is drawn muted rather than in
+ *     --signal, which is a density decision, not a second meaning for "Orta".
  */
 export function StatusPill({
   tone,

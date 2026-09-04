@@ -4,10 +4,12 @@ import ReactECharts from "echarts-for-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { RiskMapPopover, type MapAnchor } from "@/components/risk/risk-map-popover";
-import { useChartTheme, withAlpha } from "@/lib/chart-theme";
+import { severityChartColor, useChartTheme, withAlpha } from "@/lib/chart-theme";
 import { ensureWorldMap } from "@/lib/echarts-world";
 import { GEO_FEATURE_BY_COUNTRY } from "@/lib/geo/risk-country-shapes";
+import { SEVERITY_LADDER, severityMeta, type Severity } from "@/lib/severity";
 import type { RiskCountry, RiskItem } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 /** Country centroids for the countries this classifier can actually name --
  * every key of backend COUNTRY_TO_REGION (50 entries), plus the handful of
@@ -128,11 +130,13 @@ function symbolSize(count: number, max: number): number {
   return Math.sqrt(area);
 }
 
-const SEVERITY_WORD: Record<string, string> = {
-  high: "Yüksek",
-  medium: "Orta",
-  low: "Düşük",
-};
+/** The rungs this page's data actually carries, in the order the legend prints
+ * them. The words, the dots and the marker hues all come off `SEVERITY_LADDER`
+ * from here down -- this map used to keep a severity table of its own, and when
+ * the ladder moved `high` from --critical to --warning the map did not move
+ * with it: "Yüksek" was then red on the map and amber in the pill on the very
+ * same screen. A list of KEYS cannot drift like a list of colours can. */
+const MAP_RUNGS: readonly Severity[] = ["high", "medium", "low"];
 
 /** Four steps, not a continuous ramp.
  *
@@ -216,13 +220,6 @@ export function RiskMap({
   }, []);
 
   const { option, plotted, unplaced, buckets } = useMemo(() => {
-    const severityColor: Record<string, string> = {
-      high: theme.critical,
-      // No --good anywhere on this page: a "low severity" war is still a war.
-      medium: theme.signal,
-      low: theme.neutral,
-    };
-
     // One marker per (place, type, severity) so a country with a wildfire and
     // an earthquake shows both, rather than one blended dot.
     const bucketMap = new Map<string, MarkerBucket>();
@@ -264,7 +261,10 @@ export function RiskMap({
       value: [b.lon, b.lat, b.items.length],
       symbolSize: symbolSize(b.items.length, maxCount),
       itemStyle: {
-        color: severityColor[b.severity] ?? theme.neutral,
+        // Read off the ladder, via the rung's own token. No --good anywhere
+        // on this page either: a "low severity" war is still a war, and an
+        // unreadable severity lands on the neutral gray, not on a band.
+        color: severityChartColor(theme, b.severity),
         // Dimmed, never hidden, when another country is selected: the rest of
         // the world does not stop having events because one row is focused.
         opacity: selectedCountry && selectedCountry !== b.country ? 0.28 : 0.85,
@@ -285,7 +285,7 @@ export function RiskMap({
       const m = p.data?.meta;
       if (!m) return "";
       const place = m.city ? `${m.country} · ${m.city}` : m.country;
-      const severity = SEVERITY_WORD[m.severity] ?? m.severity;
+      const severity = severityMeta(m.severity).label;
       return `<b>${place}</b><br/>${m.typeLabel} · ${severity} · ${m.count} haber<br/><span style="opacity:.7">Listeyi açmak için tıklayın</span>`;
     };
 
@@ -447,15 +447,20 @@ export function RiskMap({
         <span className="flex items-center gap-1.5">
           <span aria-hidden className="text-foreground">◆</span> Çatışma
         </span>
-        <span className="flex items-center gap-1.5">
-          <span aria-hidden className="size-2 rounded-full bg-critical" /> Yüksek
-        </span>
-        <span className="flex items-center gap-1.5">
-          <span aria-hidden className="size-2 rounded-full bg-warning" /> Orta
-        </span>
-        <span className="flex items-center gap-1.5">
-          <span aria-hidden className="size-2 rounded-full bg-muted-foreground/50" /> Düşük
-        </span>
+        {/* Generated from the ladder, not typed out beside it: a hand-written
+            legend is a second severity table, and this one had already drifted
+            into disagreeing with its own markers (it printed "Orta" in
+            --warning while the marker for the same rung was drawn in
+            --signal). */}
+        {MAP_RUNGS.map((rung) => (
+          <span key={rung} className="flex items-center gap-1.5">
+            <span
+              aria-hidden
+              className={cn("size-2 rounded-full", SEVERITY_LADDER[rung].dot)}
+            />{" "}
+            {SEVERITY_LADDER[rung].label}
+          </span>
+        ))}
         <span className="flex items-center gap-1.5">
           Ülke dolgusu: az
           {FILL_STEPS.map((step) => (

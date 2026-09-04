@@ -52,11 +52,34 @@ describe("FilterChip", () => {
     expect(screen.getAllByText("Tümü")).toHaveLength(2);
   });
 
+  it("does not claim a pressed state it does not have", () => {
+    // Two call sites are ACTIONS, not toggles: "İstanbul'a dön" out of a dead
+    // deep link, and "Temizle" beside the country select. With
+    // `active={false}` a screen reader announced them as "toggle button, not
+    // pressed", which invites a reader to press them again to un-press
+    // something that was never pressed.
+    render(
+      <>
+        <FilterChip onClick={vi.fn()}>Temizle</FilterChip>
+        <FilterChip active={false} onClick={vi.fn()}>
+          Avrupa
+        </FilterChip>
+      </>,
+    );
+    expect(screen.getByRole("button", { name: "Temizle" })).not.toHaveAttribute("aria-pressed");
+    // ...and the toggle beside it still does, or this would be a licence to
+    // drop the attribute everywhere.
+    expect(screen.getByRole("button", { name: "Avrupa" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+  });
+
   it("carries a visible focus ring and a 24px target, lit or not", () => {
     // The copies this replaces ran as small as `px-2 py-0.5 text-[11px]` -- a
     // 17px tap target -- and five of the seven had no focus ring at all, on
     // pages navigated entirely through chip rows.
-    for (const active of [true, false]) {
+    for (const active of [true, false, undefined]) {
       const classes = filterChipClass(active);
       expect(classes).toContain("focus-visible:outline-ring");
       expect(classes).toContain("px-2.5");

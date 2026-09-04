@@ -1,6 +1,6 @@
 "use client";
 
-import { motion, useReducedMotion } from "framer-motion";
+import { motion } from "framer-motion";
 import { ChevronDown, Map as MapIcon, Plane, Route } from "lucide-react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
@@ -12,7 +12,7 @@ import { DataSourceError, InlineSourceError } from "@/components/data-source-err
 import { HubNetworkSignals } from "@/components/hub-network-signals";
 import { MotionItem, MotionList } from "@/components/motion/motion-list";
 import { Collapse } from "@/components/ui/collapse";
-import { FilterChip, FilterChipGroup } from "@/components/ui/filter-chip";
+import { FilterChip, FilterChipGroup, filterChipClass } from "@/components/ui/filter-chip";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiFetch } from "@/lib/api";
 
@@ -34,7 +34,7 @@ import {
   type HubView,
   type HubViewState,
 } from "@/lib/hubs";
-import { fadeUpItem, reduceVariants } from "@/lib/motion";
+import { fadeUpItem } from "@/lib/motion";
 import { worldRegions } from "@/lib/nav";
 import { CATEGORY_BY_SLUG, categoryVar } from "@/lib/taxonomy";
 import { CATEGORY_SLUGS } from "@/lib/taxonomy.gen";
@@ -281,7 +281,9 @@ export function HubsClient() {
             Bağlantıdaki <span className="font-mono font-medium">{selected}</span> izlenen
             hub&apos;lar arasında değil; hiçbir hub seçili değil.
           </span>
-          <FilterChip active={false} onClick={() => selectHub(DEFAULT_HUB)}>
+          {/* No `active`: this is a way out of a dead deep link, not a filter
+              that can be on or off. */}
+          <FilterChip onClick={() => selectHub(DEFAULT_HUB)}>
             {DEFAULT_HUB}&apos;a dön
           </FilterChip>
         </p>
@@ -328,7 +330,6 @@ export function HubsClient() {
           </select>
           {country && (
             <FilterChip
-              active={false}
               onClick={() => setCountry("")}
               label="Ülke filtresini temizle"
             >
@@ -484,7 +485,6 @@ function HubDetailPanel({
   selectedCategory: string | null;
   onToggleCategory: (slug: string) => void;
 }) {
-  const reduceMotion = useReducedMotion();
   const [noteOpen, setNoteOpen] = useState(false);
   const [carriersOpen, setCarriersOpen] = useState(false);
   const [categoriesOpen, setCategoriesOpen] = useState(false);
@@ -503,7 +503,12 @@ function HubDetailPanel({
 
   return (
     <motion.aside
-      variants={reduceMotion ? reduceVariants(fadeUpItem) : fadeUpItem}
+      // No `useReducedMotion()` branch -- `<MotionConfig reducedMotion="user">`
+      // honours the preference once, app-wide. That hook answers false on the
+      // server and true on a client that asked for stillness, so choosing a
+      // variant SET with it leaves the server's `opacity: 0` in the DOM for
+      // exactly the readers who asked for less motion (see lib/motion.ts).
+      variants={fadeUpItem}
       initial="hidden"
       animate="show"
       style={{ "--glow-color": "var(--primary)" } as React.CSSProperties}
@@ -659,7 +664,11 @@ function CarrierRow({
 /** A topic filter, not a label: clicking narrows this hub's story list, and
  * clicking the active one clears it. The selected chip burns in its own
  * category hue -- the same lit-chip idiom as Gazete/Öneriler, inline because
- * the slug -> token transform is invisible to Tailwind's scanner. */
+ * the slug -> token transform is invisible to Tailwind's scanner, and composed
+ * off `filterChipClass` for the same reason filters/category-chip-row.tsx is:
+ * the hue is this chip's own business, the 24px measure and the focus ring are
+ * not. It was left at `px-2 py-0.5 text-[11px]` -- an 18px target with no
+ * focus ring -- while the two filter rows above it on the same card moved. */
 function CategoryChip({
   entry,
   active,
@@ -684,11 +693,9 @@ function CategoryChip({
             } as React.CSSProperties)
           : undefined
       }
-      className={cn(
-        "rounded-full px-2 py-0.5 text-[11px] transition-colors",
-        active
-          ? "font-medium ring-1 ring-current/40 dark:glow-soft"
-          : "border border-border text-muted-foreground hover:bg-accent",
+      className={filterChipClass(
+        active,
+        active && "border-0 bg-transparent font-medium ring-1 ring-current/40 dark:glow-soft",
       )}
     >
       {CATEGORY_BY_SLUG[entry.slug]?.label ?? entry.slug} · {entry.count}

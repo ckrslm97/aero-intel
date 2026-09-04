@@ -88,6 +88,47 @@ describe("DrawerShell", () => {
     expect(document.activeElement).toBe(link);
   });
 
+  it("counts a <summary> as a stop in the ring", async () => {
+    // `summary` is focusable in every browser but matches none of the other
+    // selectors, so a panel that grew a `<details>` would have a Tab stop the
+    // trap could not see -- and Tab from the last summary would walk straight
+    // out of an `aria-modal` dialog. No panel has one today; the selector
+    // carries it so that stays true when one does.
+    const user = userEvent.setup();
+    render(
+      <DrawerShell onClose={() => {}} label="Test çekmecesi">
+        <button type="button">Kapat</button>
+        <details>
+          <summary>Kaynaklar</summary>
+          <p>Üç kaynak</p>
+        </details>
+      </DrawerShell>,
+    );
+    const close = screen.getByRole("button", { name: "Kapat" });
+    const summary = screen.getByText("Kaynaklar");
+    expect(document.activeElement).toBe(close);
+
+    await user.tab();
+    expect(document.activeElement).toBe(summary);
+    // The wrap: the summary is the LAST stop, so Tab comes back to the close
+    // button instead of leaving the dialog.
+    await user.tab();
+    expect(document.activeElement).toBe(close);
+  });
+
+  it("hands the backdrop the classes its caller gives it", () => {
+    // The mobile sidebar is `md:hidden` and the backdrop took no classes from
+    // the caller at all, so above `md` the panel vanished while its
+    // full-viewport black-and-blur layer stayed over the app. See
+    // components/layout/sidebar.test.tsx for the scenario.
+    const { container } = render(
+      <DrawerShell onClose={() => {}} label="Test çekmecesi" overlayClassName="md:hidden">
+        <button type="button">Kapat</button>
+      </DrawerShell>,
+    );
+    expect(container.querySelector(".fixed.inset-0")).toHaveClass("md:hidden");
+  });
+
   it("locks the page behind it and unlocks it again", async () => {
     const user = userEvent.setup();
     render(<Page />);

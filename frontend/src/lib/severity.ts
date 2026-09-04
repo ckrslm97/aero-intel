@@ -27,8 +27,21 @@
  * COLOUR IS NEVER THE MESSAGE. Every rung carries an `icon` and a `label`, and
  * every consumer here renders at least one of them beside the hue. Roughly one
  * man in twelve cannot separate this palette's red from its green.
+ *
+ * WHICH MEANS THE FIVE GLYPHS HAVE TO BE FIVE. `critical` and `high` shared
+ * TriangleAlert until now, so on every surface that draws the icon WITHOUT the
+ * word -- campaign-alert-strip.tsx prints the label `sr-only` -- the two
+ * loudest rungs were separated by hue alone, which is precisely the failure
+ * the paragraph above forbids. Distinctness is pinned by severity.test.ts.
  */
-import { CircleAlert, CircleHelp, Info, TriangleAlert, type LucideIcon } from "lucide-react";
+import {
+  CircleAlert,
+  CircleHelp,
+  Info,
+  Minus,
+  TriangleAlert,
+  type LucideIcon,
+} from "lucide-react";
 
 /** critical > high > medium > low, and `unknown` off to the side.
  *
@@ -70,7 +83,10 @@ export const SEVERITY_LADDER: Record<Severity, SeverityMeta> = {
   },
   high: {
     label: "Yüksek",
-    icon: TriangleAlert,
+    // A circle, not a second triangle: the triangle is the top rung's shape
+    // and nothing else may borrow it. This is also the glyph Kokpit's alert
+    // centre already gives HIGH, so the two surfaces agree.
+    icon: CircleAlert,
     pill: "bg-warning/12 text-warning ring-1 ring-warning/35",
     dot: "bg-warning",
     text: "text-warning",
@@ -78,7 +94,7 @@ export const SEVERITY_LADDER: Record<Severity, SeverityMeta> = {
   },
   medium: {
     label: "Orta",
-    icon: CircleAlert,
+    icon: Info,
     pill: "bg-signal/10 text-signal ring-1 ring-signal/30",
     dot: "bg-signal",
     text: "text-signal",
@@ -86,7 +102,9 @@ export const SEVERITY_LADDER: Record<Severity, SeverityMeta> = {
   },
   low: {
     label: "Düşük",
-    icon: Info,
+    // A flat bar: nothing to act on. Not `Info`, which now belongs to `medium`
+    // -- two rungs sharing a glyph is how the top of this ladder went wrong.
+    icon: Minus,
     pill: "bg-muted text-muted-foreground ring-1 ring-border",
     dot: "bg-muted-foreground",
     text: "text-muted-foreground",

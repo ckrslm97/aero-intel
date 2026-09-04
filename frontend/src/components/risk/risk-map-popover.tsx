@@ -1,12 +1,13 @@
 "use client";
 
-import { motion, useReducedMotion } from "framer-motion";
+import { motion } from "framer-motion";
 import { X } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { useRef } from "react";
 import { createPortal } from "react-dom";
 
 import { CoverageBadge, TypePill } from "@/components/risk/risk-meta";
-import { chipPop, overlayFade, reduceVariants } from "@/lib/motion";
+import { useFocusTrap } from "@/lib/focus-trap";
+import { chipPop, overlayFade } from "@/lib/motion";
 import { severityMeta } from "@/lib/severity";
 import type { RiskItem } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -59,23 +60,16 @@ export function RiskMapPopover({
   onSelect: (item: RiskItem) => void;
   onClose: () => void;
 }) {
-  const reduceMotion = useReducedMotion();
   const panelRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") onClose();
-    }
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [onClose]);
-
-  // Focus lands on the panel, not on the first row: a marker can stand for
-  // eight events, and pre-selecting row one would have a screen reader announce
-  // a single headline where the useful fact is that there are eight.
-  useEffect(() => {
-    panelRef.current?.focus();
-  }, []);
+  // The same trap `ui/drawer-shell.tsx` runs, from the same module. This panel
+  // declared `role="dialog" aria-modal="true"` while implementing Escape and
+  // nothing else, so Tab walked out into the page behind an "inert" dialog and
+  // closing dropped focus on `<body>` -- a keyboard reader who opened a marker
+  // could not get back to the map. `focusPanel` because a marker can stand for
+  // eight events: pre-selecting row one would have a screen reader announce a
+  // single headline where the useful fact is that there are eight.
+  useFocusTrap(panelRef, onClose, { focusPanel: true });
 
   if (typeof document === "undefined") return null;
 
@@ -108,7 +102,7 @@ export function RiskMapPopover({
     <>
       <motion.div
         key="risk-map-overlay"
-        variants={reduceMotion ? reduceVariants(overlayFade) : overlayFade}
+        variants={overlayFade}
         initial="hidden"
         animate="show"
         onClick={onClose}
@@ -124,7 +118,11 @@ export function RiskMapPopover({
         aria-modal="true"
         aria-label={`${place}, ${items.length} sinyal`}
         tabIndex={-1}
-        variants={reduceMotion ? reduceVariants(chipPop) : chipPop}
+        // No `useReducedMotion()` branch: the preference is honoured once,
+        // app-wide, by `<MotionConfig reducedMotion="user">`. Branching here
+        // picks a different variant SET on the server than on the client and
+        // leaves the server's invisible styles in the DOM (see lib/motion.ts).
+        variants={chipPop}
         initial="hidden"
         animate="show"
         style={{ ...position, width: PANEL_WIDTH } as React.CSSProperties}

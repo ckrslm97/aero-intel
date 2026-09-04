@@ -1,17 +1,11 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { useEffect, useRef } from "react";
+import { useRef } from "react";
 
+import { useFocusTrap } from "@/lib/focus-trap";
 import { drawerPanel, drawerPanelLeft, overlayFade } from "@/lib/motion";
 import { cn } from "@/lib/utils";
-
-/** Everything focusable a Tab press can reach, in DOM order. Deliberately not
- * a library: the panels here contain buttons, links, a details/summary or two
- * and nothing exotic. `:not([disabled])` and the negative-tabindex exclusion
- * are what keep a disabled retry button or a scroll container out of the ring. */
-const FOCUSABLE =
-  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 /**
  * THE slide-over shell: backdrop, panel, and the four things that make a panel
@@ -30,14 +24,18 @@ const FOCUSABLE =
  *
  *   * Escape closes it.
  *   * The page behind it does not scroll.
- *   * Focus lands INSIDE on open -- on `initialFocusRef` if given, otherwise
- *     on the first focusable element (in practice the close button), otherwise
- *     on the panel itself.
+ *   * Focus lands INSIDE on open -- on the first focusable element (in
+ *     practice the close button), or on the panel itself when it holds none.
  *   * Tab is trapped: the last element wraps to the first and Shift+Tab back.
  *     `aria-modal="true"` is a promise to a screen reader that the rest of the
  *     page is inert, and a dialog that lets Tab escape is lying about it.
  *   * Focus RETURNS to whatever had it when the drawer opened -- the card, the
  *     map row, the menu button -- not to the top of the document.
+ *
+ * Those four live in `lib/focus-trap.ts` rather than here, because the risk
+ * map's popover is a dialog that CANNOT use this shell -- it is positioned by
+ * arithmetic from a click on a canvas -- and it made the `aria-modal` promise
+ * while implementing only Escape.
  *
  * NO `AnimatePresence`, and this is the load-bearing decision rather than a
  * stylistic one. Measured three separate times in this stack (framer-motion 12
@@ -61,6 +59,7 @@ export function DrawerShell({
   side = "right",
   glowColor,
   className,
+  overlayClassName,
   children,
 }: {
   onClose: () => void;
@@ -74,90 +73,18 @@ export function DrawerShell({
   /** Panel classes -- width and anything page-specific. The positioning,
    * layout and chrome are fixed here so five drawers cannot drift apart. */
   className?: string;
+  /** BACKDROP classes. Separate from `className` and not optional in spirit:
+   * the mobile sidebar is `md:hidden`, and when only the panel carried that
+   * class a phone rotated to landscape hid the panel -- close button included
+   * -- while leaving its full-screen black-and-blur layer, plus the body
+   * scroll lock, over the whole app. Any breakpoint or visibility rule that
+   * applies to the panel has to be handed to the backdrop too. */
+  overlayClassName?: string;
   children: React.ReactNode;
 }) {
   const panelRef = useRef<HTMLElement | null>(null);
 
-  /** Whatever had focus when the drawer opened -- a card, a map popover row, a
-   * feed item. Captured on open and focused again on close, so a keyboard
-   * reader is returned to the row they came from instead of to the top of the
-   * document. A ref rather than state: it must not cause a render. */
-  const returnFocusRef = useRef<HTMLElement | null>(null);
-
-  /** `onClose` behind a ref so the effect below can depend on NOTHING and run
-   * exactly once per mount. It used to sit in the dependency array of each
-   * drawer's copy, which means a caller passing an inline arrow re-ran the
-   * whole effect on every render -- and the cleanup, which restores focus,
-   * fired every time. That is a drawer that yanks focus back to the card
-   * behind it while the reader is typing in it. */
-  const closeRef = useRef(onClose);
-  useEffect(() => {
-    closeRef.current = onClose;
-  }, [onClose]);
-
-  useEffect(() => {
-    returnFocusRef.current = document.activeElement as HTMLElement | null;
-
-    // The first focusable inside the panel -- in every current caller that is
-    // the close button, which is the one control every reader needs and which
-    // makes Tab start inside the dialog rather than behind it. A panel with
-    // nothing focusable in it takes focus itself.
-    const panel = panelRef.current;
-    (panel?.querySelector<HTMLElement>(FOCUSABLE) ?? panel)?.focus();
-
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        closeRef.current();
-        return;
-      }
-      if (event.key !== "Tab") return;
-      const node = panelRef.current;
-      if (!node) return;
-      // No visibility filter, deliberately. The panels' collapsible sections
-      // UNMOUNT their contents rather than hiding them (components/ui/collapse.tsx),
-      // so everything this selector finds is really reachable -- and every
-      // cheap way to ask "is this laid out?" (`offsetParent`, `getClientRects`)
-      // answers "no" for every element under jsdom, which would silently
-      // collapse the trap to a single stop wherever this is tested.
-      const focusable = Array.from(node.querySelectorAll<HTMLElement>(FOCUSABLE));
-      if (focusable.length === 0) {
-        event.preventDefault();
-        node.focus();
-        return;
-      }
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      const active = document.activeElement;
-      if (!(active instanceof Node) || !node.contains(active)) {
-        // Focus got out -- a click on the backdrop, a control that removed
-        // itself, a programmatic blur. Tab pulls it straight back in rather
-        // than resuming the document's order behind an `aria-modal` dialog.
-        event.preventDefault();
-        (event.shiftKey ? last : first).focus();
-        return;
-      }
-      if (!event.shiftKey && active === last) {
-        event.preventDefault();
-        first.focus();
-      } else if (event.shiftKey && (active === first || active === node)) {
-        event.preventDefault();
-        last.focus();
-      }
-    }
-
-    document.addEventListener("keydown", onKeyDown);
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-
-    return () => {
-      document.removeEventListener("keydown", onKeyDown);
-      document.body.style.overflow = previousOverflow;
-      returnFocusRef.current?.focus?.();
-    };
-    // Mount/unmount only. Nothing in here reads a prop directly -- `onClose`
-    // is behind `closeRef` for exactly this reason -- so the empty dependency
-    // list is complete rather than suppressed.
-  }, []);
+  useFocusTrap(panelRef, onClose);
 
   return (
     <>
@@ -166,7 +93,10 @@ export function DrawerShell({
         initial="hidden"
         animate="show"
         onClick={onClose}
-        className="fixed inset-0 z-50 bg-black/50 backdrop-blur-[2px]"
+        className={cn(
+          "fixed inset-0 z-50 bg-black/50 backdrop-blur-[2px]",
+          overlayClassName,
+        )}
       />
       <motion.aside
         ref={panelRef}

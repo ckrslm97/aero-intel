@@ -134,10 +134,9 @@ export function useMeasuredHeight<T extends HTMLElement>(): [
 /** Collapsible section (hub panel "+N daha" expanders).
  *
  * Takes the open height in pixels -- see `useMeasuredHeight` for why this is a
- * number and not `"auto"`. Under reduced motion `reduceVariants` drops the
- * `height` key entirely, so the section is simply laid out at its natural
- * height with no animation at all; the measurement is then unused, exactly as
- * before this became a factory.
+ * number and not `"auto"`. Under reduced motion `<MotionConfig
+ * reducedMotion="user">` reduces the animation, so the section simply appears
+ * at its open height instead of unrolling to it.
  */
 export function collapseSection(height: number): Variants {
   return {
@@ -207,25 +206,14 @@ export const drawerStagger: Variants = {
   },
 };
 
-/** Strip every transform/opacity change out of a variant set, keeping the
- * shape so `variants=` / `initial=` / `animate=` names still resolve. Used
- * whenever `useReducedMotion()` is true. */
-export function reduceVariants(variants: Variants): Variants {
-  const flattened: Variants = {};
-  for (const key of Object.keys(variants)) {
-    // scaleX is flattened alongside scale so `railGrow` is reduced-motion-safe
-    // like everything else -- without it a rail would still draw itself in.
-    flattened[key] = {
-      opacity: 1,
-      x: 0,
-      y: 0,
-      scale: 1,
-      scaleX: 1,
-      transition: { duration: 0 },
-    };
-  }
-  return flattened;
-}
+/* `reduceVariants(...)` used to live here: it flattened a variant set so a
+ * caller could hand a still version to `variants=` when `useReducedMotion()`
+ * was true. It is gone, along with its last three callers, because using it
+ * REQUIRED the branch the docblock at the top of this file forbids -- and the
+ * hook it branched on answers false on the server and true on a client that
+ * asked for stillness. `<MotionConfig reducedMotion="user">` reduces the same
+ * animations at animation time, where both sides of the boundary render the
+ * same markup. */
 
 /** Hover/tap props for a card.
  *

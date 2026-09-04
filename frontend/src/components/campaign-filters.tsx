@@ -135,16 +135,18 @@ export function CampaignFilterBar({
 
   const extended = extendedCount(filters);
 
+  /** `allLabel` is passed in, never built from `label`. Gluing "leri" onto
+   * "satış dönemi" produces "Tüm satış dönemileri" -- the "i" of "dönemi" is a
+   * possessive suffix, not part of the stem -- and because this string is only
+   * ever spoken by a screen reader, nobody looking at the page could see it.
+   * The other eight rows on this panel spell their name out; so do these. */
   const periodRow = (
     key: "salePeriod" | "travelPeriod",
     label: string,
+    allLabel: string,
   ) => (
     <Row label={label}>
-      <FilterChip
-        active={!filters[key]}
-        onClick={() => clear(key)}
-        label={`Tüm ${label.toLocaleLowerCase("tr-TR")}leri`}
-      >
+      <FilterChip active={!filters[key]} onClick={() => clear(key)} label={allLabel}>
         Tümü
       </FilterChip>
       {CAMPAIGN_PERIODS.map((period) => (
@@ -353,8 +355,8 @@ export function CampaignFilterBar({
             </Row>
           )}
 
-          {periodRow("salePeriod", "Satış dönemi")}
-          {periodRow("travelPeriod", "Seyahat dönemi")}
+          {periodRow("salePeriod", "Satış dönemi", "Tüm satış dönemleri")}
+          {periodRow("travelPeriod", "Seyahat dönemi", "Tüm seyahat dönemleri")}
 
           {(bands.length > 0 || counts.review > 0) && (
             <Row label="Güven">

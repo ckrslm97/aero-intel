@@ -3,6 +3,7 @@
 import { Merge } from "lucide-react";
 
 import { Card } from "@/components/ui/card";
+import { filterChipClass } from "@/components/ui/filter-chip";
 import { buildRiskFunnel } from "@/lib/risk";
 import type { RiskFunnelStage } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -96,12 +97,12 @@ export function RiskFunnel({
                             onSelectReason?.(active ? null : chipReason.reason)
                           }
                           aria-pressed={active}
-                          className={cn(
-                            "rounded-full border px-1.5 py-px font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
-                            active
-                              ? "border-primary/40 bg-primary/12 text-primary"
-                              : "border-border text-muted-foreground hover:bg-accent",
-                          )}
+                          // The app's chip measure, not this bar's own: at
+                          // `px-1.5 py-px` inside a `text-[10px]` parent these
+                          // were ~18px tall, well under the 24px floor, and
+                          // they are a real filter -- clicking one narrows the
+                          // rejections table below.
+                          className={filterChipClass(active, "text-[10px]")}
                         >
                           <span className="tabular-nums">{chipReason.count}</span> elendi
                           {` · ${chipReason.reason}`}

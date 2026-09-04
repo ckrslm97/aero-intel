@@ -4,6 +4,7 @@ import { useTheme } from "next-themes";
 import { useMemo } from "react";
 
 import { formatCompactNumber } from "@/lib/format";
+import { severityMeta } from "@/lib/severity";
 
 /* ===========================================================================
  * The one place chart colors live.
@@ -37,6 +38,11 @@ export interface ChartTheme {
   neutral: string;
   good: string;
   critical: string;
+  /** --warning. The severity ladder's `high` rung. */
+  warning: string;
+  /** --muted-foreground. The ladder's `low` and `unknown` rungs -- readable
+   * gray, unlike `neutral`, which is a fill and disappears on a map. */
+  mutedForeground: string;
   /** --chart-1..5, in order. Use for series identity. */
   series: string[];
   /** Taxonomy slug -> hex, mirroring the --category-* tokens. */
@@ -54,6 +60,8 @@ const LIGHT: ChartTheme = {
   neutral: "#c8c7c0",
   good: "#0ca30c",
   critical: "#d03b3b",
+  warning: "#8a5a00",
+  mutedForeground: "#6b6a65",
   series: ["#2a78d6", "#1baf7a", "#eda100", "#4a3aa7", "#eb6834"],
   category: {
     revenue_management: "#c98500",
@@ -81,6 +89,8 @@ const DARK: ChartTheme = {
   neutral: "#4a4a47",
   good: "#0ca30c",
   critical: "#e66767",
+  warning: "#fab219",
+  mutedForeground: "#c3c2b7",
   series: ["#3987e5", "#199e70", "#c98500", "#9085e9", "#d95926"],
   category: {
     revenue_management: "#eda100",
@@ -97,10 +107,45 @@ const DARK: ChartTheme = {
   },
 };
 
+/** The palette for a mode. Exported so a test can read the same table a chart
+ * reads, without mounting a theme provider. */
+export function chartTheme(isDark: boolean): ChartTheme {
+  return isDark ? DARK : LIGHT;
+}
+
 export function useChartTheme(): ChartTheme {
   const { resolvedTheme } = useTheme();
   const isDark = resolvedTheme === "dark";
-  return useMemo(() => (isDark ? DARK : LIGHT), [isDark]);
+  return useMemo(() => chartTheme(isDark), [isDark]);
+}
+
+/** A severity -> the hex a CANVAS paints it in.
+ *
+ * ECharts draws into a canvas and cannot resolve `var(--warning)`, which is
+ * the whole reason the risk map kept a severity->colour table of its own -- and
+ * that table went stale the moment the ladder moved `high` off --critical.
+ * "Yüksek" was then red on the map and amber in every pill beside it, on one
+ * screen.
+ *
+ * So this resolves the rung's OWN `glowVar` rather than re-deciding the hue: a
+ * rung whose token is not listed here falls to the neutral gray -- never to a
+ * band it did not earn, and never to --good. lib/severity.test.ts pins the
+ * ladder and this table to each other in both directions.
+ */
+export function severityChartColor(
+  theme: ChartTheme,
+  severity: string | null | undefined,
+): string {
+  switch (severityMeta(severity).glowVar) {
+    case "var(--critical)":
+      return theme.critical;
+    case "var(--warning)":
+      return theme.warning;
+    case "var(--signal)":
+      return theme.signal;
+    default:
+      return theme.mutedForeground;
+  }
 }
 
 /** #rrggbb -> rgba(). ECharts gradients need a color string, not color-mix. */
