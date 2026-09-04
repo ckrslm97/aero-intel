@@ -14,6 +14,8 @@ to survive those nulls: a dated window filters on its real edges, an
 open-ended one is still running and must reach any `date_from`, and one with
 no start date at all is a point marker filtered on `detected_at`.
 """
+import json
+import uuid
 from datetime import date, datetime, timedelta, timezone
 
 import httpx
@@ -978,3 +980,135 @@ async def test_a_row_nothing_re_checked_says_nothing(db_session):
     await _promo(db_session, slug="unchecked", detected_at=NOW)
     rows = await _list(db_session)
     assert rows[0].last_seen_at is None
+
+
+# --- the scan cap ----------------------------------------------------------
+#
+# `GET /promotions` with no parameters is what the campaign page sends, and
+# until now that selected every publishable row in the table and built a
+# `Promotion` object for each one -- inside a 30-second function budget that
+# does not grow as the table does. The cap bounds it. What these tests are
+# really guarding is the part that makes the cap acceptable: it is applied in
+# ONE place, so every surface is narrowed by the same rows and says so.
+
+
+async def _capped(db, cap, monkeypatch):
+    from app.api.v1 import promotions as promotions_api
+
+    monkeypatch.setattr(promotions_api, "SCAN_ROW_CAP", cap)
+    return promotions_api
+
+
+async def test_the_list_stops_at_the_scan_cap(db_session, monkeypatch):
+    api = await _capped(db_session, 3, monkeypatch)
+    for i in range(6):
+        await _promo(db_session, slug=f"c{i}", detected_at=NOW - timedelta(hours=i))
+    await db_session.commit()
+
+    rows = await api.list_promotions(response=Response(), db=db_session)
+
+    assert len(rows) == 3
+    # Newest first is what the SQL cut keeps, so the three that survive are the
+    # three most recently detected -- not an arbitrary three.
+    assert {r.title_tr for r in rows} == {"c0", "c1", "c2"}
+
+
+async def test_count_admits_when_the_scan_was_capped(db_session, monkeypatch):
+    api = await _capped(db_session, 3, monkeypatch)
+    for i in range(6):
+        await _promo(db_session, slug=f"c{i}", detected_at=NOW - timedelta(hours=i))
+    await db_session.commit()
+
+    counted = await api.count_promotions(response=Response(), db=db_session)
+
+    assert counted["total"] == 3
+    # The one thing a bare list cannot say. Without it the page would print
+    # "3 kampanya" over a table of six.
+    assert counted["truncated"] is True
+    assert counted["scan_cap"] == 3
+
+
+async def test_count_does_not_cry_truncation_when_the_cap_never_bit(db_session, monkeypatch):
+    """The negative half. A flag that is always true is not information, and a
+    page that always shows "hepsi bu kadar değil" trains its reader to ignore
+    the one day it matters."""
+    api = await _capped(db_session, 10, monkeypatch)
+    for i in range(4):
+        await _promo(db_session, slug=f"c{i}", detected_at=NOW - timedelta(hours=i))
+    await db_session.commit()
+
+    counted = await api.count_promotions(response=Response(), db=db_session)
+
+    assert counted["total"] == 4
+    assert counted["truncated"] is False
+
+
+async def test_a_capped_scan_narrows_the_screen_and_the_export_identically(
+    db_session, monkeypatch
+):
+    """#83's promise, under a cap.
+
+    The chip row on screen and the CSV download are supposed to select the same
+    campaigns; they do because both come out of `_matching_promotions`. A cap
+    applied anywhere else -- in the list endpoint, say -- would have handed the
+    export a different set, which is the exact bug #83 fixed, reintroduced by a
+    performance change.
+    """
+    api = await _capped(db_session, 4, monkeypatch)
+    for i in range(9):
+        await _promo(
+            db_session,
+            slug=f"c{i}",
+            airline="PC" if i % 2 == 0 else "TK",
+            detected_at=NOW - timedelta(hours=i),
+        )
+    await db_session.commit()
+
+    rows = await api.list_promotions(airline=["PC"], response=Response(), db=db_session)
+    export = await api.export_promotions(format="json", airline=["PC"], db=db_session)
+    exported = json.loads(bytes(export.body))
+
+    assert [r.id for r in rows] == [uuid.UUID(item["id"]) for item in exported]
+    assert export.headers["X-Row-Cap-Reached"] == "true"
+
+
+async def test_the_capped_cut_is_the_same_rows_on_every_request(db_session, monkeypatch):
+    """`detected_at` is not unique -- one crawl writes many rows on one
+    timestamp -- so without the `id` tiebreaker the LIMIT would fall on a
+    different set of rows each time, and the page and its own export could
+    disagree between two clicks."""
+    api = await _capped(db_session, 3, monkeypatch)
+    stamp = NOW - timedelta(hours=1)
+    for i in range(8):
+        await _promo(db_session, slug=f"c{i}", detected_at=stamp)
+    await db_session.commit()
+
+    first = await api.list_promotions(response=Response(), db=db_session)
+    second = await api.list_promotions(response=Response(), db=db_session)
+
+    assert len(first) == 3
+    assert [r.id for r in first] == [r.id for r in second]
+
+
+async def test_the_scan_cap_does_not_change_which_rows_are_publishable(
+    db_session, monkeypatch
+):
+    """The cap bounds HOW MANY rows are read, never WHICH rules apply to them.
+    A superseded campaign inside the cap is still filtered out, and its slot
+    does not go to a row past the cap: the cap counts what SQL returned, and
+    superseded rows never leave SQL."""
+    api = await _capped(db_session, 3, monkeypatch)
+    for i in range(3):
+        await _promo(
+            db_session,
+            slug=f"dead{i}",
+            detected_at=NOW - timedelta(hours=i),
+            superseded_at=NOW,
+        )
+    for i in range(2):
+        await _promo(db_session, slug=f"live{i}", detected_at=NOW - timedelta(days=1, hours=i))
+    await db_session.commit()
+
+    rows = await api.list_promotions(response=Response(), db=db_session)
+
+    assert {r.title_tr for r in rows} == {"live0", "live1"}

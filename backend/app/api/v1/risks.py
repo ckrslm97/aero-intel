@@ -245,6 +245,17 @@ class RiskRadarOut(BaseModel):
     #: say "N sinyalin konumu doğrulanamadı" instead of the map and the list
     #: silently disagreeing about how many events there are.
     unplaced_low_confidence: int = 0
+    #: True when the window held more articles than RISK_SCAN_CAP and only the
+    #: newest RISK_SCAN_CAP of them were read. Every number in this payload is
+    #: then a FLOOR over the most recent slice of the window, not a total over
+    #: the window the caller asked for -- which is a different claim, and the
+    #: surface is expected to make it rather than print "12 sinyal" as if that
+    #: were all of them.
+    truncated: bool = False
+    #: How many articles the rollup actually read. Equal to RISK_SCAN_CAP when
+    #: `truncated`; served alongside it so "kaç haber okundu" is answerable
+    #: without the reader having to know the cap.
+    scanned_articles: int = 0
     countries: list[RiskCountryOut]
     # Feed-wide totals per type/family, so the filter chips can show counts
     # without the client flattening every group to count them.
@@ -311,6 +322,29 @@ AIRPORT_CAP = 6
 #: pathological case (a wire story republished by every aggregator) without
 #: hiding a normal cluster's tail. `members_truncated` says when it bit.
 MEMBER_CAP = 12
+
+#: How many articles one rollup will read and cluster.
+#:
+#: MEASURED, not guessed. `pipeline/clustering.cluster()` is quadratic by
+#: design (its own docstring says so, and at a few hundred articles that is the
+#: right call), but nothing upstream was keeping it to a few hundred: the query
+#: below had no LIMIT, so the window alone decided the size of the input. On
+#: the test Postgres, a 600-article window of unrelated stories cost 172 800
+#: `same_event` comparisons and 4.2s of pure Python inside a 30-second
+#: function budget -- and the cost is n^2, so twice the feed is four times the
+#: wall clock. Measured again at this cap: 400 articles, 76 000 comparisons,
+#: 1.9s. That is not cheap and it is not meant to look cheap; what it is, is
+#: CONSTANT. The number the budget has to survive no longer depends on how
+#: loud the news was last week, which is the property the endpoint was missing.
+#:
+#: When the cap bites, `RiskRadarOut.truncated` says so, and every surface
+#: that counts this rollup is wired to that flag rather than to this constant:
+#: /sinyaller and Kokpit read it through `SignalsOut.risk_truncated`
+#: (services/signals_service.unified_signals forwards it), and /risk-radari
+#: reads `truncated` off its own payload. It is not a silent trim: a radar
+#: that drops the oldest half of its window without telling anyone is worse
+#: than one that shows a shorter window on purpose.
+RISK_SCAN_CAP = 400
 
 #: Risk types whose subject IS an aviation operation -- the event is something
 #: happening to flights, an airport or an airspace, not something happening in
@@ -594,12 +628,21 @@ def aviation_link_for(risk_type: str, risk_family: str, airport_count: int) -> s
 
 @router.get("", response_model=RiskRadarOut)
 async def list_risks(
+    # THE 90-DAY CEILING, REVIEWED AND KEPT. It was the wrong knob to blame:
+    # `days` was never what made this endpoint expensive -- an unbounded row
+    # count was, and a busy 30-day window could cost more than a quiet 90-day
+    # one. Lowering the ceiling would have made the cost *less* predictable
+    # while breaking the 90 button the radar page offers (see DAY_WINDOWS in
+    # frontend/src/components/risk-radar-client.tsx), which is a UI regression
+    # dressed up as a performance fix. RISK_SCAN_CAP bounds the actual cost, at
+    # every window, and says so in `truncated` when it bites.
     days: int = Query(DEFAULT_WINDOW_DAYS, ge=1, le=90),
     response: Response = None,  # type: ignore[assignment]
     db: AsyncSession = Depends(get_db),
 ) -> RiskRadarOut:
     """Every classified risk event in the window, grouped by country and sorted
-    by weighted severity score."""
+    by weighted severity score -- or, when the window holds more than
+    RISK_SCAN_CAP articles, its newest RISK_SCAN_CAP, with `truncated` set."""
     # AGGREGATES, not ARTICLES: this is a grouped rollup like /insights and
     # /hubs, not a raw article list, and it changes only when the enrichment
     # cron reclassifies something.
@@ -647,6 +690,14 @@ async def aggregate_risks(db: AsyncSession, days: int = DEFAULT_WINDOW_DAYS) -> 
     # rather than acting on evidence that does not exist yet.
     current_filter = ArticleEnrichment.is_current_event.is_not(False)
 
+    # LIMIT RISK_SCAN_CAP + 1: one row over the cap is how the cap announces
+    # itself. Newest first, with `id` breaking ties on `published_at` so the
+    # cut is deterministic -- a feed where five wire copies share a publication
+    # minute must not fall on a different side of the cap on every request.
+    # The join is to a one-to-one table (article_enrichment.article_id is
+    # UNIQUE), so LIMIT counts articles, and the eager loads are `selectinload`
+    # -- separate queries against the ids that survived, never a JOIN that
+    # LIMIT would slice through.
     result = await db.execute(
         select(Article)
         .options(
@@ -656,24 +707,41 @@ async def aggregate_risks(db: AsyncSession, days: int = DEFAULT_WINDOW_DAYS) -> 
         )
         .join(ArticleEnrichment, ArticleEnrichment.article_id == Article.id)
         .where(*base_filters, current_filter)
-        .order_by(Article.published_at.desc())
+        .order_by(Article.published_at.desc(), Article.id.desc())
+        .limit(RISK_SCAN_CAP + 1)
     )
-    articles = [
+    scanned = [
         a
         for a in result.scalars().unique().all()
         if a.enrichment is not None and a.enrichment.risk_type is not None
     ]
+    truncated = len(scanned) > RISK_SCAN_CAP
+    articles = scanned[:RISK_SCAN_CAP]
 
     # What the currency gate removed, counted rather than inferred. A page that
     # drops rows silently is a page whose numbers nobody can reconcile; the
     # count is one aggregate against an index-covered predicate, not a second
     # pass over the articles.
+    #
+    # When the cap bit, this count is narrowed to the same slice the clusters
+    # came from. Otherwise the payload would state a suppression figure for a
+    # 90-day window beside cluster counts covering only its newest fortnight --
+    # two numbers about two different windows, presented as if they were about
+    # one, which is precisely the kind of quiet disagreement `truncated` exists
+    # to prevent rather than create.
+    scan_floor = (
+        [Article.published_at >= articles[-1].published_at] if truncated and articles else []
+    )
     not_current = (
         await db.execute(
             select(func.count())
             .select_from(Article)
             .join(ArticleEnrichment, ArticleEnrichment.article_id == Article.id)
-            .where(*base_filters, ArticleEnrichment.is_current_event.is_(False))
+            .where(
+                *base_filters,
+                *scan_floor,
+                ArticleEnrichment.is_current_event.is_(False),
+            )
         )
     ).scalar_one()
 
@@ -998,6 +1066,8 @@ async def aggregate_risks(db: AsyncSession, days: int = DEFAULT_WINDOW_DAYS) -> 
         suppressed_aviation_irrelevant=suppressed_aviation,
         suppressed_not_current=not_current,
         unplaced_low_confidence=unplaced,
+        truncated=truncated,
+        scanned_articles=len(articles),
         countries=countries,
         type_counts=type_counts,
         family_counts=family_counts,

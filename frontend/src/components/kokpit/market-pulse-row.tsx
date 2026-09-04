@@ -96,7 +96,8 @@ export interface PulseCell {
    * depends on this cell being exactly 104px whatever the data does. */
   emptyNote: string | null;
   title: string;
-  /** The threshold band for this cell's driver, from `/kokpit/signals`.
+  /** The threshold band for this cell's driver, from `/signals`'
+   * `cockpit_tiles`.
    *
    * The owner's Market Pulse spec asked for "sparkline + yön + değer + değişim
    * + STATUS" in every cell, and this is that status -- the one part of the
@@ -519,7 +520,8 @@ export function MarketPulseRow({
   annual: AnnualSeriesBoardOut | null;
   board: KokpitFxBoardOut | null;
   energy: EnergyBoardOut | null;
-  /** `/kokpit/signals`, for the two live cells' threshold bands. Optional so a
+  /** The four Kokpit tiles (`/signals` -> `cockpit_tiles`), for the two live
+   * cells' threshold bands. Optional so a
    * signals outage thins the cells to a number without a band rather than
    * emptying the row. */
   signals?: CockpitSignal[];

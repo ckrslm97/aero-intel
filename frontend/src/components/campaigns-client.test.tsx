@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { promotion } from "@/lib/__fixtures__/promotion";
-import type { PromotionOut } from "@/lib/types";
+import type { PromotionCountOut, PromotionOut } from "@/lib/types";
 
 import { CampaignsClient } from "./campaigns-client";
 
@@ -23,13 +23,24 @@ interface Feed {
   promotions: PromotionOut[];
   expiring?: PromotionOut[];
   newCount?: { window_hours: number; count: number; airline_codes: string[] } | null;
+  /** `/promotions/count`. `undefined` means "as many as the list returned",
+   * which is the ordinary case; a test that wants the truncation notice states
+   * a bigger number, or sets `truncated`. */
+  count?: PromotionCountOut | null;
 }
 
-function serve({ promotions, expiring = [], newCount = null }: Feed) {
+function serve({ promotions, expiring = [], newCount = null, count }: Feed) {
+  const counted: PromotionCountOut | null =
+    count === undefined
+      ? { total: promotions.length, truncated: false, scan_cap: 5000 }
+      : count;
   apiFetch.mockImplementation((path: string) => {
     if (path.startsWith("/promotions/expiring")) return Promise.resolve(expiring);
     if (path.startsWith("/promotions/new-count")) {
       return newCount ? Promise.resolve(newCount) : Promise.reject(new Error("404"));
+    }
+    if (path.startsWith("/promotions/count")) {
+      return counted ? Promise.resolve(counted) : Promise.reject(new Error("500"));
     }
     if (path.startsWith("/campaign-alerts")) return Promise.reject(new Error("404"));
     if (path.startsWith("/promotions")) return Promise.resolve(promotions);
@@ -86,7 +97,9 @@ describe("CampaignsClient", () => {
     await renderPage({ promotions: [active()] });
 
     const paths = apiFetch.mock.calls.map((call) => call[0] as string);
-    expect(paths).toContain("/promotions");
+    // `limit` bounds the request; it does not narrow it. Everything else about
+    // the call is still the API's own default -- no window, no include_expired.
+    expect(paths.some((path) => /^\/promotions\?limit=\d+$/.test(path))).toBe(true);
     expect(paths.some((path) => path.includes("include_expired"))).toBe(false);
     // The urgency band has its own endpoint, because the "still on sale" half
     // of the rule cannot be reconstructed from a date comparison.
@@ -308,5 +321,98 @@ describe("CampaignsClient", () => {
       "Bitmek üzere0",
     );
     expect(screen.queryByText(/kampanyalar okunamadı/)).not.toBeInTheDocument();
+  });
+
+  // --- the list is not always the whole list ------------------------------
+  //
+  // The API caps its SQL scan and the page caps its own request, so a big
+  // enough table produces a page whose summary band counts rows that are a
+  // subset of what matches. Every number above the feed is then a floor. This
+  // page's rule everywhere else is that a partial answer says it is partial;
+  // these two tests are that rule applied to the one number a reader is most
+  // likely to quote out loud.
+
+  it("says so when the API returned fewer campaigns than match", async () => {
+    await renderPage({
+      promotions: [active()],
+      count: { total: 640, truncated: false, scan_cap: 5000 },
+    });
+
+    const note = await screen.findByText(/640 eşleşen kampanyadan/);
+    expect(note).toHaveTextContent("ilk 1 tanesini döndürdü");
+  });
+
+  it("says so when the server's own scan was capped", async () => {
+    await renderPage({
+      promotions: [active()],
+      count: { total: 1, truncated: true, scan_cap: 5000 },
+    });
+
+    // `total` matches the list here, so only `truncated` can raise this --
+    // the cap bit inside the API and its own count is a floor too.
+    expect(await screen.findByText(/Sunucu taraması/)).toBeInTheDocument();
+  });
+
+  it("does not print the capped total as if it were the number of matches", async () => {
+    // The API says it out loud: when `truncated`, `total` is a FLOOR -- there
+    // are matching rows past the scan cap that neither it nor the list
+    // counted. The page used to render "Sunucu 1 eşleşen kampanyadan ilk 1
+    // tanesini döndürdü", which is both a false total and a sentence that
+    // contradicts itself.
+    await renderPage({
+      promotions: [active()],
+      count: { total: 1, truncated: true, scan_cap: 5000 },
+    });
+
+    const note = await screen.findByText(/Sunucu taraması/);
+    expect(note).toHaveTextContent("5.000 kampanyada durdu");
+    expect(note).toHaveTextContent("kaç kampanyanın eşleştiği sayılmadı");
+    expect(screen.queryByText(/eşleşen kampanyadan/)).not.toBeInTheDocument();
+  });
+
+  it("does not offer the export as the way out of a capped scan", async () => {
+    // The export runs through the SAME capped scan (promotions.py:
+    // `truncated = len(rows) > EXPORT_ROW_CAP or matched.truncated`), so
+    // recommending it here would send the reader after rows it also never
+    // reaches. Narrowing the filters is the only remedy that works.
+    await renderPage({
+      promotions: [active()],
+      count: { total: 1, truncated: true, scan_cap: 5000 },
+    });
+
+    const note = await screen.findByText(/Sunucu taraması/);
+    expect(note).toHaveTextContent("filtreleri daraltın");
+    expect(note).not.toHaveTextContent("dışa aktarımı kullanın");
+  });
+
+  it("still offers the export when only our own request limit cut the list", async () => {
+    // The other branch, and the reason there are two: here the server counted
+    // every match, so `total` is the truth and the unlimited export really can
+    // hand over all of them.
+    await renderPage({
+      promotions: [active()],
+      count: { total: 640, truncated: false, scan_cap: 5000 },
+    });
+
+    const note = await screen.findByText(/640 eşleşen kampanyadan/);
+    expect(note).toHaveTextContent("dışa aktarımı kullanın");
+  });
+
+  it("stays quiet when the page has the whole list", async () => {
+    // The negative half. A notice that is always on screen is furniture, and
+    // furniture is not read on the day it matters.
+    await renderPage({ promotions: [active(), undated()] });
+
+    await screen.findByText("Avrupa fırsat haftası");
+    expect(screen.queryByText(/eşleşen kampanyadan/)).not.toBeInTheDocument();
+  });
+
+  it("stays quiet when the count endpoint did not answer", async () => {
+    // An unread total is not a small total. Guessing "there must be more"
+    // from a failed request would print a warning nothing measured.
+    await renderPage({ promotions: [active()], count: null });
+
+    await screen.findByText("Avrupa fırsat haftası");
+    expect(screen.queryByText(/eşleşen kampanyadan/)).not.toBeInTheDocument();
   });
 });

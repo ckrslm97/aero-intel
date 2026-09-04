@@ -25,11 +25,15 @@ Three do not:
   column, `markets_json`, and `route_json`. A JSONB query per shape would be
   three `@>` clauses and still miss the flat column.
 
-All three are therefore applied in Python, over a result set that is already
-bounded by the SQL filters (the page fetches an eight-week window, ~hundreds of
-rows). Because `limit`/`offset` slice *after* that pass, a page is always a page
-of genuinely matching rows -- slicing in SQL first would have handed back short
-pages with no way to tell a filtered-out row from a missing one.
+All three are therefore applied in Python, over a result set that is bounded by
+the SQL filters AND by `SCAN_ROW_CAP` -- the second half of that sentence is
+new, and it is what stops a parameterless `GET /promotions` from materialising
+the whole table inside a 30-second function budget. Because `limit`/`offset`
+slice *after* the Python pass, a page is always a page of genuinely matching
+rows -- slicing in SQL first would have handed back short pages with no way to
+tell a filtered-out row from a missing one. When the scan cap does bite,
+`GET /promotions/count` says so in `truncated`; nothing here ever pretends the
+capped answer is the whole one.
 
 What changed in v2
 ------------------
@@ -80,6 +84,20 @@ router = APIRouter(prefix="/promotions", tags=["promotions"])
 #: truncated rather than failing -- a partial CSV is still usable, a timeout
 #: is not -- and the response says so in a header.
 EXPORT_ROW_CAP = 2000
+
+#: Hard ceiling on the SQL scan behind every read on this router.
+#:
+#: Deliberately above EXPORT_ROW_CAP rather than equal to it: the Python
+#: filters below only ever REMOVE rows, so a scan capped at the export cap
+#: would hand the export short of its own limit as soon as one campaign was
+#: filtered out in Python. At 5000 the export's cap stays the binding one for
+#: any filter a person actually asks for, and this one is what it is meant to
+#: be -- a ceiling on the pathological case (a table that grows for years with
+#: no window on the request), not a page size.
+#:
+#: Measured on the test Postgres: 5000 rows scan and serialise in well under a
+#: second, against production's 83 publishable campaigns today.
+SCAN_ROW_CAP = 5000
 
 
 # Faz 15 contract fix: neither endpoint below filtered on this at all, so a
@@ -516,7 +534,27 @@ def _passes_python_filters(row: Promotion, f: _Filters, today: date) -> bool:
     return True
 
 
-async def _matching_promotions(db: AsyncSession, f: _Filters) -> list[Promotion]:
+@dataclass(frozen=True)
+class _Matched:
+    """What `_matching_promotions` found, and whether it saw the whole table.
+
+    A bare list could not carry the second fact, and the second fact is the
+    reason the scan cap is tolerable at all: a page that quietly stops at row
+    N is a page whose counts nobody can reconcile.
+    """
+
+    rows: list[Promotion]
+    #: True when the scan hit SCAN_ROW_CAP -- i.e. there are matching rows in
+    #: the table that this answer never looked at.
+    #:
+    #: The only companion `rows` needs. A `scanned` count used to sit beside it
+    #: and no endpoint, client or test ever read it: a number nobody reads is
+    #: a number nobody maintains, and this module's whole point this round is
+    #: that a fact worth measuring is a fact somebody prints.
+    truncated: bool
+
+
+async def _matching_promotions(db: AsyncSession, f: _Filters) -> _Matched:
     """Every publishable, visible row matching `f`, in the default order.
 
     The single definition of "matching" -- list, count and export all call it,
@@ -524,16 +562,42 @@ async def _matching_promotions(db: AsyncSession, f: _Filters) -> list[Promotion]
     opinion. The ORDER BY below is only a stable input to `order_promotions`,
     which does the real sorting: the bucket a row lands in depends on today's
     date, which SQL has no business knowing.
+
+    **The scan cap.** Three of the Python filters (visibility, status, country
+    and region) cannot be expressed in SQL -- see the module docstring -- so
+    this function has to walk what SQL hands it. Until now SQL handed it
+    *everything*: `GET /promotions` with no parameters, which is exactly what
+    the campaign page sends, selected every publishable row in the table and
+    built a `Promotion` object for each one, inside a 30-second function
+    budget that grows no larger as the table does. SCAN_ROW_CAP bounds that.
+
+    The cap is applied AFTER the SQL filters and BEFORE the Python ones, on the
+    newest rows first, and `detected_at` is broken by `id` so the cut is
+    deterministic: the same request scans the same rows every time. That is
+    what keeps the promise #83 made -- the on-screen chip row and the CSV
+    export come out of this one function, so a capped scan narrows both by
+    exactly the same rows rather than giving two answers to one filter.
     """
     query = (
         select(Promotion)
         .where(_publishable_promotions())
-        .order_by(Promotion.detected_at.desc())
+        # `id` is the tiebreaker the cap needs: `detected_at` is not unique
+        # (one crawl writes many rows on the same timestamp), and an unordered
+        # tie under LIMIT is a different set of rows on every request.
+        .order_by(Promotion.detected_at.desc(), Promotion.id.desc())
+        .limit(SCAN_ROW_CAP + 1)
     )
-    rows = (await db.execute(_apply_sql_filters(query, f))).scalars().all()
+    scanned_rows = list((await db.execute(_apply_sql_filters(query, f))).scalars().all())
+    # One row over the cap is how the cap announces itself; it is dropped
+    # rather than served, so the served set is never larger than the cap.
+    truncated = len(scanned_rows) > SCAN_ROW_CAP
+    scanned_rows = scanned_rows[:SCAN_ROW_CAP]
     today = _today()
-    return order_promotions(
-        [row for row in rows if _passes_python_filters(row, f, today)], today
+    return _Matched(
+        rows=order_promotions(
+            [row for row in scanned_rows if _passes_python_filters(row, f, today)], today
+        ),
+        truncated=truncated,
     )
 
 
@@ -719,15 +783,19 @@ async def list_promotions(
     band: BandParam = None,
     review_required: ReviewRequiredParam = None,
     include_expired: IncludeExpiredParam = False,
-    # Opt-in: no limit means the whole filtered window, which is what the
-    # campaign page and the calendar overlay both ask for.
+    # Opt-in, and no longer a way to ask for "everything": omitting it means
+    # every row the scan REACHED, which `_matching_promotions` bounds at
+    # SCAN_ROW_CAP. `/promotions/count`'s `truncated` is where a caller learns
+    # that bound bit. The campaign page no longer omits it either -- it sends
+    # its own FETCH_LIMIT and reads the rest off `/promotions/count` -- so an
+    # unparameterised call is now the direct API consumer's path, not a page's.
     limit: Annotated[int | None, Query(ge=1, le=EXPORT_ROW_CAP)] = None,
     offset: Annotated[int, Query(ge=0)] = 0,
     response: Response = None,  # type: ignore[assignment]
     db: AsyncSession = Depends(get_db),
 ) -> list[PromotionOut]:
     public_cache(response, FRESH)
-    rows = await _matching_promotions(
+    matched = await _matching_promotions(
         db,
         _filters(
             airline, date_from, date_to, days, campaign_type, business_class,
@@ -735,6 +803,12 @@ async def list_promotions(
             campaign_kind=campaign_kind, include_expired=include_expired,
         ),
     )
+    # A header, not a field: this endpoint returns a bare list and two clients
+    # parse it. `apiFetch` cannot read headers, so the page learns about a
+    # capped scan from `GET /promotions/count`, which says the same thing in a
+    # body it can read; this is here for the scripts that call the API directly.
+    response.headers["X-Scan-Cap-Reached"] = "true" if matched.truncated else "false"
+    rows = matched.rows
     page = rows[offset : offset + limit] if limit is not None else rows[offset:]
     return await _serialize(db, page)
 
@@ -764,9 +838,13 @@ async def count_promotions(
     list: the list's payload shape is a published contract with two clients,
     and a header would be invisible to `apiFetch`, which only ever reads the
     body.
+
+    `truncated` is the second reason it earns its place now: it is the only
+    way the campaign page can learn that the scan stopped at SCAN_ROW_CAP,
+    because the list it renders is a bare array with nowhere to say so.
     """
     public_cache(response, FRESH)
-    rows = await _matching_promotions(
+    matched = await _matching_promotions(
         db,
         _filters(
             airline, date_from, date_to, days, campaign_type, business_class,
@@ -774,7 +852,16 @@ async def count_promotions(
             campaign_kind=campaign_kind, include_expired=include_expired,
         ),
     )
-    return {"total": len(rows)}
+    response.headers["X-Scan-Cap-Reached"] = "true" if matched.truncated else "false"
+    return {
+        "total": len(matched.rows),
+        # The one thing the list endpoint's bare-list contract cannot say. When
+        # this is true, `total` is a FLOOR: there are matching rows past
+        # SCAN_ROW_CAP that neither this number nor the list counted, and the
+        # page is expected to say so rather than print `total` as the truth.
+        "truncated": matched.truncated,
+        "scan_cap": SCAN_ROW_CAP,
+    }
 
 
 @router.get("/new-count")
@@ -832,9 +919,9 @@ async def new_promotion_counts(db: AsyncSession) -> dict:
 async def _by_status(
     db: AsyncSession, statuses: tuple[str, ...], airline: list[str] | None, limit: int | None
 ) -> list[PromotionOut]:
-    rows = await _matching_promotions(
-        db, _Filters(airline=tuple(airline or ()), status=statuses)
-    )
+    rows = (
+        await _matching_promotions(db, _Filters(airline=tuple(airline or ()), status=statuses))
+    ).rows
     return await _serialize(db, rows[:limit] if limit is not None else rows)
 
 
@@ -894,9 +981,11 @@ async def list_expiring_promotions(
     public_cache(response, FRESH)
     today = _today()
     horizon = today + timedelta(days=days)
-    rows = await _matching_promotions(
-        db, _Filters(airline=tuple(airline or ()), status=("ACTIVE_BOOKING",))
-    )
+    rows = (
+        await _matching_promotions(
+            db, _Filters(airline=tuple(airline or ()), status=("ACTIVE_BOOKING",))
+        )
+    ).rows
     closing = [
         row for row in rows if row.sale_ends is not None and row.sale_ends <= horizon
     ]
@@ -1035,11 +1124,11 @@ async def export_promotions(
     """The filtered set as a download: `format=csv` for a spreadsheet,
     `format=json` for the same rows the API serves.
 
-    Capped at EXPORT_ROW_CAP rows. `X-Row-Cap-Reached` says whether the cap
-    actually bit, so a script can narrow its filters instead of silently
-    analysing a truncated table.
+    Capped at EXPORT_ROW_CAP rows, and by SCAN_ROW_CAP before that.
+    `X-Row-Cap-Reached` says whether either cap actually bit, so a script can
+    narrow its filters instead of silently analysing a truncated table.
     """
-    rows = await _matching_promotions(
+    matched = await _matching_promotions(
         db,
         _filters(
             airline, date_from, date_to, days, campaign_type, business_class,
@@ -1047,7 +1136,11 @@ async def export_promotions(
             campaign_kind=campaign_kind, include_expired=include_expired,
         ),
     )
-    truncated = len(rows) > EXPORT_ROW_CAP
+    rows = matched.rows
+    # Two different cuts, and the header has to mean "you did not get
+    # everything" for either of them: EXPORT_ROW_CAP trims the answer, and
+    # SCAN_ROW_CAP means there were matching rows the scan never reached.
+    truncated = len(rows) > EXPORT_ROW_CAP or matched.truncated
     rows = rows[:EXPORT_ROW_CAP]
     stamp = _today().isoformat()
     headers = {

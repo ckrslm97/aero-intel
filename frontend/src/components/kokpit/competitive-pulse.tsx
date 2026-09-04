@@ -5,58 +5,61 @@ import Link from "next/link";
 import { useCallback } from "react";
 
 import { AirlineLogo } from "@/components/airline-logo";
-import { Delta } from "@/components/ui/delta";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useDataSource } from "@/hooks/use-data-source";
 import { apiFetch } from "@/lib/api";
-import { regionsOf } from "@/lib/network-signals";
 import { worldRegions } from "@/lib/nav";
-import { RIVAL_CODES } from "@/lib/taxonomy.gen";
-import type {
-  InsightsOut,
-  NetworkSignalGroup,
-  NetworkSignalsOut,
-  PromotionNewCountOut,
-} from "@/lib/types";
+import type { PromotionNewCountOut, SignalOut, SignalStreamOut } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const REGION_NAME = new Map<string, string>(
   worldRegions.map((region) => [region.slug, region.name]),
 );
 
-/** The carriers this cell is allowed to rank, from the generated taxonomy.
+/** Where each cell's own stream is listed in full.
  *
- * TK is the home carrier and is deliberately absent (backend/app/taxonomy.py
- * RIVAL_CODES, and SQ with it) -- but `/insights` counts mentions across the
- * whole feed, and in a Turkish-language feed the most-mentioned carrier is
- * always TK. A "Rekabet" cell whose top mover is the airline it is written for
- * is not a competitive reading; it is the feed's own language, ranked.
+ * These are the SAME strings backend/app/services/signals_service.py puts on
+ * that stream's rows (NETWORK_HREF, MOMENTUM_HREF), and the cells below prefer
+ * a row's own `href` when there is a row to read it from. The constants exist
+ * for the empty state, which still has to offer a way through.
  *
- * A Set, so a taxonomy that grows a rival costs no scan per row. */
-const RIVAL_CODE_SET = new Set<string>(RIVAL_CODES);
+ * Both were wrong until this round, in the same way: the cell header linked
+ * somewhere the stream is not drawn. Momentum pointed at /biz, which is the
+ * THY desk and has carried no rival momentum since the signals block moved
+ * out of it; routes pointed at bare /hublar, which lands on the hub map rather
+ * than the Ağ Sinyalleri tab that actually lists route announcements.
+ */
+const MOMENTUM_HOME = "/sinyaller?kind=competitor";
+const NETWORK_HOME = "/hublar?view=network-signals";
 
 /** "The stream did not answer" -- which is NOT "the stream answered zero".
  *
  * All three cells used to branch on `loaded` alone and then read
- * `data?.count ?? 0` / an empty array, so a 500 from any of the three
- * endpoints printed a confident "0" and "Son 48 saatte yeni kampanya yok."
- * A count is a claim about the world; an error is a claim about us. The page's
- * whole argument is that it never prints the first when it only knows the
- * second. `SignalStream` already had this right with `DataSourceError`; this
- * is the same contract at cell scale, where a full error panel would not fit.
+ * `data?.count ?? 0` / an empty array, so a 500 printed a confident "0" and
+ * "Son 48 saatte yeni kampanya yok." A count is a claim about the world; an
+ * error is a claim about us.
+ *
+ * `onRetry` is optional because two of the three cells no longer own their
+ * request: the signal feed is read once on the server, so its retry is the
+ * page-level one printed directly above this row (ServerSourceError). A second
+ * button per cell would ask again for the same thing three times over. What
+ * the cells still owe the reader is WHICH of them went dark -- the campaign
+ * count has its own source and is unaffected -- and that is this sentence.
  */
-function SourceDown({ onRetry }: { onRetry: () => void }) {
+function SourceDown({ onRetry }: { onRetry?: () => void }) {
   return (
     <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
       <span>Kaynak okunamadı.</span>
-      <button
-        type="button"
-        onClick={onRetry}
-        className="flex items-center gap-1 rounded border border-border px-1.5 py-px font-medium transition-colors hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-      >
-        <RotateCw className="size-2.5" aria-hidden />
-        Yeniden dene
-      </button>
+      {onRetry && (
+        <button
+          type="button"
+          onClick={onRetry}
+          className="flex items-center gap-1 rounded border border-border px-1.5 py-px font-medium transition-colors hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+        >
+          <RotateCw className="size-2.5" aria-hidden />
+          Yeniden dene
+        </button>
+      )}
     </div>
   );
 }
@@ -91,8 +94,31 @@ function Cell({
   );
 }
 
+/** The stream key behind each of this row's two signal cells.
+ *
+ * Named constants rather than literals inline, because the cells below filter
+ * by them AND `PULSE_STREAMS` is built out of them. The set used to be written
+ * separately from the two literals the cells actually used, which made the
+ * routing contract decorative for this row: a stream added to the set alone
+ * would have satisfied signal-routing.test.ts's "covers every stream" while
+ * this row drew nothing -- exactly the silent drop that test exists to catch.
+ * Membership and rendering now come from one pair of names. */
+const MOMENTUM_STREAM = "momentum";
+const NETWORK_STREAM = "network";
+
+/** The two streams this row draws. Exported for the same reason
+ * `KOKPIT_STREAMS` and `ALERT_STREAMS` are: together the three sets have to
+ * cover all seven streams exactly once, or a stream is either drawn twice on
+ * one page or silently drawn nowhere. See signal-routing.test.ts, and
+ * competitive-pulse.test.tsx for the half that pins each member to a cell. */
+export const PULSE_STREAMS = new Set([MOMENTUM_STREAM, NETWORK_STREAM]);
+
+/** How many movers / route signals the cells print. The rows arrive ordered by
+ * the backend, so the head is the strongest -- see `sort_signals`. */
+const CELL_ROW_LIMIT = 3;
+
 /**
- * REKABET / PİYASA GÖRÜNÜMÜ -- three counts, one row, 68px.
+ * REKABET / PİYASA GÖRÜNÜMÜ -- three counts, one row.
  *
  * EVERY NUMBER IN THIS SECTION IS A COUNT OF NEWS AND CAMPAIGNS. This system
  * carries no rival capacity, load factor, market share, yield or price-pressure
@@ -103,47 +129,62 @@ function Cell({
  * dressed as a KPI. The section caption says so in the reader's own language,
  * above these cells, and it is not removable.
  *
- * The 48-hour campaign count stays here (rather than moving to Günün Özeti)
- * precisely because the Günün Özeti tiles print no numbers at all -- so this
- * is the only place on the page the figure appears, and no duplication is
- * created by keeping it.
+ * TWO OF THE THREE CELLS NO LONGER FETCH. Momentum came from `/insights` and
+ * routes from `/hubs/network-signals`, which is how this row and /sinyaller
+ * came to draw the same two streams from two different reads, with two
+ * different caps and two different orderings. They read the page's one
+ * server-side `/signals` now, filtered by stream, in the backend's order --
+ * so a mover shown here is the same row, in the same place, that /sinyaller
+ * lists. The 48-hour campaign count stays a fetch of its own: it is a
+ * promotion count, not a signal, and no stream publishes it.
+ *
+ * WHAT MOVING THE MOMENTUM CELL COST, stated rather than hidden: it used to
+ * separate three empty states -- "no measurement at all", "the feed was
+ * measured and held no rival", "rivals were measured and none moved" -- by
+ * inspecting the raw `/insights` list. The signal feed publishes the stream's
+ * output, not its input, so those three collapse into one: no momentum signal.
+ * The distinction is gone because the evidence for it is gone, and the cell
+ * says only what it can still see. What is NOT lost is the failure case: an
+ * unread feed arrives as `unavailable`, the two cells say so instead of
+ * reporting a stillness, and the retry is the page's one line above this row
+ * rather than three buttons asking for the same response.
  */
-export function CompetitivePulse() {
+export function CompetitivePulse({
+  signals,
+  streams,
+  unavailable = false,
+}: {
+  /** The page's one read of `/signals`, unfiltered and in the backend's own
+   * order. */
+  signals: SignalOut[];
+  /** The per-stream tally from the same response -- the only place the
+   * worldwide route total survives the list's display cap. */
+  streams: SignalStreamOut[];
+  /** The feed was NOT READ. Not derivable from `signals` being empty: an empty
+   * feed is a measurement ("no rival moved this week") and an unread one is
+   * not, and the two must not render the same. The campaign cell keeps its own
+   * source and is unaffected either way. */
+  unavailable?: boolean;
+}) {
   const newCountFetcher = useCallback(
     (signal: AbortSignal) =>
       apiFetch<PromotionNewCountOut>("/promotions/new-count", { cache: "default", signal }),
     [],
   );
-  const insightsFetcher = useCallback(
-    (signal: AbortSignal) => apiFetch<InsightsOut>("/insights", { cache: "default", signal }),
-    [],
-  );
-  const routesFetcher = useCallback(
-    (signal: AbortSignal) =>
-      apiFetch<NetworkSignalsOut | NetworkSignalGroup[]>("/hubs/network-signals?days=30", {
-        cache: "default",
-        signal,
-      }),
-    [],
-  );
-
   const newCount = useDataSource(newCountFetcher, []);
-  const insights = useDataSource(insightsFetcher, []);
-  const routes = useDataSource(routesFetcher, []);
 
-  const momentum = insights.data?.airline_momentum ?? [];
-  // Rivals only -- see RIVAL_CODE_SET. Filtered BEFORE the "did anything move"
-  // test so the empty state below still distinguishes "the stream returned
-  // nothing" from "it returned rows and no rival moved".
-  const rivalMomentum = momentum.filter((mover) => RIVAL_CODE_SET.has(mover.code));
-  const movers = rivalMomentum.filter((mover) => mover.delta !== 0).slice(0, 3);
-  // `regionsOf`, not `.regions`: the edge can still hand this new code the
-  // pre-envelope array for the length of one cache lifetime (lib/network-
-  // signals.ts). `?? []` only after that, and only because the cell below
-  // separately distinguishes "never answered" via `routes.loaded`/`routes.data`.
-  const routeGroups = regionsOf(routes.data) ?? [];
-  const routeTotal = routeGroups.reduce((sum, group) => sum + group.count, 0);
-  const firstRoute = routeGroups.find((group) => group.articles.length > 0);
+  // One cell per member of PULSE_STREAMS, filtered by the very constants that
+  // set is built from -- filtered rather than re-sorted, so the head shown
+  // here is the head /sinyaller shows.
+  const movers = signals.filter((row) => row.stream === MOMENTUM_STREAM);
+  const routes = signals.filter((row) => row.stream === NETWORK_STREAM);
+  // The stream's own worldwide total -- wider than the rows listed here, and
+  // itself capped by the backend's event limit (see SignalStreamOut.total).
+  // `null` means the backend published no total for this stream, which is NOT
+  // zero -- so the line is omitted rather than printed with a number this page
+  // does not have.
+  const routeTotal =
+    streams.find((stream) => stream.key === NETWORK_STREAM)?.total ?? null;
 
   return (
     <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
@@ -184,45 +225,43 @@ export function CompetitivePulse() {
         )}
       </Cell>
 
-      <Cell icon={TrendingUp} title="Rakip haber momentumu (7g vs 7g)" href="/biz">
-        {!insights.loaded ? (
-          <Skeleton className="h-6 w-full rounded" />
-        ) : !insights.data ? (
-          <SourceDown onRetry={insights.retry} />
+      <Cell
+        icon={TrendingUp}
+        title="Rakip haber momentumu (7g vs 7g)"
+        href={movers[0]?.href ?? MOMENTUM_HOME}
+      >
+        {unavailable ? (
+          <SourceDown />
         ) : movers.length === 0 ? (
-          // THREE facts, three sentences. "We have no measurement", "we
-          // measured the feed and no RIVAL was in it" and "rivals were
-          // measured and none moved" are different things to go and check, and
-          // one sentence for all three would hide the middle one entirely --
-          // which is the state the TK filter above can now produce.
           <p className="text-[10px] text-muted-foreground">
-            {momentum.length === 0
-              ? "Momentum verisi yok."
-              : rivalMomentum.length === 0
-                ? "Bu hafta rakip taşıyıcı ölçülmedi."
-                : "Bu hafta belirgin bir hareket yok."}
+            Bu hafta rakip haber momentumu sinyali yok.
           </p>
         ) : (
-          <ul className="flex flex-wrap gap-x-3 gap-y-0.5">
-            {movers.map((mover) => (
-              <li key={mover.code} className="flex items-center gap-1 text-[11px]">
-                <AirlineLogo code={mover.code} className="size-3 shrink-0" />
-                <span className="font-medium">{mover.code}</span>
-                {/* Neutral: more press coverage is not "good". It is more
-                    press coverage. */}
-                <Delta pct={mover.delta} tone="neutral" valueLabel={`${mover.previous}→${mover.current}`} />
+          <ul className="flex flex-col gap-0.5">
+            {movers.slice(0, CELL_ROW_LIMIT).map((mover) => (
+              <li key={mover.id} className="flex items-center gap-1 text-[11px]">
+                {mover.airline_codes[0] && (
+                  <AirlineLogo code={mover.airline_codes[0]} className="size-3 shrink-0" />
+                )}
+                {/* The backend's own sentence -- "Emirates haber hacmi +4
+                    (12→16)" -- not a re-assembly of it here. It is neutral on
+                    purpose: more press coverage is not "good", it is more
+                    press coverage, so the delta takes no colour. */}
+                <span className="truncate">{mover.title_tr}</span>
               </li>
             ))}
           </ul>
         )}
       </Cell>
 
-      <Cell icon={Route} title="Yeni rota sinyali (30g)" href="/hublar">
-        {!routes.loaded ? (
-          <Skeleton className="h-6 w-full rounded" />
-        ) : !routes.data ? (
-          <SourceDown onRetry={routes.retry} />
-        ) : !firstRoute ? (
+      <Cell
+        icon={Route}
+        title="Yeni rota sinyali (30g)"
+        href={routes[0]?.href ?? NETWORK_HOME}
+      >
+        {unavailable ? (
+          <SourceDown />
+        ) : routes.length === 0 ? (
           <p className="text-[10px] text-muted-foreground">Yeni rota sinyali yok.</p>
         ) : (
           <div className="flex flex-col gap-0.5">
@@ -230,18 +269,23 @@ export function CompetitivePulse() {
                 underneath it. They used to share one line -- "14 · Avrupa" --
                 which reads as "fourteen new route signals in Europe" and was
                 never true: 14 is every region added up, Europe is merely the
-                first group that had an article. Two scopes, two lines. */}
-            <span className="text-[11px] tabular-nums">
-              <b>{routeTotal}</b> sinyal · 30g · tüm bölgeler
-            </span>
-            <a
-              href={firstRoute.articles[0].url}
-              target="_blank"
-              rel="noopener noreferrer"
+                region of the newest announcement. Two scopes, two lines. */}
+            {routeTotal !== null && (
+              <span className="text-[11px] tabular-nums">
+                <b>{routeTotal}</b> sinyal · 30g · tüm bölgeler
+              </span>
+            )}
+            {/* In-app, not out to the wire. The headline used to link straight
+                to the article, which the signal feed does not publish -- a row
+                carries `source_label`, not a source URL. So it goes where the
+                announcement is listed WITH its source link, which is also
+                where this cell's arrow goes. */}
+            <Link
+              href={routes[0].href ?? NETWORK_HOME}
               className="truncate rounded text-[10px] text-muted-foreground hover:text-primary hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
             >
-              {REGION_NAME.get(firstRoute.region ?? "") ?? "Diğer"} · {firstRoute.articles[0].headline}
-            </a>
+              {REGION_NAME.get(routes[0].region ?? "") ?? "Diğer"} · {routes[0].title_tr}
+            </Link>
           </div>
         )}
       </Cell>

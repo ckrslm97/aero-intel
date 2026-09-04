@@ -170,3 +170,88 @@ def test_a_single_article_is_still_an_event():
 
 def test_clustering_an_empty_window_is_not_an_error():
     assert cluster([]) == []
+
+
+# --- the closure is a closure, whatever order the rows arrive in -----------
+
+
+def _etna_trio():
+    """Three tellings of one eruption, chained rather than mutually similar.
+
+    The middle one names both Catania and Sicily and so meets each of the other
+    two; the outer two share only the carrier-free boilerplate every eruption
+    story uses, and do not meet each other. That is the ordinary shape of real
+    coverage, and it is exactly the shape `same_event` is not transitive on.
+    """
+    catania = _c(
+        "a",
+        "Etna patlaması Catania Havalimanı'nın kapatılmasına neden oldu",
+        entities=("cta",),
+    )
+    both = _c(
+        "b",
+        "Etna külleri Catania Havalimanı'nı kapattı, Sicilya genelinde uçuşlar iptal",
+        entities=("cta",),
+    )
+    sicily = _c(
+        "c",
+        "Mount Etna eruption disrupts travel across Sicily",
+        entities=("cta",),
+    )
+    assert same_event(catania, both)
+    assert same_event(both, sicily)
+    assert not same_event(catania, sicily)
+    return catania, both, sicily
+
+
+def test_one_event_stays_one_cluster_whatever_order_it_arrives_in():
+    """Row order is not a fact about the news.
+
+    `cluster` used to stop at the first cluster a candidate matched, so the
+    chain above came out as ONE signal in the order A, B, C and as TWO in the
+    order A, C, B -- from the same three articles. Nothing chose that order:
+    it was whatever Postgres returned for rows sharing a publication minute,
+    which changes with the plan. Now the middle article merges the two ends
+    instead of picking one.
+    """
+    catania, both, sicily = _etna_trio()
+
+    for order in (
+        [catania, both, sicily],
+        [catania, sicily, both],
+        [sicily, catania, both],
+        [both, sicily, catania],
+    ):
+        clusters = cluster(order)
+        assert len(clusters) == 1, [tuple(c.article_id for c in g) for g in clusters]
+        assert {c.article_id for c in clusters[0]} == {"a", "b", "c"}
+
+
+def test_merging_does_not_glue_together_events_that_never_met():
+    """The negative half. Closure must only ever join clusters through a
+    candidate that genuinely matches both -- a merge rule that ran too eagerly
+    would collapse a whole day's feed into one signal, which is a worse error
+    than the split it fixes."""
+    catania, both, sicily = _etna_trio()
+    unrelated = _c("d", "Pegasus kış kampanyasında yüzde 40 indirim duyurdu")
+
+    clusters = cluster([catania, unrelated, both, sicily])
+
+    assert len(clusters) == 2
+    by_size = sorted(clusters, key=len)
+    assert [c.article_id for c in by_size[0]] == ["d"]
+    assert {c.article_id for c in by_size[1]} == {"a", "b", "c"}
+
+
+def test_a_feed_with_nothing_to_merge_keeps_its_original_cluster_order():
+    """The merge rule must be invisible when it has nothing to do: a feed of
+    unrelated stories comes out in the order it went in, one cluster each."""
+    rows = [
+        _c("1", "Pegasus kış kampanyasında yüzde 40 indirim duyurdu"),
+        _c("2", "Heathrow'da sis nedeniyle yüzlerce uçuş rötar yaptı"),
+        _c("3", "IATA küresel yolcu trafiği tahminini yukarı çekti"),
+    ]
+
+    clusters = cluster(rows)
+
+    assert [[c.article_id for c in group] for group in clusters] == [["1"], ["2"], ["3"]]

@@ -1,217 +1,230 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
-import { AlertCenter } from "./alert-center";
+import type { SignalOut } from "@/lib/types";
 
-const apiFetch = vi.hoisted(() => vi.fn());
-vi.mock("@/lib/api", () => ({ apiFetch, API_BASE_URL: "http://test/api/v1" }));
+import { ALERT_STREAMS, AlertCenter } from "./alert-center";
 
 const hoursAgo = (hours: number) => new Date(Date.now() - hours * 3_600_000).toISOString();
 
-const campaignAlert = (overrides: Record<string, unknown> = {}) => ({
-  id: "c1",
-  promotion_id: "p1",
-  alert_type: "EXPIRING",
-  priority: "MEDIUM",
-  title_tr: "TK Avrupa kampanyası bitiyor",
-  detail_json: null,
-  created_at: hoursAgo(3),
-  ...overrides,
-});
+const signal = (overrides: Partial<SignalOut> = {}): SignalOut =>
+  ({
+    id: "c1",
+    stream: "campaign_alerts",
+    kind: "competitor",
+    kind_label_tr: "Rakip",
+    type_label_tr: "Bitmek üzere",
+    severity: "medium",
+    severity_label_tr: "Orta",
+    severity_basis_tr: "Kampanya uyarı önceliği.",
+    title_tr: "TK Avrupa kampanyası bitiyor",
+    detail_tr: null,
+    region: null,
+    airline_codes: [],
+    detected_at: hoursAgo(3),
+    confidence_score: null,
+    source_label: "AeroIntel kampanya tespiti",
+    href: "/kampanyalar",
+    ...overrides,
+  }) as SignalOut;
 
-const riskItem = (overrides: Record<string, unknown> = {}) => ({
-  id: "r1",
-  headline: "Etna'da kül bulutu uçuşları durdurdu",
-  url: "https://example.test",
-  source_name: "Reuters",
-  published_at: hoursAgo(1),
-  risk_type: "volcano",
-  risk_family: "natural",
-  risk_type_label_tr: "Volkanik aktivite",
-  severity: "high",
-  country: "İtalya",
-  city: "Catania",
-  region: "europe",
-  is_fresh: true,
-  source_count: 2,
-  ...overrides,
-});
-
-const radar = (items: ReturnType<typeof riskItem>[]) => ({
-  days: 14,
-  total: items.length,
-  countries: [
-    {
-      country: "İtalya",
-      region: "europe",
-      count: items.length,
-      score: 3 * items.length,
-      severity_counts: { high: items.length, medium: 0, low: 0 },
-      items,
-    },
-  ],
-  type_counts: {},
-  family_counts: {},
-});
-
-/** Route each mocked call by path, so the two streams can be failed and
- * emptied independently -- which is the whole point of the component. */
-function routes({ alerts, risks }: { alerts?: unknown; risks?: unknown }) {
-  apiFetch.mockImplementation((path?: string) => {
-    if (path?.startsWith("/campaign-alerts")) {
-      return alerts instanceof Error ? Promise.reject(alerts) : Promise.resolve(alerts ?? []);
-    }
-    if (path?.startsWith("/risks")) {
-      return risks instanceof Error ? Promise.reject(risks) : Promise.resolve(risks ?? radar([]));
-    }
-    // Rejected, never thrown: a synchronous throw out of the fetcher escapes
-    // useDataSource's own .catch and surfaces as a React render error instead
-    // of the fetch failure the component is designed to handle.
-    return Promise.reject(new Error(`unexpected path ${String(path)}`));
+const riskSignal = (overrides: Partial<SignalOut> = {}): SignalOut =>
+  signal({
+    id: "r1",
+    stream: "risk",
+    kind: "risk",
+    kind_label_tr: "Risk",
+    type_label_tr: "Volkanik aktivite",
+    severity: "high",
+    severity_label_tr: "Yüksek",
+    title_tr: "Etna'da kül bulutu uçuşları durdurdu",
+    detected_at: hoursAgo(1),
+    source_label: "Reuters",
+    href: "/risk-radari",
+    ...overrides,
   });
+
+/** The section opens CLOSED, so every row assertion has to expand it first. */
+async function expand() {
+  const button = await screen.findByRole("button", { name: /Genişlet/ });
+  await waitFor(() => expect(button).toBeEnabled());
+  await userEvent.click(button);
 }
 
 describe("AlertCenter", () => {
-  // Braces, not a concise arrow body: `mockReset()` returns the mock for
-  // chaining, and Vitest treats a function returned from beforeEach as a
-  // per-test CLEANUP hook -- so `() => apiFetch.mockReset()` quietly registers
-  // the mock itself as teardown and calls it with no arguments after every
-  // test, which lands in `mockImplementation` as an unroutable `undefined`
-  // path.
-  beforeEach(() => {
-    apiFetch.mockReset();
+  it("counts exactly the two alert streams and no others", () => {
+    // Too wide and this band reprints the signal board two sections above it;
+    // too narrow and an alert stream silently stops being counted.
+    expect([...ALERT_STREAMS].sort()).toEqual(["campaign_alerts", "risk"]);
   });
 
-  /** The section opens CLOSED, so every row assertion has to expand it first.
-   *
-   * The wait for `toBeEnabled()` is what makes this deterministic. The button
-   * is `disabled` until rows arrive, `findByRole` matches disabled buttons
-   * too, and `userEvent.click` on a disabled button is silently swallowed --
-   * so whenever the mocked promise had not yet flushed, the panel simply never
-   * opened and the row assertion failed with "Unable to find an element". Six
-   * of the seven tests here go through this helper, so all six were racing;
-   * over fifteen full runs it lost twice. */
-  async function expand() {
-    const button = await screen.findByRole("button", { name: /Genişlet/ });
-    await waitFor(() => expect(button).toBeEnabled());
-    await userEvent.click(button);
-  }
+  it("ignores the five streams that are drawn elsewhere on the page", async () => {
+    render(
+      <AlertCenter
+        signals={[
+          signal(),
+          riskSignal(),
+          signal({ id: "x1", stream: "rival_events", title_tr: "Rakip olayı" }),
+          signal({ id: "x2", stream: "network", title_tr: "Yeni hat" }),
+          signal({ id: "x3", stream: "kokpit", title_tr: "Kur riski" }),
+        ]}
+      />,
+    );
+    await expand();
 
-  it("starts collapsed, showing counts rather than rows", async () => {
-    routes({ alerts: [campaignAlert()], risks: radar([riskItem()]) });
-    render(<AlertCenter />);
+    expect(screen.getByText("TK Avrupa kampanyası bitiyor")).toBeInTheDocument();
+    expect(screen.getByText("Etna'da kül bulutu uçuşları durdurdu")).toBeInTheDocument();
+    expect(screen.queryByText("Rakip olayı")).not.toBeInTheDocument();
+    expect(screen.queryByText("Yeni hat")).not.toBeInTheDocument();
+    expect(screen.queryByText("Kur riski")).not.toBeInTheDocument();
+  });
 
-    expect(await screen.findByText(/1 ORTA/)).toBeInTheDocument();
-    expect(await screen.findByText(/1 YÜKSEK/)).toBeInTheDocument();
+  it("starts collapsed, showing counts rather than rows", () => {
+    render(<AlertCenter signals={[signal(), riskSignal()]} />);
+
+    expect(screen.getByText(/1 ORTA/)).toBeInTheDocument();
+    expect(screen.getByText(/1 YÜKSEK/)).toBeInTheDocument();
     // The bottom of the page is not where a reader is scanning; the rows are
     // one click away, the counts are not.
     expect(screen.queryByText("TK Avrupa kampanyası bitiyor")).not.toBeInTheDocument();
   });
 
-  it("merges both streams once expanded", async () => {
-    routes({ alerts: [campaignAlert()], risks: radar([riskItem()]) });
-    render(<AlertCenter />);
+  /** THE REGRESSION THIS ROUND CLOSED.
+   *
+   * This band used to merge two of its own fetches and RE-SORT them under a
+   * priority ladder written here, while /sinyaller sorted the same rows with
+   * the backend's. One set of facts, two "most important" orders. The list
+   * arrives sorted now and this component may not touch it. */
+  it("never re-sorts: the rows keep the order the feed handed them", async () => {
+    render(
+      <AlertCenter
+        signals={[
+          riskSignal({ id: "a", severity: "critical", title_tr: "Bir" }),
+          signal({ id: "b", severity: "high", title_tr: "İki" }),
+          signal({ id: "c", severity: "low", title_tr: "Üç" }),
+        ]}
+      />,
+    );
     await expand();
 
-    expect(screen.getByText("TK Avrupa kampanyası bitiyor")).toBeInTheDocument();
-    expect(screen.getByText("Etna'da kül bulutu uçuşları durdurdu")).toBeInTheDocument();
+    const titles = screen.getAllByText(/^(Bir|İki|Üç)$/).map((node) => node.textContent);
+    expect(titles).toEqual(["Bir", "İki", "Üç"]);
   });
 
-  it("orders by priority before recency", async () => {
-    routes({
-      alerts: [
-        campaignAlert({ id: "old", priority: "INFO", title_tr: "Bilgi", created_at: hoursAgo(0.1) }),
-        campaignAlert({
-          id: "crit",
-          priority: "CRITICAL",
-          title_tr: "Kritik",
-          created_at: hoursAgo(9),
-        }),
-      ],
-      risks: radar([]),
-    });
-    render(<AlertCenter />);
+  it("does not reorder even when the feed's order looks wrong to it", async () => {
+    // The negative half. A component that quietly "fixed" this would be the
+    // second opinion the whole change exists to remove -- if the backend ever
+    // ships a bad order, that is a backend bug, visible here rather than
+    // papered over.
+    render(
+      <AlertCenter
+        signals={[
+          signal({ id: "a", severity: "low", title_tr: "Düşük" }),
+          signal({ id: "b", severity: "critical", title_tr: "Kritik" }),
+        ]}
+      />,
+    );
     await expand();
 
-    const titles = screen.getAllByText(/^(Kritik|Bilgi)$/).map((node) => node.textContent);
-    // A CRITICAL from nine hours ago outranks an INFO from six minutes ago.
-    expect(titles).toEqual(["Kritik", "Bilgi"]);
+    const titles = screen.getAllByText(/^(Düşük|Kritik)$/).map((node) => node.textContent);
+    expect(titles).toEqual(["Düşük", "Kritik"]);
   });
 
-  it("caps the open list at three rows", async () => {
-    routes({
-      alerts: Array.from({ length: 5 }, (_, i) =>
-        campaignAlert({ id: `c${i}`, title_tr: `Uyarı ${i}` }),
-      ),
-      risks: radar([]),
-    });
-    render(<AlertCenter />);
+  it("caps the open list at three rows but counts them all", async () => {
+    render(
+      <AlertCenter
+        signals={Array.from({ length: 5 }, (_, i) =>
+          signal({ id: `c${i}`, title_tr: `Uyarı ${i}` }),
+        )}
+      />,
+    );
     await expand();
 
     expect(screen.getByText("Uyarı 0")).toBeInTheDocument();
     expect(screen.queryByText("Uyarı 3")).not.toBeInTheDocument();
-    // ...but the BAND still counts all five. A count computed over the three
-    // visible rows would be a number nobody could reconcile with /kampanyalar.
+    // ...the BAND still counts all five. A count computed over the three
+    // visible rows would be a number nobody could reconcile with /sinyaller.
     expect(screen.getByText(/5 ORTA/)).toBeInTheDocument();
   });
 
-  it("only lifts high-severity risk items in, and only as HIGH", async () => {
-    routes({
-      alerts: [],
-      risks: radar([riskItem(), riskItem({ id: "r2", severity: "medium", headline: "Orta önem" })]),
-    });
-    render(<AlertCenter />);
-    await expand();
+  it("prints its zeroes rather than hiding the section", () => {
+    // A silent section says nothing; "0 KRİTİK" says the feed answered and had
+    // nothing to report, which is a different and useful statement. The page
+    // only renders this section when the feed WAS read -- an unread feed gets
+    // the failure line instead, so these zeroes can never stand in for one.
+    render(<AlertCenter signals={[]} />);
 
-    expect(screen.getByText("Etna'da kül bulutu uçuşları durdurdu")).toBeInTheDocument();
-    expect(screen.queryByText("Orta önem")).not.toBeInTheDocument();
-    expect(screen.getByText(/1 YÜKSEK/)).toBeInTheDocument();
-  });
-
-  it("still renders one stream when the other fails", async () => {
-    routes({ alerts: [campaignAlert()], risks: new Error("API request failed: 500") });
-    render(<AlertCenter />);
-    await expand();
-
-    expect(screen.getByText("TK Avrupa kampanyası bitiyor")).toBeInTheDocument();
-  });
-
-  it("refuses to print zeroes when BOTH streams failed", async () => {
-    // The regression this locks: `useDataSource` sets `loaded` on a failed
-    // request too, so a component branching on `loaded` alone rendered a dead
-    // endpoint as "0 KRİTİK · 0 YÜKSEK · 0 ORTA" -- the most reassuring
-    // sentence on the page, produced by knowing nothing.
-    routes({
-      alerts: new Error("API request failed: 500"),
-      risks: new Error("API request failed: 500"),
-    });
-    render(<AlertCenter />);
-
-    expect(await screen.findByText(/okunamadı/)).toBeInTheDocument();
-    expect(screen.queryByText(/0 KRİTİK/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/0 YÜKSEK/)).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Yeniden dene/ })).toBeInTheDocument();
-  });
-
-  it("marks the counts as partial when only one stream failed", async () => {
-    routes({ alerts: [campaignAlert()], risks: new Error("API request failed: 500") });
-    render(<AlertCenter />);
-
-    // The campaign count is real and printed; the band says what is missing
-    // from it, so "1 ORTA" is not read as the whole picture.
-    expect(await screen.findByText(/1 ORTA/)).toBeInTheDocument();
-    expect(screen.getByText(/Eksik: risk sinyalleri/)).toBeInTheDocument();
-  });
-
-  it("prints its zeroes rather than hiding the section", async () => {
-    // A silent section says nothing; "0 KRİTİK" says the streams answered and
-    // had nothing to report, which is a different and useful statement.
-    routes({ alerts: [], risks: radar([]) });
-    render(<AlertCenter />);
-
-    expect(await screen.findByText(/0 KRİTİK/)).toBeInTheDocument();
+    expect(screen.getByText(/0 KRİTİK/)).toBeInTheDocument();
     expect(screen.getByText(/0 YÜKSEK/)).toBeInTheDocument();
+    expect(screen.getByText(/0 ORTA/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Genişlet/ })).toBeDisabled();
+  });
+
+  it("takes each row's drill-down from the row, not from a table of its own", async () => {
+    render(<AlertCenter signals={[riskSignal(), signal()]} />);
+    await expand();
+
+    expect(
+      screen.getByRole("link", { name: /Etna'da kül bulutu/ }),
+    ).toHaveAttribute("href", "/risk-radari");
+    expect(
+      screen.getByRole("link", { name: /TK Avrupa kampanyası/ }),
+    ).toHaveAttribute("href", "/kampanyalar");
+  });
+
+  it("renders a row with no drill-down as text rather than a dead link", async () => {
+    render(<AlertCenter signals={[signal({ href: null, title_tr: "Hedefsiz" })]} />);
+    await expand();
+
+    expect(screen.getByText("Hedefsiz")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Hedefsiz/ })).not.toBeInTheDocument();
+  });
+
+  it("offers the full list first", () => {
+    render(<AlertCenter signals={[signal()]} />);
+
+    expect(screen.getByRole("link", { name: /Sinyaller/ })).toHaveAttribute(
+      "href",
+      "/sinyaller",
+    );
+  });
+});
+
+describe("AlertCenter: risk taraması tavana çarptığında", () => {
+  // /risks caps how many articles one rollup clusters (RISK_SCAN_CAP). Kokpit
+  // never calls /risks -- it counts risk rows out of the /signals envelope --
+  // so the flag rides along on that response. Without these two tests the cap
+  // would be published with no reader, which is the same thing as capping
+  // silently.
+
+  it("says the counts are a floor, and names how many articles were read", async () => {
+    render(
+      <AlertCenter
+        signals={[riskSignal(), signal()]}
+        riskTruncated
+        riskScannedArticles={400}
+      />,
+    );
+
+    const note = await screen.findByText(/Risk taraması/);
+    expect(note).toHaveTextContent("en yeni 400 haberinde durdu");
+    expect(note).toHaveTextContent("hepsi bu kadar değil");
+  });
+
+  it("drops the figure rather than inventing one when the count is missing", async () => {
+    render(<AlertCenter signals={[riskSignal()]} riskTruncated riskScannedArticles={null} />);
+
+    const note = await screen.findByText(/Risk taraması/);
+    expect(note).toHaveTextContent("pencerenin tamamına ulaşamadı");
+    expect(note).not.toHaveTextContent("0 haber");
+  });
+
+  it("stays quiet when the rollup read its whole window", () => {
+    // The negative half: an always-on warning is furniture, and the band's
+    // counts really are complete on an ordinary day.
+    render(<AlertCenter signals={[riskSignal(), signal()]} />);
+
+    expect(screen.queryByText(/Risk taraması/)).not.toBeInTheDocument();
   });
 });

@@ -94,31 +94,58 @@ def _window_delta(latest: KPI, prior: KPI | None) -> float | None:
     return _delta_pct(latest.value, prior.value)
 
 
+#: How many readings the sparkline carries. At the cron's ~15-minute cadence
+#: that is roughly the last half day, which is the shape the cell is drawn to
+#: show. It is also the bound on the batched read below: the board never asks
+#: for more history than it draws.
+FX_SPARKLINE_POINTS = 48
+
+
 @router.get("/fx", response_model=KokpitFxBoardOut)
 async def get_fx_board(response: Response, db: AsyncSession = Depends(get_db)) -> KokpitFxBoardOut:
+    """The live FX board: one row per pair, with 1G/1H/1A deltas and a sparkline.
+
+    FOUR QUERIES, AND WHY THAT MATTERS. This used to be five per pair -- latest,
+    trend, and one `closest_before` for each of the three windows -- so eight
+    pairs cost 40 sequential round trips inside Vercel's 30-second budget, and
+    the count was multiplied by the pair list: the commit that added GBP/TRY
+    added five queries without anybody deciding to. Now the whole board is one
+    `trends_for` (which carries the latest reading as the last row of each
+    trend, so there is nothing left for a separate `latest` to ask) plus one
+    `closest_before_many` per window. Adding a ninth pair adds no queries at all.
+
+    Nothing about what is shown changed: the same rows, in LIVE_FX_PAIRS order,
+    with the same "no reading, no row" and the same `_window_delta` refusal to
+    invent a delta for a window that never closed.
+    """
     public_cache(response, FX)
     repo = KpiRepository(db)
     now = datetime.now(timezone.utc)
 
+    keys = [metric_key for metric_key, *_rest in LIVE_FX_PAIRS]
+    trends = await repo.trends_for(keys, points=FX_SPARKLINE_POINTS)
+    day_ago = await repo.closest_before_many(keys, now - timedelta(days=1))
+    week_ago = await repo.closest_before_many(keys, now - timedelta(days=7))
+    month_ago = await repo.closest_before_many(keys, now - timedelta(days=30))
+
     pairs: list[KokpitFxPairOut] = []
     for metric_key, *_rest in LIVE_FX_PAIRS:
-        latest = await repo.latest(metric_key)
-        if latest is None:
+        rows = trends.get(metric_key)
+        if not rows:
             continue
-        sparkline_rows = await repo.trend(metric_key, points=48)
-        day_ago = await repo.closest_before(metric_key, now - timedelta(days=1))
-        week_ago = await repo.closest_before(metric_key, now - timedelta(days=7))
-        month_ago = await repo.closest_before(metric_key, now - timedelta(days=30))
+        # `trends_for` hands back each metric oldest-first, so the newest
+        # reading is the last one -- the same row `repo.latest()` returned.
+        latest = rows[-1]
 
         pairs.append(
             KokpitFxPairOut(
                 currency_pair=FX_PAIR_LABELS.get(metric_key, metric_key),
                 value=latest.value,
                 unit=latest.unit,
-                day_delta_pct=_window_delta(latest, day_ago),
-                week_delta_pct=_window_delta(latest, week_ago),
-                month_delta_pct=_window_delta(latest, month_ago),
-                sparkline=[row.value for row in sparkline_rows],
+                day_delta_pct=_window_delta(latest, day_ago.get(metric_key)),
+                week_delta_pct=_window_delta(latest, week_ago.get(metric_key)),
+                month_delta_pct=_window_delta(latest, month_ago.get(metric_key)),
+                sparkline=[row.value for row in rows],
                 as_of=latest.as_of,
                 source=latest.source,
                 source_url=latest.source_url,

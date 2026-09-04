@@ -41,17 +41,23 @@ function signal(overrides: Partial<SignalOut> & Pick<SignalOut, "id">): SignalOu
   };
 }
 
-function payload(signals: SignalOut[]): SignalsOut {
+function payload(
+  signals: SignalOut[],
+  overrides: Partial<SignalsOut> = {},
+): SignalsOut {
   return {
     days: 30,
     total: signals.length,
     signals,
+    risk_truncated: false,
+    risk_scanned_articles: 12,
     streams: [
       {
         key: "risk",
         label_tr: "Risk Radarı",
         kind: "risk",
         count: signals.filter((s) => s.kind === "risk").length,
+        total: null,
         available: signals.some((s) => s.kind === "risk"),
         empty_message: signals.some((s) => s.kind === "risk") ? null : "Bu akışta sinyal yok.",
       },
@@ -60,11 +66,14 @@ function payload(signals: SignalOut[]): SignalsOut {
         label_tr: "Ağ sinyalleri",
         kind: "market",
         count: 0,
+        total: 0,
         available: false,
         empty_message: "Bu akışta sinyal yok.",
       },
     ],
+    cockpit_tiles: [],
     generated_at: "2026-08-31T12:00:00Z",
+    ...overrides,
   };
 }
 
@@ -283,5 +292,45 @@ describe("SignalsClient", () => {
 
     await waitFor(() => expect(apiFetch).toHaveBeenCalled());
     expect(await screen.findByRole("button", { name: /Yeniden dene/i })).toBeInTheDocument();
+  });
+
+  // --- the tally is not always a total -------------------------------------
+
+  it("attributes the window to the streams it actually governs", async () => {
+    // `days` is the news lookback for the EVENT-derived streams; the risk
+    // rollup keeps its own 14-day window and the campaign inbox has none
+    // (backend/app/api/v1/signals.py). "N sinyal · 30 gün" claimed one window
+    // over all seven, which this page cannot reproduce anywhere else.
+    apiFetch.mockResolvedValue(payload([signal({ id: "risk:1" })]));
+
+    render(<SignalsClient />);
+
+    expect(await screen.findByText(/olay akışları 30 gün/)).toBeInTheDocument();
+  });
+
+  it("says the risk counts are a floor when the rollup was capped", async () => {
+    apiFetch.mockResolvedValue(
+      payload([signal({ id: "risk:1" })], {
+        risk_truncated: true,
+        risk_scanned_articles: 400,
+      }),
+    );
+
+    render(<SignalsClient />);
+
+    const note = await screen.findByText(/Risk taraması/);
+    expect(note).toHaveTextContent("en yeni 400 haberinde durdu");
+    expect(note).toHaveTextContent("hepsi bu kadar değil");
+  });
+
+  it("stays quiet about the cap when the rollup read the whole window", async () => {
+    // The negative half. A disclosure printed every day is furniture, and on
+    // an ordinary feed these counts really are complete.
+    apiFetch.mockResolvedValue(payload([signal({ id: "risk:1" })]));
+
+    render(<SignalsClient />);
+
+    await screen.findByText(/olay akışları 30 gün/);
+    expect(screen.queryByText(/Risk taraması/)).not.toBeInTheDocument();
   });
 });

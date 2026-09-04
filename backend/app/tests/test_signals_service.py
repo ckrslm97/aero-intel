@@ -142,10 +142,12 @@ def _risk_item(item_id="r1", severity="high", *, fresh=True, published=NOW) -> R
     )
 
 
-def _radar(items) -> RiskRadarOut:
+def _radar(items, *, truncated: bool = False, scanned: int = 0) -> RiskRadarOut:
     return RiskRadarOut(
         days=14,
         total=len(items),
+        truncated=truncated,
+        scanned_articles=scanned,
         countries=[
             RiskCountryOut(
                 country="Italy",
@@ -250,6 +252,29 @@ def test_network_signals_are_flattened_per_announcement_and_capped():
     assert rows[0].airline_codes == ["TK"]
 
 
+def test_a_route_signal_links_to_the_tab_that_draws_route_signals():
+    # It used to link to bare "/hublar", which lands on the Hub'lar tab: a map
+    # of this desk's own hubs, carrying no route announcements at all. The
+    # reader clicked "Detay" on a new-route card and arrived somewhere with no
+    # new routes on it.
+    groups = [
+        {
+            "region": "asia",
+            "count": 1,
+            "articles": [
+                {"id": "n1", "headline": "Yeni hat", "airlines": [],
+                 "published_at": None, "source_name": "Wire"}
+            ],
+        }
+    ]
+
+    [row] = svc.from_network(groups)
+
+    assert row.href == svc.NETWORK_HREF == "/hublar?view=network-signals"
+    # Negative: the bare tab is not an acceptable answer any more.
+    assert row.href != "/hublar"
+
+
 def test_momentum_keeps_rivals_that_actually_moved():
     movers = [
         {"code": "TK", "name": "Turkish Airlines", "current": 30, "previous": 10, "delta": 20},
@@ -264,6 +289,22 @@ def test_momentum_keeps_rivals_that_actually_moved():
     assert "+7" in rows[0].title_tr
     # A rolling window has no point reading, so no timestamp is claimed.
     assert rows[0].detected_at is None
+
+
+def test_momentum_links_to_the_only_surface_that_lists_movers():
+    # It used to link to "/insights". İçgörüler carries `airline_momentum` in
+    # its payload and draws none of it -- its own docstring says the momentum
+    # is drawn on Kokpit -- so "Detay" landed on a page with no mover on it.
+    movers = [{"code": "EK", "name": "Emirates", "current": 9, "previous": 2, "delta": 7}]
+
+    [row] = svc.from_momentum(movers)
+
+    assert row.href == svc.MOMENTUM_HREF == "/sinyaller?kind=competitor"
+    assert row.href != "/insights"
+    # Narrowed rather than bare "/sinyaller": this card is drawn ON /sinyaller,
+    # and a "Detay" link to the page you are already reading is not a
+    # drill-down. The kind is the one this stream files itself under.
+    assert row.kind == svc.COMPETITOR
 
 
 # --- ordering ---------------------------------------------------------------
@@ -327,11 +368,12 @@ def stubbed_streams(monkeypatch):
     async def _radar_fn(db, days=14):
         return state["radar"]
 
-    async def _tiles(db, radar=None):
-        # The composition must hand its own rollup down rather than letting the
-        # tiles fetch a second one -- otherwise the tile's count and the cards
-        # under it could be two different numbers.
+    async def _tiles(db, radar=None, momentum=None):
+        # The composition must hand its own aggregates down rather than letting
+        # the tiles fetch a second copy -- otherwise the tile's count and the
+        # cards under it could be two different numbers.
         state["radar_passed_to_tiles"] = radar
+        state["momentum_passed_to_tiles"] = momentum
         return state["tiles"]
 
     async def _alerts(db, limit=20):
@@ -347,6 +389,7 @@ def stubbed_streams(monkeypatch):
         return state["network"]
 
     async def _momentum(db, window_days=7, limit=10):
+        state["momentum_calls"] = state.get("momentum_calls", 0) + 1
         return state["movers"]
 
     monkeypatch.setattr(svc, "aggregate_risks", _radar_fn)
@@ -421,3 +464,152 @@ async def test_the_risk_rollup_is_computed_once_and_handed_to_the_tiles(stubbed_
     await svc.unified_signals(None)
 
     assert stubbed_streams["radar_passed_to_tiles"] is stubbed_streams["radar"]
+
+
+async def test_the_momentum_ranking_is_computed_once_and_handed_to_the_tiles(
+    stubbed_streams,
+):
+    # `cockpit_signals` used to fetch its own. Two calls are two grouped joins
+    # over articles x entities, and -- worse than the cost -- two anchors: each
+    # reads its own `now`, so the tile could name a top mover the momentum
+    # cards beside it rank differently. One ranking, two readers.
+    stubbed_streams["movers"] = [
+        {"code": "EK", "name": "Emirates", "current": 9, "previous": 2, "delta": 7}
+    ]
+
+    out = await svc.unified_signals(None)
+
+    assert stubbed_streams["momentum_calls"] == 1
+    assert stubbed_streams["momentum_passed_to_tiles"] is stubbed_streams["movers"]
+    # The raw ranking is what is handed over: the tiles keep their own
+    # rivals-only rule, and so does `from_momentum`.
+    assert [row.airline_codes for row in out.signals if row.stream == "momentum"] == [
+        ["EK"]
+    ]
+
+
+async def test_the_route_stream_reports_the_worldwide_total_not_just_its_rows(
+    stubbed_streams,
+):
+    # `count` on a region group is the full regional total; `articles` is the
+    # head of it (network_signals docstring). Kokpit's route cell prints the
+    # worldwide sum, so it has to survive both that cap and this module's own
+    # NETWORK_LIMIT -- otherwise moving the cell onto this feed would have
+    # quietly turned "31 sinyal" into "8 sinyal".
+    #
+    # "Worldwide", NOT "uncapped", which is what this test used to be called:
+    # network_signals() reads at most max_events events before grouping, so
+    # the sum is bounded there. It is wider than the rows listed; that is the
+    # whole and only claim.
+    stubbed_streams["network"] = [
+        {"region": "asia", "count": 20, "articles": [
+            {"id": f"a{i}", "headline": "Yeni hat", "airlines": [],
+             "published_at": None, "source_name": "Wire"} for i in range(6)]},
+        {"region": "europe", "count": 11, "articles": [
+            {"id": f"e{i}", "headline": "Yeni hat", "airlines": [],
+             "published_at": None, "source_name": "Wire"} for i in range(6)]},
+    ]
+
+    out = await svc.unified_signals(None)
+
+    network = next(s for s in out.streams if s.key == "network")
+    assert network.total == 31
+    # ...and `count` still describes THIS response's rows, which the cap cut.
+    assert network.count == svc.NETWORK_LIMIT == 8
+    assert network.count < network.total
+
+
+async def test_a_stream_with_no_total_of_its_own_reports_none_not_its_count(
+    stubbed_streams,
+):
+    # None means "this stream publishes no figure beyond the rows it produced".
+    # Echoing `count` back as a `total` would dress a restatement up as a
+    # second measurement -- and for the campaign inbox, whose own query is
+    # capped at CAMPAIGN_ALERT_LIMIT, it would be an outright wrong one.
+    stubbed_streams["alerts"] = [
+        SimpleNamespace(
+            id=f"a{i}", priority="HIGH", alert_type="NEW", title_tr="Yeni kampanya",
+            detail_json=None, created_at=NOW,
+        )
+        for i in range(3)
+    ]
+
+    out = await svc.unified_signals(None)
+
+    by_key = {stream.key: stream for stream in out.streams}
+    assert by_key["campaign_alerts"].count == 3
+    assert by_key["campaign_alerts"].total is None
+    assert [key for key, stream in by_key.items() if stream.total is not None] == [
+        "network"
+    ]
+    # Zero is a measurement and None is not one; they must not collapse.
+    assert by_key["network"].total == 0
+    assert by_key["network"].count == 0
+
+
+async def test_the_envelope_carries_the_tiles_in_their_own_shape(stubbed_streams):
+    # Kokpit reads this one response instead of also fetching /kokpit/signals,
+    # and its Market Pulse cells band on `level` while Günün Özeti prints
+    # `value_label` and `method_tr` separately. `SignalOut` keeps none of those
+    # as fields: it composes them into one sentence and re-bands `level` onto
+    # the five-rung severity ladder. So the tiles ride along unflattened.
+    stubbed_streams["tiles"] = [_tile(key="fuel", level="critical")]
+
+    out = await svc.unified_signals(None)
+
+    assert [tile.key for tile in out.cockpit_tiles] == ["fuel"]
+    assert out.cockpit_tiles[0].level == "critical"
+    assert out.cockpit_tiles[0].value_label == "+%3,4"
+    # The flattened row is still there, and it is NOT a substitute: a tile's
+    # "critical" is a signal's "high", so reading the band back off the list
+    # would rename the loudest thing on the page.
+    [flat] = [row for row in out.signals if row.stream == "kokpit"]
+    assert flat.severity == svc.HIGH
+    assert not hasattr(flat, "level")
+
+
+async def test_the_tiles_in_the_envelope_are_the_ones_the_rows_were_built_from(
+    stubbed_streams,
+):
+    # One computation, two shapes -- never two computations. If these ever came
+    # from separate calls, Kokpit's tile and the card beside it on /sinyaller
+    # could band the same driver differently.
+    stubbed_streams["tiles"] = [_tile(key="risk", level="warning")]
+
+    out = await svc.unified_signals(None)
+
+    assert out.cockpit_tiles == stubbed_streams["tiles"]
+    assert [row.id for row in out.signals if row.stream == "kokpit"] == ["kokpit:risk"]
+
+
+# --- the risk rollup's scan cap has to reach the pages that count it ---------
+#
+# /risks caps how many articles one rollup clusters (api/v1/risks.py
+# RISK_SCAN_CAP). Kokpit and /sinyaller never call /risks -- they count risk
+# rows out of THIS envelope -- so unless the flag rides along, both pages
+# print a floor as if it were a total and have no way of knowing better.
+
+
+async def test_the_envelope_says_when_the_risk_rollup_was_capped(stubbed_streams):
+    stubbed_streams["radar"] = _radar(
+        [_risk_item("r1")], truncated=True, scanned=400
+    )
+
+    out = await svc.unified_signals(None)
+
+    assert out.risk_truncated is True
+    # The number, not just the boolean: a page saying "hepsi bu kadar değil"
+    # can then say how many articles were actually read instead of asking the
+    # reader to know the cap.
+    assert out.risk_scanned_articles == 400
+
+
+async def test_an_uncapped_rollup_does_not_claim_it_was_capped(stubbed_streams):
+    # The negative half. A disclosure that is always on screen is furniture,
+    # and the counts really are complete in the ordinary case.
+    stubbed_streams["radar"] = _radar([_risk_item("r1")], scanned=12)
+
+    out = await svc.unified_signals(None)
+
+    assert out.risk_truncated is False
+    assert out.risk_scanned_articles == 12

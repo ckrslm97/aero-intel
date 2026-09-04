@@ -3,6 +3,13 @@
 Read-only, and composed rather than queried -- see
 app/services/signals_service.py for which seven existing streams reach it and
 why nothing new is detected here.
+
+TWO SURFACES, ONE RESPONSE. /sinyaller draws the whole filterable list and
+Kokpit draws counts and heads of it, both off this endpoint -- so the two can
+no longer sort the same rows differently or pick a different "most important
+four". Kokpit also takes its four Sinyal Panosu tiles out of `cockpit_tiles`
+here rather than calling /kokpit/signals, which is what stops the 14-day risk
+clustering from running twice for one page load.
 """
 from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy.ext.asyncio import AsyncSession

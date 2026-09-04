@@ -1,12 +1,10 @@
 import { render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
+import { filterSignals, NO_FILTERS } from "@/lib/signals";
 import type { SignalOut } from "@/lib/types";
 
 import { KOKPIT_STREAMS, SignalStream, selectStreamSignals } from "./signal-stream";
-
-const apiFetch = vi.hoisted(() => vi.fn());
-vi.mock("@/lib/api", () => ({ apiFetch, API_BASE_URL: "http://test/api/v1" }));
 
 const signal = (overrides: Partial<SignalOut> = {}): SignalOut =>
   ({
@@ -25,7 +23,7 @@ const signal = (overrides: Partial<SignalOut> = {}): SignalOut =>
     detected_at: "2026-08-30T17:00:00Z",
     confidence_score: null,
     source_label: "Reuters",
-    href: "/sinyaller",
+    href: "/newspaper?airline=QR",
     ...overrides,
   }) as SignalOut;
 
@@ -38,7 +36,7 @@ describe("selectStreamSignals", () => {
 
   it("drops the five streams that are already rendered elsewhere", () => {
     const rows = selectStreamSignals([
-      signal({ id: "a", stream: "kokpit" }), // -> Günün Özeti
+      signal({ id: "a", stream: "kokpit" }), // -> Market Pulse + Günün Özeti
       signal({ id: "b", stream: "campaign_alerts" }), // -> Alert Merkezi
       signal({ id: "c", stream: "risk" }), // -> Alert Merkezi
       signal({ id: "d", stream: "network" }), // -> Rekabet
@@ -69,55 +67,86 @@ describe("selectStreamSignals", () => {
   it("has nothing to show when neither stream produced anything", () => {
     expect(selectStreamSignals([signal({ stream: "risk" })])).toEqual([]);
   });
+
+  /** THE POINT OF THE WHOLE ROUND, as an assertion.
+   *
+   * Kokpit and /sinyaller read the same `/signals` response. This board is a
+   * prefix of the rows /sinyaller draws for the same two streams -- same
+   * objects, same order, no second sort anywhere. If either surface ever
+   * re-ranks, this is what fails. */
+  it("shows a prefix of what /sinyaller shows, in the same order", () => {
+    const feed = [
+      signal({ id: "1", stream: "strategic", severity: "high" }),
+      signal({ id: "2", stream: "kokpit" }),
+      signal({ id: "3", stream: "rival_events", severity: "medium" }),
+      signal({ id: "4", stream: "risk" }),
+      signal({ id: "5", stream: "strategic", severity: "low" }),
+    ];
+
+    const board = selectStreamSignals(feed).map((row) => row.id);
+    // What /sinyaller lists, unfiltered, restricted to the same two streams.
+    const page = filterSignals(feed, NO_FILTERS)
+      .filter((row) => KOKPIT_STREAMS.has(row.stream))
+      .map((row) => row.id);
+
+    expect(board).toEqual(page.slice(0, board.length));
+  });
 });
 
 describe("SignalStream", () => {
-  beforeEach(() => {
-    apiFetch.mockReset();
-  });
+  it("draws only its two streams out of the list it is handed", () => {
+    render(
+      <SignalStream
+        signals={[
+          signal({ id: "a", stream: "kokpit", title_tr: "Kur Riski" }),
+          signal({ id: "b", stream: "rival_events", title_tr: "QR yeni hat: DOH–MXP" }),
+        ]}
+      />,
+    );
 
-  /** `/signals` answers with an envelope, not a bare array.
-   *
-   * This is a REGRESSION LOCK, and it is mounted rather than pure on purpose.
-   * The selector above is a pure function over `SignalOut[]`, so it stays
-   * green no matter what the component actually hands it -- the component
-   * originally declared the response as `SignalOut[]`, which type-checked,
-   * linted and passed every test on this page while throwing
-   * "rows.filter is not a function" the first time the real API answered.
-   * Only a test that feeds the endpoint's TRUE shape can catch that.
-   */
-  it("reads the signals out of the endpoint's envelope", async () => {
-    apiFetch.mockResolvedValue({
-      days: 30,
-      total: 2,
-      streams: [],
-      generated_at: "2026-09-02T08:00:00Z",
-      signals: [
-        signal({ id: "a", stream: "kokpit", title_tr: "Kur Riski" }),
-        signal({ id: "b", stream: "rival_events", title_tr: "QR yeni hat: DOH–MXP" }),
-      ],
-    });
-
-    render(<SignalStream />);
-
-    expect(await screen.findByText("QR yeni hat: DOH–MXP")).toBeInTheDocument();
-    // ...and the envelope's other streams are still filtered out.
+    expect(screen.getByText("QR yeni hat: DOH–MXP")).toBeInTheDocument();
     expect(screen.queryByText("Kur Riski")).not.toBeInTheDocument();
   });
 
-  it("shows the empty note when the envelope carries neither stream", async () => {
-    apiFetch.mockResolvedValue({
-      days: 30,
-      total: 1,
-      streams: [],
-      generated_at: "2026-09-02T08:00:00Z",
-      signals: [signal({ id: "a", stream: "risk" })],
-    });
-
-    render(<SignalStream />);
+  it("shows the empty note when the list carries neither stream", () => {
+    render(<SignalStream signals={[signal({ id: "a", stream: "risk" })]} />);
 
     expect(
-      await screen.findByText("Rakip olayı veya stratejik gelişme sinyali yok."),
+      screen.getByText("Rakip olayı veya stratejik gelişme sinyali yok."),
     ).toBeInTheDocument();
+  });
+
+  it("says how many it cut, rather than looking complete", () => {
+    // A board that quietly showed six of nineteen would read as "these are all
+    // of them" -- the one thing a truncated list must never do.
+    render(
+      <SignalStream
+        signals={Array.from({ length: 9 }, (_, i) =>
+          signal({ id: `s${i}`, title_tr: `Sinyal ${i}` }),
+        )}
+      />,
+    );
+
+    expect(screen.getByText(/9 sinyalden ilk 6 tanesi/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Tümü Sinyaller/ })).toHaveAttribute(
+      "href",
+      "/sinyaller",
+    );
+  });
+
+  it("stays silent about truncation when nothing was cut", () => {
+    render(
+      <SignalStream
+        signals={Array.from({ length: 2 }, (_, i) => signal({ id: `s${i}` }))}
+      />,
+    );
+
+    expect(screen.queryByText(/tanesi/)).not.toBeInTheDocument();
+  });
+
+  it("prints a dash rather than a time for an undated signal", () => {
+    render(<SignalStream signals={[signal({ id: "a", detected_at: null })]} />);
+
+    expect(screen.getByText("—")).toBeInTheDocument();
   });
 });

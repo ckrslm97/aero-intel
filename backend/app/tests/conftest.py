@@ -8,8 +8,11 @@ event loops make a shared engine across tests a source of "another operation is
 in progress" asyncpg errors.
 """
 import os
+from contextlib import contextmanager
 
+import pytest
 import pytest_asyncio
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.db import Base
@@ -34,3 +37,42 @@ async def db_session() -> AsyncSession:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
     await engine.dispose()
+
+
+class _QueryCounter:
+    """How many statements a block of code actually sent to Postgres.
+
+    Written because "this should be faster" is not a measurement and this repo
+    does not accept one. A query count is the thing that regresses invisibly:
+    the FX board cost five round trips per currency pair, and the commit that
+    added GBP/TRY added five more without anyone deciding to. A test that
+    asserts a NUMBER is what makes that a failure instead of a slow page.
+    """
+
+    def __init__(self) -> None:
+        self.statements: list[str] = []
+
+    @property
+    def count(self) -> int:
+        return len(self.statements)
+
+
+@pytest.fixture
+def query_counter(db_session):
+    """`with query_counter() as counted: ...` -> `counted.count`."""
+
+    @contextmanager
+    def _counting():
+        counter = _QueryCounter()
+        engine = db_session.bind.sync_engine
+
+        def before(conn, cursor, statement, parameters, context, executemany):
+            counter.statements.append(statement)
+
+        event.listen(engine, "before_cursor_execute", before)
+        try:
+            yield counter
+        finally:
+            event.remove(engine, "before_cursor_execute", before)
+
+    return _counting

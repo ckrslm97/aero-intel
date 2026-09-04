@@ -250,10 +250,17 @@ export function BizClient() {
 
       {/* Rakip, ağ ve stratejik sinyaller buradan /sinyaller sayfasına taşındı.
           Gerekçe: bu sayfa THY'yi anlatır ve "Emirates ücret indirdi" başlığı
-          "BİZ" başlığının altında yanlış yerdedir. Ticari öneriler kendi
-          sayfasında (/oneriler) zaten duruyordu ve orada kaldı. Bölümü sessizce
-          silmek yerine iki işaret kartı bırakılıyor: kaybolmuş bir bölümü
-          aramak, taşındığını okumaktan daha kötüdür. */}
+          "BİZ" başlığının altında yanlış yerdedir. Bölümü sessizce silmek
+          yerine iki işaret kartı bırakılıyor: kaybolmuş bir bölümü aramak,
+          taşındığını okumaktan daha kötüdür.
+
+          İKİNCİ KARTIN HEDEFİ DOĞRUDAN YAZILIR. Kart "Öneriler kendi
+          sayfasındadır" diyor ve /oneriler'e bağlanıyordu; oysa /oneriler bir
+          sayfa değil, app/oneriler/page.tsx içindeki bir redirect'tir ve
+          okuyucuyu İçgörüler'in Öneriler sekmesine atar. Yani kartın metni de
+          hedefi de yanlıştı: tek tıkta iki yönlendirme, ve varılan yer kartın
+          vaat ettiği "kendi sayfası" değil bir sekme. Redirect eski
+          yer imleri için yerinde duruyor; bu kart gerçek hedefe bağlanıyor. */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <PointerCard
           href="/sinyaller"
@@ -262,10 +269,10 @@ export function BizClient() {
           body="Rakip sinyalleri, ağ sinyalleri ve stratejik gelişmeler; Kokpit sinyal panosu, kampanya uyarıları ve Risk Radarı ile birlikte tek erken uyarı listesinde."
         />
         <PointerCard
-          href="/oneriler"
+          href="/insights?tab=oneriler"
           icon={Lightbulb}
-          title="Ticari sinyaller: Öneriler"
-          body="Haber akışından türetilen ticari aksiyon önerileri, kanıtlarıyla birlikte kendi sayfasında."
+          title="Ticari sinyaller: İçgörüler → Öneriler"
+          body="Haber akışından türetilen ticari aksiyon önerileri, kanıtlarıyla birlikte İçgörüler sayfasının Öneriler sekmesinde."
         />
       </div>
 

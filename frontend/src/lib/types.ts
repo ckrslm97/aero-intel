@@ -607,11 +607,6 @@ export interface PromotionSource {
   last_seen_at: string | null;
 }
 
-/** `GET /promotions/count` -- how many rows the same filters would list. */
-export interface PromotionCountOut {
-  total: number;
-}
-
 /** `GET /campaign-alerts` (PR6). Unacknowledged, CRITICAL first.
  *
  * The strip that renders these degrades to nothing at all when the endpoint is
@@ -632,6 +627,20 @@ export interface PromotionNewCountOut {
   window_hours: number;
   count: number;
   airline_codes: string[];
+}
+
+/** `GET /promotions/count` -- how many rows `GET /promotions` would return for
+ * the same filters, computed by the identical code path so the two can never
+ * disagree about what "matching" means.
+ *
+ * `truncated` is the part the list itself cannot tell you: the API caps its
+ * SQL scan at `scan_cap` rows, and when the cap bites, `total` is a FLOOR
+ * rather than the answer. The page says so out loud instead of printing a
+ * partial count as if it were complete. */
+export interface PromotionCountOut {
+  total: number;
+  truncated: boolean;
+  scan_cap: number;
 }
 
 /* --- Risk Radarı (backend/app/api/v1/risks.py) --------------------------- */
@@ -788,6 +797,15 @@ export interface RiskRadarOut {
    * missing -- this is what lets the page explain why the map shows fewer
    * markers than the list shows rows. */
   unplaced_low_confidence?: number;
+  /** True when the window held more articles than the API's scan cap and only
+   * the newest of them were read and clustered. Every count in this payload is
+   * then a FLOOR over the newest slice of the window rather than a total over
+   * the window that was asked for -- so a surface showing this response owes
+   * the reader a "hepsi bu kadar değil" rather than a bare "N sinyal". */
+  truncated?: boolean;
+  /** How many articles the rollup actually read. Equal to the cap when
+   * `truncated` is true. */
+  scanned_articles?: number;
   countries: RiskCountry[];
   type_counts: Record<string, number>;
   family_counts: Record<string, number>;
@@ -1171,7 +1189,19 @@ export interface SignalStreamOut {
   key: string;
   label_tr: string;
   kind: SignalKind;
+  /** Rows from this stream in THIS response's `signals` -- after the display
+   * cap the composition applies per stream. */
   count: number;
+  /** What the stream's own source measured, where that source publishes a
+   * figure that can exceed the rows listed. Only `network` has one today: a
+   * region is counted whole even when only its head is listed, and Kokpit's
+   * route cell prints the sum. Wider than the rows, but not unbounded -- the
+   * backend groups at most `max_events` events, so the sum is capped there.
+   *
+   * `null` means the stream publishes no such figure. It is NOT zero and must
+   * never be rendered as one: the surface prints nothing rather than a total
+   * it does not have. */
+  total: number | null;
   available: boolean;
   empty_message: string | null;
 }
@@ -1181,6 +1211,28 @@ export interface SignalsOut {
   total: number;
   signals: SignalOut[];
   streams: SignalStreamOut[];
+  /** The `kokpit` stream in its own shape, beside the flattened rows.
+   *
+   * Not a duplicate. `SignalOut` composes a tile's label, value and band into
+   * one sentence and re-bands `level` onto the five-rung severity ladder --
+   * right for a card in a mixed list, lossy for Market Pulse's cells and Günün
+   * Özeti's tiles, which draw `level`, `value_label` and `method_tr`
+   * separately. Carrying both is what lets Kokpit read one endpoint instead of
+   * also calling `/kokpit/signals` and re-running the risk clustering behind
+   * it. */
+  cockpit_tiles: CockpitSignal[];
+  /** True when the risk rollup behind this response hit its own scan cap.
+   *
+   * Kokpit's alert band and /sinyaller's tally count risk rows out of this
+   * envelope and never call `/risks`, so this flag is the only way either can
+   * learn that those counts are FLOORS over the newest slice of the risk
+   * window. When it is true the surface owes the reader a "hepsi bu kadar
+   * değil" instead of a bare "N sinyal". */
+  risk_truncated: boolean;
+  /** How many articles that rollup actually read -- equal to the backend's cap
+   * when `risk_truncated`. Carried so the disclosure can name a number rather
+   * than expect the reader to know the cap. */
+  risk_scanned_articles: number;
   /** When the composition ran -- a fact about the response, not about the
    * newest signal in it. */
   generated_at: string;

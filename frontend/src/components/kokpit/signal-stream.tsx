@@ -1,27 +1,20 @@
-"use client";
-
 import Link from "next/link";
-import { useCallback, useMemo } from "react";
 
-import { DataSourceError } from "@/components/data-source-error";
 import { Card } from "@/components/ui/card";
 import { DenseTable, DenseTd, DenseTh } from "@/components/ui/dense-table";
-import { Skeleton } from "@/components/ui/skeleton";
 import { StatusPill, statusToneOf } from "@/components/ui/status-pill";
-import { useDataSource } from "@/hooks/use-data-source";
-import { apiFetch } from "@/lib/api";
 import { formatRelativeTr } from "@/lib/format";
-import type { SignalOut, SignalsOut } from "@/lib/types";
+import type { SignalOut } from "@/lib/types";
 
 /**
  * The two of `/signals`' seven streams that have nowhere else to live on this
  * page.
  *
- * Of the seven: `kokpit` is Günün Özeti (section 4); `campaign_alerts` and
- * `risk` are the Alert Merkezi (section 9); `network` and `momentum` are the
- * Rekabet cells (section 7). That leaves rival events and strategic
- * developments, which appear nowhere else -- so this board carries exactly
- * those two and nothing else.
+ * Of the seven: `kokpit` is Market Pulse's bands and Günün Özeti (sections 2
+ * and 4); `campaign_alerts` and `risk` are the Alert Merkezi (section 9);
+ * `network` and `momentum` are the Rekabet cells (section 7). That leaves
+ * rival events and strategic developments, which appear nowhere else -- so
+ * this board carries exactly those two and nothing else.
  *
  * Getting this filter wrong fails in one of two silent ways: too narrow and
  * the board is permanently empty, too wide and it reprints the alert centre
@@ -47,31 +40,22 @@ export function selectStreamSignals(rows: SignalOut[], limit = ROW_LIMIT): Signa
  * us inventing the most decision-relevant thing on the row. The column is TÜR
  * instead, filled from each stream's own vocabulary ("Yeni hat", "Stratejik").
  *
- * NOTE ON COST: `/signals` re-runs the 14-day risk clustering on every call,
- * and this page also fetches `/risks` separately for the Alert Merkezi. The
- * endpoint carries an AGGREGATES public cache header, so the edge absorbs it.
- * That is a deliberate, accepted cost, not an oversight.
+ * IT FETCHES NOTHING. `/signals` is read ONCE, on the server, in app/page.tsx,
+ * and handed to this board, the Alert Merkezi and the Rekabet cells alike. It
+ * used to fetch `/signals?days=30` for itself while the Alert Merkezi fetched
+ * `/risks` and `/campaign-alerts` for the same rows -- three requests, three
+ * runs of the same 14-day clustering, and two components free to disagree
+ * about which four rows mattered most. There is one list on this page now, and
+ * it is the list /sinyaller draws.
+ *
+ * This board is deliberately the HEAD of that list and says so: `total` is how
+ * many rows the two streams produced, and the footer prints it whenever more
+ * were produced than fit. A truncated board that stayed silent would read as
+ * "these are all of them".
  */
-export function SignalStream() {
-  // `/signals` answers with an ENVELOPE ({days, total, signals, streams,
-  // generated_at}), not a bare array -- the same shape `signals-client.tsx`
-  // reads on /sinyaller. Typing it as `SignalOut[]` compiles and passes a unit
-  // test of the pure selector, then throws "rows.filter is not a function" the
-  // first time the real endpoint answers.
-  const fetcher = useCallback(
-    (signal: AbortSignal) =>
-      apiFetch<SignalsOut>("/signals?days=30", { cache: "default", signal }),
-    [],
-  );
-  const { data, error, loaded, lastUpdated, pending, retry } = useDataSource(fetcher, []);
-
-  const rows = useMemo(() => selectStreamSignals(data?.signals ?? []), [data]);
-
-  // Sized to the EMPTY state, not to a full board. The skeleton used to be
-  // 180px against an empty section of 50, so every load on a quiet day ended
-  // with the page jumping 130px upward under the reader's eyes.
-  if (!loaded) return <Skeleton className="h-[42px] w-full rounded-xl" />;
-  if (error && !data) return <DataSourceError onRetry={retry} lastUpdated={lastUpdated} pending={pending} />;
+export function SignalStream({ signals }: { signals: SignalOut[] }) {
+  const all = signals.filter((row) => KOKPIT_STREAMS.has(row.stream));
+  const rows = selectStreamSignals(signals);
 
   if (rows.length === 0) {
     return (
@@ -130,6 +114,17 @@ export function SignalStream() {
           </tbody>
         </DenseTable>
       </div>
+      {all.length > rows.length && (
+        <p className="border-t border-border/60 px-3 py-1.5 text-[10px] text-muted-foreground">
+          Bu iki akıştaki {all.length} sinyalden ilk {rows.length} tanesi.{" "}
+          <Link
+            href="/sinyaller"
+            className="rounded font-medium underline-offset-2 hover:text-primary hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+          >
+            Tümü Sinyaller’de →
+          </Link>
+        </p>
+      )}
     </Card>
   );
 }
