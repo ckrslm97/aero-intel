@@ -266,14 +266,36 @@ def cluster(candidates: list[EventCandidate]) -> list[list[EventCandidate]]:
     Quadratic, and deliberately so at this scale: the window is a few hundred
     articles and the comparison is set intersection over short token sets. The
     MinHash/LSH index in pipeline/dedup.py exists for the whole-corpus case;
-    reaching for it here would add a moving part for no measurable gain.
+    reaching for it here would add a moving part for no measurable gain. The
+    caller is responsible for the size of `candidates` -- see RISK_SCAN_CAP in
+    api/v1/risks.py, which is where that stopped being nobody's job.
+
+    **Why a candidate that matches two clusters merges them.** `same_event` is
+    not transitive on its own: three reports of one eruption can pair up A-B
+    and B-C while A and C share nothing (one is datelined Catania, one names
+    Sicily, and only the middle one names both). This loop used to stop at the
+    FIRST cluster a candidate matched, which made the answer depend on the
+    order the rows happened to arrive in -- A, B, C gave one signal and A, C, B
+    gave two, from the same three articles. Row order is not a fact about the
+    news, and it became visible the moment /risks put a deterministic ORDER BY
+    on its query: the docstring above has always promised a *closure*, and now
+    the code computes one.
     """
     clusters: list[list[EventCandidate]] = []
     for candidate in candidates:
-        for existing in clusters:
-            if any(same_event(candidate, member) for member in existing):
-                existing.append(candidate)
-                break
-        else:
+        matched = [
+            existing
+            for existing in clusters
+            if any(same_event(candidate, member) for member in existing)
+        ]
+        if not matched:
             clusters.append([candidate])
+            continue
+        # The earliest matching cluster keeps its position, so a feed that
+        # needs no merging comes out in exactly the order it used to.
+        head, *rest = matched
+        head.append(candidate)
+        for other in rest:
+            head.extend(other)
+            clusters.remove(other)
     return clusters

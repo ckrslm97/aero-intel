@@ -141,3 +141,44 @@ describe("BizClient: haber akışı", () => {
     expect(await screen.findByText("Toplanan Yorum")).toBeInTheDocument();
   });
 });
+
+/** THE ÖNERİLER CARD POINTED AT A REDIRECT, AND SAID THE WRONG THING.
+ *
+ * "Ticari sinyaller: Öneriler … kendi sayfasında" linked to `/oneriler`, which
+ * has not been a page since Öneriler became a tab: app/oneriler/page.tsx is a
+ * `redirect("/insights?tab=oneriler")`. One click therefore cost two
+ * navigations, and the place it landed was not the "own page" the card had
+ * promised. The route still exists for old bookmarks; this card names the real
+ * destination.
+ */
+describe("BizClient: taşınan bölümlerin işaret kartları", () => {
+  beforeEach(() => {
+    serve("2026-07-19T21:30:00Z");
+  });
+
+  it("links Öneriler straight to the tab that draws it", async () => {
+    render(<BizClient />);
+
+    const card = await screen.findByRole("link", { name: /Öneriler/ });
+    expect(card).toHaveAttribute("href", "/insights?tab=oneriler");
+    // The redirect is not an acceptable target: it is one extra hop to a
+    // destination this card can name itself.
+    expect(card).not.toHaveAttribute("href", "/oneriler");
+  });
+
+  it("no longer claims Öneriler has a page of its own", async () => {
+    render(<BizClient />);
+
+    expect(await screen.findByText(/Öneriler sekmesinde/)).toBeInTheDocument();
+    expect(screen.queryByText(/kendi sayfasında\./)).not.toBeInTheDocument();
+  });
+
+  it("still points the moved signal block at Sinyaller", async () => {
+    render(<BizClient />);
+
+    expect(await screen.findByRole("link", { name: /Sinyaller artık/ })).toHaveAttribute(
+      "href",
+      "/sinyaller",
+    );
+  });
+});

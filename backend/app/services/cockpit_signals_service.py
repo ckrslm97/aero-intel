@@ -492,18 +492,29 @@ def build_competitor_signal(
 
 
 async def cockpit_signals(
-    db: AsyncSession, *, radar: RiskRadarOut | None = None
+    db: AsyncSession,
+    *,
+    radar: RiskRadarOut | None = None,
+    momentum: list[dict] | None = None,
 ) -> list[CockpitSignalOut]:
     """Fetch each tile's driver and band it. Returned in display order.
 
-    `radar` is an escape hatch for a caller that has already run
-    `aggregate_risks` for its own reasons -- the Sinyaller aggregate
-    (app/services/signals_service.py) renders both these tiles and the radar's
-    own high-severity signals in one response, and re-clustering the same
-    window twice per request buys nothing. Passing it in is also what
-    guarantees the tile's count and the signals listed beside it come from the
-    same rollup rather than from two runs that could differ. Production's own
-    /kokpit/signals passes nothing and fetches it here, exactly as before.
+    `radar` and `momentum` are escape hatches for a caller that has already run
+    those two aggregates for its own reasons -- the Sinyaller aggregate
+    (app/services/signals_service.py) renders both these tiles AND the radar's
+    high-severity signals AND the rival movers in one response, and running
+    either aggregate twice per request buys nothing.
+
+    Passing them in is also what guarantees the tile's number and the cards
+    listed beside it come from one computation rather than from two runs that
+    could differ: two `airline_momentum` calls anchor their 7-vs-7 windows on
+    two readings of the clock, so the tile could name a top mover the cards
+    below it rank differently. `momentum` is the RAW ranking, unfiltered --
+    this function keeps its own rivals-only rule, because "which carrier the
+    tile may name" is a question about the tile.
+
+    Production's own /kokpit/signals passes neither and fetches both here,
+    exactly as before.
     """
     kpis = KpiRepository(db)
     now = datetime.now(timezone.utc)
@@ -558,11 +569,11 @@ async def cockpit_signals(
     # Rivals only. airline_momentum ranks every carrier the news mentions,
     # including the home carrier, and a tile headed "Rakip Aktivitesi" naming
     # THY as its top mover would be plainly wrong.
-    movers = [
-        mover
-        for mover in await airline_momentum(db, window_days=MOMENTUM_WINDOW_DAYS, limit=20)
-        if mover["code"] in RIVAL_CODES
-    ]
+    if momentum is None:
+        momentum = await airline_momentum(
+            db, window_days=MOMENTUM_WINDOW_DAYS, limit=20
+        )
+    movers = [mover for mover in momentum if mover["code"] in RIVAL_CODES]
     top_mover = movers[0] if movers else None
 
     return [

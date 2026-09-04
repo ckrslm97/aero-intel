@@ -141,6 +141,31 @@ NO_SEVERITY_BASIS_TR = (
 
 EMPTY_MESSAGE = "Bu akışta sinyal yok."
 
+# --- where a row's "Detay" actually lands -----------------------------------
+#
+# One constant per stream whose target is not obvious, because these hrefs are
+# read twice: once by the card on /sinyaller and once by Kokpit's Rekabet
+# cells, which now link to the same place their rows came from. When the two
+# drifted apart the reader paid for it -- see each constant.
+
+#: Ağ sinyalleri. NOT bare "/hublar": that lands on the Hub'lar tab, which
+#: draws a map of the desk's own hubs and no route announcements at all. The
+#: tab that owns this stream is Ağ Sinyalleri, and `?view=` is what selects it
+#: (frontend/src/lib/hubs.ts parses it; the Hub page has been URL-owned since
+#: the İçgörüler hand-off).
+NETWORK_HREF = "/hublar?view=network-signals"
+
+#: Haber momentumu. This used to point at "/insights", and İçgörüler does not
+#: draw airline momentum -- it hands the reader a digest and a signpost, and
+#: says in its own docstring that the momentum is drawn on Kokpit. So the link
+#: sent a reader looking for a mover to a page that never shows one.
+#:
+#: The full momentum list is /sinyaller itself, so the target is this page
+#: narrowed to the bucket the stream files under. A bare "/sinyaller" would
+#: make the card on /sinyaller link to the page it is already on; the filter
+#: makes it a real move (and Kokpit's Rekabet cell uses the same string).
+MOMENTUM_HREF = "/sinyaller?kind=competitor"
+
 # --- how much of each stream reaches the list -------------------------------
 #
 # Caps, not filters: every stream is already ordered by its own surface's
@@ -393,7 +418,7 @@ def from_network(groups, limit: int = NETWORK_LIMIT) -> list[SignalOut]:
                     airline_codes=[c for c in (article.get("airlines") or []) if c],
                     detected_at=_parse(article.get("published_at")),
                     source_label=article.get("source_name") or "AeroIntel olay hattı",
-                    href="/hublar",
+                    href=NETWORK_HREF,
                 )
             )
     return rows
@@ -435,7 +460,7 @@ def from_momentum(movers, limit: int = MOMENTUM_LIMIT) -> list[SignalOut]:
                 # claimed for it -- see SignalOut.detected_at.
                 detected_at=None,
                 source_label="AeroIntel haber akışı",
-                href="/insights",
+                href=MOMENTUM_HREF,
             )
         )
     return rows
@@ -479,21 +504,64 @@ async def unified_signals(db: AsyncSession, *, days: int = NEWS_WINDOW_DAYS) -> 
     than fetched by both: clustering a 14-day window is the expensive half of
     this request, and running it twice would also let the tile's count and the
     cards beside it disagree.
+
+    ONE REQUEST FEEDS BOTH SURFACES. /sinyaller draws the whole filterable
+    list; Kokpit draws counts and heads of it (its signal board, its alert
+    band, its Rekabet cells) plus the four tiles. Kokpit used to reach that
+    state through five more requests of its own -- /kokpit/signals,
+    /campaign-alerts, /risks, /insights and /hubs/network-signals -- which is
+    how the two pages came to sort the same rows differently and show a
+    different "top four". They read this response now, so a row on Kokpit is
+    the same object, in the same order, as the row on /sinyaller.
+
+    That is also why `cockpit_tiles` rides along: the tiles are already
+    computed here, and flattening them into `SignalOut` loses the fields
+    Kokpit's cells draw (see SignalsOut.cockpit_tiles).
     """
     radar = await aggregate_risks(db, days=RISK_WINDOW_DAYS)
 
+    # Read ONCE and handed to both consumers, for the same two reasons `radar`
+    # is: it is two grouped joins over articles x entities, and two calls would
+    # anchor their 7-vs-7 windows on two readings of the clock -- so the Kokpit
+    # tile could name a top mover the momentum cards beside it rank differently.
+    movers = await airline_momentum(db, window_days=MOMENTUM_WINDOW_DAYS, limit=20)
+
+    tiles = await cockpit_signals(db, radar=radar, momentum=movers)
+    # Held rather than passed straight through: the region groups carry a
+    # count for the whole region, and `from_network` only sees the head it is
+    # allowed to list. See `totals` below.
+    route_groups = await network_signals(db, days=days)
+
     by_stream: dict[str, list[SignalOut]] = {
-        "kokpit": from_cockpit(await cockpit_signals(db, radar=radar)),
+        "kokpit": from_cockpit(tiles),
         "campaign_alerts": from_campaign_alerts(
             await open_alerts(db, limit=CAMPAIGN_ALERT_LIMIT)
         ),
         "risk": from_risk_radar(radar),
         "rival_events": from_rival_events(await competitor_signals(db, days=days)),
         "strategic": from_strategic(await strategic_developments(db, days=days)),
-        "network": from_network(await network_signals(db, days=days)),
-        "momentum": from_momentum(
-            await airline_momentum(db, window_days=MOMENTUM_WINDOW_DAYS, limit=20)
-        ),
+        "network": from_network(route_groups),
+        "momentum": from_momentum(movers),
+    }
+
+    #: Per-stream `total`, and ONLY where the stream's source really publishes
+    #: one. `network_signals()` documents `count` as "the full regional total
+    #: even when the listed articles are capped", so summing them is the
+    #: worldwide 30-day figure Kokpit's route cell has always printed -- a
+    #: number NETWORK_LIMIT rows can no longer supply on their own.
+    #:
+    #: Wider than the rows listed, but not unbounded: `network_signals()` reads
+    #: at most `max_events` (120) events before grouping, so this sum is capped
+    #: there too. Said out loud because the previous wording ("uncapped") was a
+    #: claim the query never made.
+    #:
+    #: Every other stream is absent from this dict and so reports None. That is
+    #: the honest answer for them: the campaign inbox is capped inside its own
+    #: query, and the rest hand this module a list whose length is already the
+    #: number of rows produced. Reporting `count` again as a `total` would look
+    #: like a measurement and be a restatement.
+    totals: dict[str, int] = {
+        "network": sum(int(group.get("count") or 0) for group in route_groups),
     }
 
     signals = sort_signals([row for rows in by_stream.values() for row in rows])
@@ -503,6 +571,7 @@ async def unified_signals(db: AsyncSession, *, days: int = NEWS_WINDOW_DAYS) -> 
             label_tr=label,
             kind=kind,
             count=len(by_stream[key]),
+            total=totals.get(key),
             available=bool(by_stream[key]),
             empty_message=None if by_stream[key] else EMPTY_MESSAGE,
         )
@@ -514,5 +583,13 @@ async def unified_signals(db: AsyncSession, *, days: int = NEWS_WINDOW_DAYS) -> 
         total=len(signals),
         signals=signals,
         streams=streams,
+        cockpit_tiles=tiles,
+        # The radar's own scan cap, forwarded. Kokpit's alert band and
+        # /sinyaller's tally count risk rows out of this response and never
+        # call /risks, so this is the ONLY channel by which they can learn
+        # that those counts are floors. A cap whose disclosure has no reader
+        # is a silent cap.
+        risk_truncated=radar.truncated,
+        risk_scanned_articles=radar.scanned_articles,
         generated_at=datetime.now(timezone.utc),
     )

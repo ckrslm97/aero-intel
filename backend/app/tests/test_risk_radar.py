@@ -2946,3 +2946,142 @@ def test_an_airport_alias_needs_capitals_and_loses_to_a_longer_one(title, conten
         if entity.entity_type == "airport"
     ]
     assert found == expected
+
+
+# --------------------------------------------------------------------------
+# API: the scan cap
+# --------------------------------------------------------------------------
+#
+# `cluster()` is quadratic on purpose and says so, but nothing was keeping its
+# input small: the article query had no LIMIT, so the size of the feed decided
+# how long the endpoint ran. Measured on the test database, a 600-article
+# window of unrelated stories cost 172 800 pairwise comparisons and 4.2 seconds
+# of pure Python inside a 30-second function budget -- and doubling the feed
+# quadruples that; at the cap it is 76 000 comparisons and 1.9 seconds,
+# whatever the feed does.
+# RISK_SCAN_CAP bounds the input; `truncated` is what stops the bound from
+# being a lie by omission.
+
+
+async def _many_risk_articles(db, source, n, *, days_ago_of):
+    """`n` articles that will NOT cluster together -- distinct subjects, so the
+    quadratic pass is actually exercised rather than short-circuited by the
+    first cluster swallowing everything."""
+    for i in range(n):
+        await _risk_article(
+            db,
+            source,
+            url=f"https://example.com/cap-{i}",
+            risk_type="wildfire",
+            severity="high",
+            country=f"Country{i}",
+            # Not one shared token between any two titles: `cluster()` must
+            # actually do its quadratic pass here, rather than the first
+            # cluster swallowing the feed and hiding what the cap does.
+            title=f"Vulkan{i} Mahalle{i} Liman{i} Tahliye{i}",
+            days_ago=days_ago_of(i),
+        )
+
+
+async def test_the_radar_reads_at_most_the_scan_cap_and_says_so(db_session, monkeypatch):
+    from app.api.v1 import risks as risks_api
+
+    monkeypatch.setattr(risks_api, "RISK_SCAN_CAP", 3)
+    source = await _source(db_session)
+    # Older i -> older article, so the cap has a newest three to keep.
+    await _many_risk_articles(db_session, source, 6, days_ago_of=lambda i: i)
+    await db_session.commit()
+
+    out = await risks_api.aggregate_risks(db_session, days=30)
+
+    assert out.scanned_articles == 3
+    assert out.truncated is True
+    # Newest kept, oldest dropped -- a radar that trimmed its own window must
+    # trim the stale end of it.
+    countries = {c.country for c in out.countries}
+    assert {"Country0", "Country1", "Country2"} <= countries
+    assert "Country5" not in countries
+
+
+async def test_the_radar_does_not_claim_truncation_it_did_not_do(db_session, monkeypatch):
+    """The negative half, and the one that keeps the flag worth reading. An
+    always-true `truncated` would make "hepsi bu kadar değil" permanent
+    furniture, which is the same as saying nothing."""
+    from app.api.v1 import risks as risks_api
+
+    monkeypatch.setattr(risks_api, "RISK_SCAN_CAP", 10)
+    source = await _source(db_session)
+    await _many_risk_articles(db_session, source, 4, days_ago_of=lambda i: i)
+    await db_session.commit()
+
+    out = await risks_api.aggregate_risks(db_session, days=30)
+
+    assert out.truncated is False
+    assert out.scanned_articles == 4
+    assert out.total == 4
+
+
+async def test_a_capped_scan_counts_suppressions_over_the_same_slice(
+    db_session, monkeypatch
+):
+    """`suppressed_not_current` must describe the articles the clusters came
+    from, not a wider window.
+
+    Otherwise the payload states a suppression figure for the whole 30 days
+    beside cluster counts covering only its newest few -- two numbers about two
+    different windows, printed side by side as if they were about one. The
+    stale article below sits outside the kept slice and must not be counted.
+    """
+    from app.api.v1 import risks as risks_api
+
+    monkeypatch.setattr(risks_api, "RISK_SCAN_CAP", 2)
+    source = await _source(db_session)
+    await _many_risk_articles(db_session, source, 4, days_ago_of=lambda i: i)
+    # Twenty days old, explicitly marked not-current: inside the requested
+    # window, far outside the slice the cap kept.
+    await _risk_article(
+        db_session,
+        source,
+        url="https://example.com/anniversary",
+        risk_type="wildfire",
+        severity="high",
+        country="Chile",
+        title="On yil once yasanan deprem anildi",
+        days_ago=20,
+        is_current_event=False,
+    )
+    await db_session.commit()
+
+    out = await risks_api.aggregate_risks(db_session, days=30)
+
+    assert out.truncated is True
+    assert out.suppressed_not_current == 0
+
+    # Uncapped, the same fixture reports it -- so the zero above is the slice
+    # narrowing, not the counter breaking.
+    monkeypatch.setattr(risks_api, "RISK_SCAN_CAP", 100)
+    full = await risks_api.aggregate_risks(db_session, days=30)
+    assert full.truncated is False
+    assert full.suppressed_not_current == 1
+
+
+async def test_the_capped_cut_is_the_same_articles_on_every_request(db_session, monkeypatch):
+    """`published_at` is not unique -- a wire story is republished by five
+    aggregators within the same minute -- so without the `id` tiebreaker the
+    LIMIT would keep a different five on every request, and the radar would
+    show a different set of signals to two people looking at once."""
+    from app.api.v1 import risks as risks_api
+
+    monkeypatch.setattr(risks_api, "RISK_SCAN_CAP", 3)
+    source = await _source(db_session)
+    await _many_risk_articles(db_session, source, 8, days_ago_of=lambda _i: 1)
+    await db_session.commit()
+
+    first = await risks_api.aggregate_risks(db_session, days=30)
+    second = await risks_api.aggregate_risks(db_session, days=30)
+
+    def countries_of(out):
+        return sorted(c.country for c in out.countries)
+
+    assert first.scanned_articles == 3
+    assert countries_of(first) == countries_of(second)

@@ -36,7 +36,7 @@ import {
   type CampaignFilters,
 } from "@/lib/campaigns";
 import { airlineTabs } from "@/lib/nav";
-import type { PromotionNewCountOut, PromotionOut } from "@/lib/types";
+import type { PromotionCountOut, PromotionNewCountOut, PromotionOut } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 /** Rows in the feed before the reader has to ask for more. */
@@ -53,6 +53,20 @@ const EXPIRING_DAYS = 7;
  * here for what those two do not cover -- a changed date, a low-confidence
  * record -- and does not need to be the tallest thing on screen. */
 const ALERT_LIMIT = 5;
+/** How many campaigns this page asks the API for in one request.
+ *
+ * The page filters, counts and paginates the whole set client-side, so it
+ * genuinely wants more than one screenful -- but "more than one screenful" is
+ * not the same as "everything, forever", which is what an unparameterised
+ * `GET /promotions` asked for. Five hundred is an order of magnitude above the
+ * 83 publishable campaigns production carries today and still a number, so the
+ * request cannot grow without bound as the table does.
+ *
+ * When it does bite, `/promotions/count` says how many there really were and
+ * the page prints that -- a truncated list that does not admit it is exactly
+ * the failure this codebase refuses everywhere else.
+ */
+const FETCH_LIMIT = 500;
 
 const BRAND: Record<string, { name: string; color: string }> = Object.fromEntries(
   airlineTabs.map((a) => [a.code, { name: a.name, color: a.color }]),
@@ -168,19 +182,30 @@ export function CampaignsClient() {
   );
 
   const fetcher = useCallback(async (signal: AbortSignal) => {
-    const [rows, fresh] = await Promise.all([
+    const [rows, fresh, total] = await Promise.all([
       // No date window and no `include_expired`: the API's default is now
       // exactly this page's contract -- every publishable campaign whose sale
-      // or travel window has not finished, in the one shared order.
-      apiFetch<PromotionOut[]>("/promotions", { cache: "default", signal }),
+      // or travel window has not finished, in the one shared order. The only
+      // thing added is `limit`, which bounds the request rather than narrowing
+      // it; see FETCH_LIMIT.
+      apiFetch<PromotionOut[]>(`/promotions?limit=${FETCH_LIMIT}`, {
+        cache: "default",
+        signal,
+      }),
       // The badge window is a bonus, not a dependency: a failing count must
       // not take the campaigns down with it.
       apiFetch<PromotionNewCountOut>("/promotions/new-count", {
         cache: "default",
         signal,
       }).catch(() => null),
+      // Same reasoning, and the same `.catch`: knowing the list was cut is
+      // worth a request, but not worth the page.
+      apiFetch<PromotionCountOut>("/promotions/count", {
+        cache: "default",
+        signal,
+      }).catch(() => null),
     ]);
-    return { rows, fresh };
+    return { rows, fresh, total };
   }, []);
   const { data, error, loaded, lastUpdated, pending, stale, retry } = useDataSource(fetcher, []);
 
@@ -197,6 +222,18 @@ export function CampaignsClient() {
 
   const promotions = data?.rows ?? null;
   const newCount = data?.fresh ?? null;
+
+  /** How many campaigns the API says match, when it was able to say -- and
+   * whether even that number was capped. `null` when `/promotions/count` did
+   * not answer: an unknown total must not render as "hepsi bu kadar". */
+  const matchingTotal = data?.total ?? null;
+  /** The list on this page is not the whole list. Either our own FETCH_LIMIT
+   * cut it, or the API's scan cap did. Both are the same sentence to a reader
+   * ("there are more of these than you are looking at") and both must be said,
+   * because the summary band above counts what arrived, not what exists. */
+  const listIsPartial =
+    matchingTotal !== null &&
+    (matchingTotal.truncated || matchingTotal.total > (promotions?.length ?? 0));
 
   /** Everything the page is willing to show, before the reader's filters.
    * `dropExpiredCampaigns` is the frontend half of the v2 promise -- see its
@@ -302,6 +339,42 @@ export function CampaignsClient() {
             <p className="text-[10px] text-muted-foreground">
               {summaryCaption(active, filtered.length)}
             </p>
+            {/* Said only when it is true, and said before the reader draws a
+                conclusion from the band above it: every number on this page is
+                computed over the rows that arrived, and when the list was cut
+                those numbers are floors.
+
+                TWO CUTS, TWO SENTENCES, because the reader's way out differs.
+                When only our own FETCH_LIMIT bit, the server counted every
+                match and `total` is the truth, so the export -- which asks the
+                same endpoint without our limit -- really is a way to see them
+                all. When the SERVER's scan cap bit, `total` is itself a floor
+                (promotions.py: "there are matching rows past SCAN_ROW_CAP that
+                neither this number nor the list counted"), and the export goes
+                through the very same capped scan. Printing that floor as a
+                total and then offering the export would be two wrong things in
+                one line: a number that is not the answer, and a remedy that
+                cannot reach it. Narrowing the filters is the only thing that
+                moves the scan onto the rows the reader is missing. */}
+            {listIsPartial &&
+              (matchingTotal!.truncated ? (
+                <p className="text-[10px] text-muted-foreground">
+                  Sunucu taraması{" "}
+                  {matchingTotal!.scan_cap.toLocaleString("tr-TR")} kampanyada durdu:
+                  kaç kampanyanın eşleştiği sayılmadı, yukarıdaki sayılar elimizdeki{" "}
+                  {(promotions?.length ?? 0).toLocaleString("tr-TR")} satır üzerinden
+                  hesaplandı. Dışa aktarım da aynı taramayla sınırlıdır; tamamına inmek
+                  için filtreleri daraltın.
+                </p>
+              ) : (
+                <p className="text-[10px] text-muted-foreground">
+                  Sunucu {matchingTotal!.total.toLocaleString("tr-TR")} eşleşen
+                  kampanyadan ilk{" "}
+                  {(promotions?.length ?? 0).toLocaleString("tr-TR")} tanesini döndürdü;
+                  yukarıdaki sayılar bu liste üzerinden hesaplandı. Tamamı için
+                  filtreleri daraltın ya da dışa aktarımı kullanın.
+                </p>
+              ))}
           </div>
 
           {/* The band hides itself when nothing is closing -- an urgency

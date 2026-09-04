@@ -71,8 +71,11 @@ export const PULSE_BANDED_KEYS = new Set<CockpitSignal["key"]>(["fx", "fuel"]);
  * is exactly what a tooltip is for.
  *
  * The levels are computed server-side and merely rendered here, so this row
- * and any other surface reading `/kokpit/signals` cannot disagree about what
- * "Dikkat" means.
+ * and any other surface drawing the same tiles cannot disagree about what
+ * "Dikkat" means. The tiles reach this page inside `/signals`'
+ * `cockpit_tiles` -- the same computation the feed's `kokpit` rows were
+ * flattened from, so the tile and its card on /sinyaller are one banding,
+ * not two.
  */
 export function DailySummary({ signals }: { signals: CockpitSignal[] }) {
   const tiles = signals.filter((signal) => !PULSE_BANDED_KEYS.has(signal.key));

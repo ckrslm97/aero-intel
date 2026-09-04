@@ -201,6 +201,38 @@ class KpiRepository:
         )
         return result.scalar_one_or_none()
 
+    async def closest_before_many(
+        self, metric_keys: list[str], before: datetime, is_primary: bool = True
+    ) -> dict[str, KPI]:
+        """`closest_before` for many metrics in ONE query -- same reasoning as
+        `trends_for`, and the same shape of bug it fixes.
+
+        Kokpit's FX board asks this question three times (a day, a week and a
+        month back) for every pair it carries. Per-pair that was 3 x 8 = 24
+        sequential round trips inside a 30-second function budget, and the
+        count grew with the pair list: adding GBP/TRY silently added three more
+        queries. DISTINCT ON gives Postgres one pass over the same index the
+        single-key version uses.
+
+        A key with no observation at or before `before` is simply absent from
+        the result -- "the window never closed" is a missing row, never a
+        fabricated one. `_window_delta` in api/v1/kokpit.py turns that absence
+        into "—".
+        """
+        if not metric_keys:
+            return {}
+        result = await self.db.execute(
+            select(KPI)
+            .where(
+                KPI.metric_key.in_(metric_keys),
+                KPI.is_primary.is_(is_primary),
+                KPI.as_of <= before,
+            )
+            .distinct(KPI.metric_key)
+            .order_by(KPI.metric_key, KPI.as_of.desc())
+        )
+        return {row.metric_key: row for row in result.scalars().all()}
+
     async def distinct_metric_keys(self) -> list[str]:
         result = await self.db.execute(select(KPI.metric_key).distinct())
         return [row[0] for row in result.all()]

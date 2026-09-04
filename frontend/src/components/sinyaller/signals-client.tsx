@@ -129,8 +129,13 @@ export function SignalsClient() {
           "okunamadı" on a chip that means "zero" would be this round's own
           sin, mirrored: an outage invented out of a measurement. */}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 rounded-xl border border-border bg-card p-3 text-[11px]">
+        {/* The window belongs to the streams it governs, not to the tally.
+            `days` is the news lookback for the EVENT-derived streams only --
+            the risk rollup keeps its own 14-day window and the campaign alert
+            inbox has none at all (backend/app/api/v1/signals.py). "N sinyal ·
+            30 gün" read as one window over all seven and was never true. */}
         <span className="font-semibold uppercase tracking-wider text-muted-foreground">
-          {data.total} sinyal · {data.days} gün
+          {data.total} sinyal · olay akışları {data.days} gün
         </span>
         {data.streams.map((stream) => (
           <span
@@ -154,6 +159,21 @@ export function SignalsClient() {
           </span>
         ))}
       </div>
+
+      {/* The risk half of that tally can be a floor: /risks caps how many
+          articles one rollup clusters, and when the cap bites the risk stream
+          counted only the newest slice of its window. The flag rides on this
+          same response (SignalsOut.risk_truncated) precisely so this page does
+          not have to call /risks to find out. Printed only when it bit. */}
+      {data.risk_truncated && (
+        <p className="text-[11px] text-muted-foreground">
+          {data.risk_scanned_articles > 0
+            ? `Risk taraması pencerenin en yeni ${data.risk_scanned_articles.toLocaleString(
+                "tr-TR",
+              )} haberinde durdu; Risk Radarı sayıları taban değerdir — hepsi bu kadar değil.`
+            : "Risk taraması pencerenin tamamına ulaşamadı; Risk Radarı sayıları taban değerdir — hepsi bu kadar değil."}
+        </p>
+      )}
 
       <div className="flex flex-col gap-2">
         <ChipRow

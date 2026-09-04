@@ -13,11 +13,11 @@ import { ServerSourceError } from "@/components/server-source-error";
 import { apiFetch } from "@/lib/api";
 import type {
   AnnualSeriesBoardOut,
-  CockpitSignalsOut,
   EnergyBoardOut,
   FxForecastOut,
   IataIndicatorOut,
   KokpitFxBoardOut,
+  SignalsOut,
 } from "@/lib/types";
 
 /** ISR: KPIs and FX move at most every 15 minutes, so a 60s revalidation
@@ -40,10 +40,11 @@ interface Source<T> {
 
 /** Fetch, and remember a failure AS a failure.
  *
- * Kokpit is nine sections over eleven endpoints, and one of them being down
- * must thin the page, never blank it -- the same per-source degradation
- * contract `useDataSource` gives the client components further down, applied
- * to the server-rendered half.
+ * Kokpit is nine sections over seven endpoints -- six read here and
+ * `/promotions/new-count` read by one cell -- and one of them being down
+ * must thin the page, never blank it. `/signals` is the widest of them: it
+ * feeds five sections, so its failure is reported next to each of the three
+ * that would otherwise draw an empty band, and never guessed at per cell.
  *
  * This used to swallow the error and return an `empty` value the caller
  * supplied: `null` for the boards, `[]` for the lists. Downstream that is
@@ -162,7 +163,7 @@ function missing(entries: readonly (readonly [string, Source<unknown>])[]): stri
  * * a threshold band on the three ANNUAL pulse cells -- nobody publishes a
  *   threshold for an IATA yearly series, and one invented here would be the
  *   composite score this page refuses two bullets above. The two live cells
- *   carry the bands `/kokpit/signals` actually computes;
+ *   carry the bands `/signals`' `cockpit_tiles` actually compute;
  * * a "1M" column in the FX table -- the curated forecasts carry 3- and
  *   12-month horizons and nothing shorter, and filling a 1M column would mean
  *   interpolating between two institutions' horizons, which is precisely what
@@ -185,6 +186,26 @@ export default async function KokpitPage() {
   // Independent server fetches. `Promise.all` because they are independent:
   // serially, a cold render paid one round trip per section end to end.
   //
+  // SIX REQUESTS, AND SIX MORE USED TO FOLLOW IN THE BROWSER. Counted by
+  // reading the code: these six, plus `/signals?days=30` (SignalStream),
+  // `/campaign-alerts` and `/risks?days=14` (AlertCenter), and
+  // `/promotions/new-count`, `/insights` and `/hubs/network-signals`
+  // (CompetitivePulse) -- twelve. (A thirteenth, `/kpis/<pair>?period=1y`,
+  // comes from the FX forecast chart inside the board table and is untouched
+  // here.)
+  //
+  // THREE of the twelve re-ran the same fourteen-day risk clustering, and two
+  // of them merged the alert streams under an ordering written in the browser
+  // -- so Kokpit and /sinyaller published two different "most important four"
+  // out of one set of facts.
+  //
+  // `/signals` is read ONCE now, here, and handed down as props: it composes
+  // all seven streams (including the four Kokpit tiles, in their own shape, as
+  // `cockpit_tiles`) in a single pass, already sorted. Five client requests
+  // are gone; `/promotions/new-count` is the one that stays, because it is a
+  // promotion count rather than a signal and no stream publishes it. Seven,
+  // where there were twelve.
+  //
   // `/kokpit/energy` is here even though no "Yakıt & Enerji" section survives:
   // Market Pulse's Brent cell needs the day AND week windows plus a sparkline,
   // and `/kpis` carries only a "vs previous measurement" delta. `/kokpit/pulse`
@@ -192,7 +213,7 @@ export default async function KokpitPage() {
   const [board, energy, signalsOut, annual, forecasts, indicators] = await Promise.all([
     load<KokpitFxBoardOut>("/kokpit/fx", LIVE),
     load<EnergyBoardOut>("/kokpit/energy", LIVE),
-    load<CockpitSignalsOut>("/kokpit/signals", LIVE),
+    load<SignalsOut>("/signals", LIVE),
     load<AnnualSeriesBoardOut>("/kokpit/annual-series", CURATED),
     load<FxForecastOut[]>("/kokpit/fx-forecasts", CURATED),
     load<IataIndicatorOut[]>("/kokpit/iata?kind=forecast", CURATED),
@@ -203,12 +224,24 @@ export default async function KokpitPage() {
   // tells an RM analyst nothing about which cell went missing.
   const FX = ["Kur panosu", board] as const;
   const ENERGY = ["Enerji panosu", energy] as const;
-  const SIGNALS = ["Kokpit sinyalleri", signalsOut] as const;
+  // One name for one source. It feeds five sections now (Market Pulse's bands,
+  // Günün Özeti, Sinyal Panosu, Rekabet, Alert Merkezi), so the sentence a
+  // reader gets when it fails has to name the thing, not one section's use of
+  // it.
+  const SIGNALS = ["Sinyal akışı", signalsOut] as const;
   const ANNUAL = ["IATA yıllık serisi", annual] as const;
   const FORECASTS = ["Kurum kur tahminleri", forecasts] as const;
   const INDICATORS = ["IATA göstergeleri", indicators] as const;
 
+  // Two views of ONE response. `signals` is the unified early-warning list
+  // /sinyaller draws whole; `tiles` is the Kokpit stream in its own shape,
+  // because `SignalOut` composes a tile's label, value and band into one
+  // sentence and re-bands `level` onto the five-rung severity ladder -- lossy
+  // for cells that draw `level` and `value_label` separately. Neither is
+  // derived from the other here; both come from the same computation.
   const signals = signalsOut.data?.signals ?? [];
+  const streams = signalsOut.data?.streams ?? [];
+  const tiles = signalsOut.data?.cockpit_tiles ?? [];
   const annualSeries = annual.data?.series ?? [];
 
   return (
@@ -256,7 +289,7 @@ export default async function KokpitPage() {
             annual={annual.data}
             board={board.data}
             energy={energy.data}
-            signals={signals}
+            signals={tiles}
           />
         )}
       </section>
@@ -306,7 +339,7 @@ export default async function KokpitPage() {
         {signalsOut.failed ? (
           <ServerSourceError sources={missing([SIGNALS])} />
         ) : (
-          <DailySummary signals={signals} />
+          <DailySummary signals={tiles} />
         )}
       </section>
 
@@ -362,35 +395,82 @@ export default async function KokpitPage() {
       </section>
 
       {/* 7 --------------------------------------------------------------- */}
+      {/* Sections 7, 8 and 9 are three windows onto the SAME list, filtered by
+          stream and never re-sorted. /sinyaller is the surface that owns that
+          list whole and filterable; Kokpit prints counts and heads of it and
+          links there. That is the rule these three sections exist to keep: two
+          surfaces, one set of rows, one order.
+
+          With the feed unread there is nothing to filter, and an empty section
+          would read as "nothing is happening". Sections 8 and 9 have no other
+          source, so they give way to the line that says the feed was not read
+          -- printed once, here, because three identical warnings twenty pixels
+          apart stop being read as one. Section 7 stays: its first cell has a
+          source of its own. */}
       <section className="flex flex-col gap-2">
         <SectionHeader
           title="Rekabet / Piyasa Görünümü"
           caption="Her sayı bir haber/kampanya HACMİDİR — rakip kapasitesi, doluluğu, pazar payı ve fiyat baskısı verisi bu sistemde yoktur."
           glowVar="var(--chart-3)"
+          action={{ href: "/sinyaller?kind=competitor", label: "Sinyaller" }}
         />
-        <CompetitivePulse />
+        <ServerSourceError sources={missing([SIGNALS])} />
+        {/* Rendered even with the feed unread: this row's first cell reads
+            `/promotions/new-count`, which is a different source and may be
+            perfectly healthy. `unavailable` is what stops the other two cells
+            from printing "no mover this week" over a request that never
+            answered. */}
+        <CompetitivePulse
+          signals={signals}
+          streams={streams}
+          unavailable={signalsOut.failed}
+        />
       </section>
 
       {/* 8 --------------------------------------------------------------- */}
-      <section className="flex flex-col gap-2">
-        <SectionHeader
-          title="Sinyal Panosu"
-          caption="Rakip olayları ve stratejik gelişmeler; diğer beş akış kendi bölümlerinde."
-          glowVar="var(--chart-4)"
-          action={{ href: "/sinyaller", label: "Tümü (7 akış)" }}
-        />
-        <SignalStream />
-      </section>
+      {signalsOut.data && (
+        <section className="flex flex-col gap-2">
+          <SectionHeader
+            title="Sinyal Panosu"
+            // The tally is the page's "sayaç": how big the list on /sinyaller
+            // is, printed where the reader decides whether to open it. It is
+            // the response's own `total`, not a count of what fits here -- and
+            // it is read off `signalsOut.data`, so there is no branch in which
+            // a fallback zero could stand in for an unread feed.
+            //
+            // The window is attributed to the streams it actually governs.
+            // `days` is the news lookback for the EVENT-derived streams only;
+            // the risk rollup keeps its own 14-day window and the campaign
+            // alert inbox has none (backend/app/api/v1/signals.py). Printing
+            // "N sinyal · 30 gün" put one window on all seven and made a claim
+            // /sinyaller could not reproduce.
+            caption={`Rakip olayları ve stratejik gelişmeler; diğer beş akış kendi bölümlerinde. Sinyaller'deki tam liste: ${signalsOut.data.total} sinyal — olay akışları son ${signalsOut.data.days} gün, risk ve kampanya akışları kendi pencerelerinde.`}
+            glowVar="var(--chart-4)"
+            action={{ href: "/sinyaller", label: "Sinyaller" }}
+          />
+          <SignalStream signals={signals} />
+        </section>
+      )}
 
       {/* 9 --------------------------------------------------------------- */}
-      <section className="flex flex-col gap-2">
-        <SectionHeader
-          title="Alert Merkezi"
-          caption="Kampanya uyarıları ve yüksek şiddetli riskler, öncelik sırasıyla. Sıfır bir ölçümdür; akış okunamazsa sayaç yerine bunu söyler."
-          glowVar="var(--critical)"
-        />
-        <AlertCenter />
-      </section>
+      {signalsOut.data && (
+        <section className="flex flex-col gap-2">
+          <SectionHeader
+            title="Alert Merkezi"
+            caption="Kampanya uyarıları ve yüksek şiddetli riskler, Sinyaller'in kendi sırasıyla. Sıfır bir ölçümdür; akış okunamazsa bu bölüm sayaç basmaz."
+            glowVar="var(--critical)"
+          />
+          {/* The risk rollup's own scan cap, forwarded from the same response
+              rather than re-fetched: when it bit, the band's risk counts are
+              floors and the band has to say so. Kokpit never calls /risks, so
+              this envelope is its only way of knowing. */}
+          <AlertCenter
+            signals={signals}
+            riskTruncated={signalsOut.data.risk_truncated}
+            riskScannedArticles={signalsOut.data.risk_scanned_articles}
+          />
+        </section>
+      )}
     </div>
   );
 }

@@ -291,3 +291,139 @@ async def test_get_market_pulse_returns_the_latest_pulse(db_session):
     out = await kokpit.get_market_pulse(Response(), db_session)
     assert out.summary_tr == "USD/TRY sakin seyrediyor."
     assert out.citations[0].source == "Yahoo Finance"
+
+
+# --- the FX board's query budget ------------------------------------------
+#
+# Vercel gives this endpoint 30 seconds and Neon is a network hop away, so what
+# matters here is the NUMBER of round trips, not their individual cost. The
+# board used to spend five per pair -- latest, trend, and one closest_before
+# for each of the three delta windows -- which was 40 sequential queries for
+# the eight pairs LIVE_FX_PAIRS carries, and grew by five every time a pair was
+# added. The two tests below fix both halves of that: a ceiling, and the fact
+# that the ceiling does not move when the pair list does.
+
+
+def _record_pair(repo, metric_key: str, now):
+    """One pair with enough history for all three delta windows to close."""
+    for days_ago in (40, 20, 5, 0):
+        repo.record(
+            metric_key,
+            40.0 + days_ago,
+            "TRY",
+            "Yahoo Finance",
+            False,
+            now - timedelta(days=days_ago),
+            "https://finance.yahoo.com/",
+        )
+
+
+async def test_fx_board_costs_four_queries_however_many_pairs_there_are(
+    db_session, query_counter
+):
+    """One trends_for plus one closest_before_many per delta window. Four."""
+    repo = KpiRepository(db_session)
+    now = datetime.now(timezone.utc)
+    for metric_key, *_rest in kpi_service.LIVE_FX_PAIRS:
+        _record_pair(repo, metric_key, now)
+    await db_session.commit()
+
+    with query_counter() as counted:
+        board = await kokpit.get_fx_board(Response(), db_session)
+
+    assert len(board.pairs) == len(kpi_service.LIVE_FX_PAIRS)
+    assert counted.count == 4
+
+
+async def test_fx_board_query_count_does_not_grow_with_the_pair_list(
+    db_session, query_counter
+):
+    """The negative half, and the one that actually guards the regression: a
+    board with one pair and a board with all of them cost the same. Asserting
+    only the ceiling above would still pass a per-pair implementation whose
+    fixture happened to seed four pairs."""
+    repo = KpiRepository(db_session)
+    now = datetime.now(timezone.utc)
+    _record_pair(repo, kpi_service.LIVE_FX_PAIRS[0][0], now)
+    await db_session.commit()
+
+    with query_counter() as one_pair:
+        first = await kokpit.get_fx_board(Response(), db_session)
+
+    for metric_key, *_rest in kpi_service.LIVE_FX_PAIRS[1:]:
+        _record_pair(repo, metric_key, now)
+    await db_session.commit()
+
+    with query_counter() as every_pair:
+        full = await kokpit.get_fx_board(Response(), db_session)
+
+    assert len(first.pairs) == 1
+    assert len(full.pairs) == len(kpi_service.LIVE_FX_PAIRS)
+    assert one_pair.count == every_pair.count
+
+
+async def test_batched_deltas_match_the_per_pair_answers(db_session):
+    """The batch must not change a single published number.
+
+    `closest_before_many` replaced eight calls to `closest_before`; this asserts
+    the two answer identically, pair by pair, against the same fixture -- an
+    optimisation that quietly shifts a delta is not an optimisation.
+    """
+    repo = KpiRepository(db_session)
+    now = datetime.now(timezone.utc)
+    for metric_key, *_rest in kpi_service.LIVE_FX_PAIRS[:3]:
+        _record_pair(repo, metric_key, now)
+    await db_session.commit()
+
+    board = await kokpit.get_fx_board(Response(), db_session)
+
+    for pair in board.pairs:
+        metric_key = next(
+            key for key, label in kpi_service.FX_PAIR_LABELS.items()
+            if label == pair.currency_pair
+        )
+        latest = await repo.latest(metric_key)
+        for delta, days in (
+            (pair.day_delta_pct, 1),
+            (pair.week_delta_pct, 7),
+            (pair.month_delta_pct, 30),
+        ):
+            prior = await repo.closest_before(metric_key, now - timedelta(days=days))
+            assert delta == kokpit._window_delta(latest, prior)
+        assert pair.sparkline == [row.value for row in await repo.trend(metric_key, points=48)]
+
+
+async def test_closest_before_many_omits_a_metric_with_no_earlier_reading(db_session):
+    """Absence, never a substitute. A pair whose only reading is newer than the
+    cutoff must be MISSING from the batch result, so `_window_delta` sees None
+    and the board prints "—" -- the same refusal the single-key version makes,
+    and the reason the 1G column cannot fabricate a %0,0 on a stale board."""
+    repo = KpiRepository(db_session)
+    now = datetime.now(timezone.utc)
+    repo.record("fx_usd_try", 48.0, "TRY", "Yahoo", False, now - timedelta(days=10), "u")
+    repo.record("fx_eur_try", 56.0, "TRY", "Yahoo", False, now, "u")
+    await db_session.commit()
+
+    found = await repo.closest_before_many(
+        ["fx_usd_try", "fx_eur_try"], now - timedelta(days=7)
+    )
+
+    assert set(found) == {"fx_usd_try"}
+    assert found["fx_usd_try"].value == 48.0
+
+    board = await kokpit.get_fx_board(Response(), db_session)
+    eur = next(p for p in board.pairs if p.currency_pair == "EUR/TRY")
+    assert eur.week_delta_pct is None
+
+
+async def test_closest_before_many_picks_the_newest_row_at_or_before_the_cutoff(db_session):
+    repo = KpiRepository(db_session)
+    now = datetime.now(timezone.utc)
+    for days_ago, value in ((30, 40.0), (9, 44.0), (8, 45.0), (2, 47.0)):
+        repo.record("fx_usd_try", value, "TRY", "Yahoo", False, now - timedelta(days=days_ago), "u")
+    await db_session.commit()
+
+    found = await repo.closest_before_many(["fx_usd_try"], now - timedelta(days=7))
+
+    # 45.0 (8 days ago), not 47.0 (inside the window) and not 44.0 (older).
+    assert found["fx_usd_try"].value == 45.0

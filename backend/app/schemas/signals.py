@@ -1,12 +1,16 @@
 """The Sinyaller page's unified signal shape.
 
 Deliberately its own module rather than an addition to schemas/kokpit.py: the
-Kokpit tiles are one of the six streams this page composes, and folding the
-composite into the tile module would make it look like a Kokpit feature.
+Kokpit tiles are one of the seven streams this page composes, and folding the
+composite into the tile module would make it look like a Kokpit feature. The
+dependency runs the other way -- this envelope IMPORTS `CockpitSignalOut` (see
+`SignalsOut.cockpit_tiles`) rather than kokpit importing anything from here.
 """
 from datetime import datetime
 
 from pydantic import BaseModel
+
+from app.schemas.kokpit import CockpitSignalOut
 
 
 class SignalOut(BaseModel):
@@ -70,7 +74,25 @@ class SignalStreamOut(BaseModel):
     key: str
     label_tr: str
     kind: str
+    #: Rows from this stream in THIS response's `signals` list -- i.e. after the
+    #: per-stream display cap in signals_service.py.
     count: int
+    #: What the stream's own source measured, where that source publishes a
+    #: figure that can exceed the rows listed here. Only `network` has one
+    #: today: `network_signals()` counts a whole region even when it lists only
+    #: `per_region` of its articles, and Kokpit's route cell prints the sum.
+    #:
+    #: It exceeds the rows listed, but it is NOT unbounded, and this comment
+    #: used to say it was: `network_signals()` selects at most `max_events`
+    #: (120) events before grouping, so the per-region counts -- and therefore
+    #: their sum -- are themselves capped there. It is the widest number this
+    #: stream can honestly publish, not a total over all time.
+    #:
+    #: None means "this stream publishes no figure beyond the rows it produced"
+    #: -- NOT zero, and it must never be rendered as one. A stream whose source
+    #: is itself query-limited (the campaign alert inbox) deliberately stays
+    #: None rather than reporting its own limit as a total.
+    total: int | None = None
     available: bool
     empty_message: str | None = None
 
@@ -81,6 +103,33 @@ class SignalsOut(BaseModel):
     total: int
     signals: list[SignalOut]
     streams: list[SignalStreamOut]
+    #: The `kokpit` stream in ITS OWN shape, beside the flattened rows.
+    #:
+    #: Not a duplicate: `SignalOut` is deliberately lossy about a tile. It
+    #: composes the label, the value and the band into one sentence
+    #: (`title_tr`) and maps the tile's four-rung `level` onto this page's
+    #: five-rung `severity`, which is the right trade for a card in a mixed
+    #: list and the wrong one for Kokpit's Market Pulse cells and Günün Özeti
+    #: tiles, which draw `level`, `value_label` and `method_tr` separately.
+    #:
+    #: Carrying both here is what lets Kokpit read ONE endpoint. Before this,
+    #: the page fetched `/kokpit/signals` as well, and the 14-day risk
+    #: clustering behind the risk tile ran a second time -- for tiles that are
+    #: banded from the very same rollup this response already computed.
+    cockpit_tiles: list[CockpitSignalOut] = []
+    #: True when the risk rollup behind this response hit its own scan cap
+    #: (`RiskRadarOut.truncated`, see api/v1/risks.py RISK_SCAN_CAP).
+    #:
+    #: Carried here rather than left inside /risks because Kokpit and
+    #: /sinyaller never read /risks: they count risk rows out of THIS envelope,
+    #: and when the cap bit those counts are FLOORS over the newest slice of
+    #: the risk window. A surface printing them owes the reader "hepsi bu kadar
+    #: değil"; without this field it has no way to know it owes anything.
+    risk_truncated: bool = False
+    #: How many articles that rollup actually read -- equal to the radar's cap
+    #: when `risk_truncated`. Served so the disclosure can name a number
+    #: instead of expecting the reader to know the cap.
+    risk_scanned_articles: int = 0
     #: When the composition ran -- a fact about this response, not about the
     #: newest signal in it.
     generated_at: datetime
