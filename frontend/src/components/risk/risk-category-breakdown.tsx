@@ -2,6 +2,7 @@
 
 import { FALLBACK_TYPE_ICON, TYPE_META } from "@/components/risk/risk-meta";
 import { riskTypeBreakdown } from "@/lib/risk";
+import { SEVERITY_LADDER } from "@/lib/severity";
 import type { RiskCountry } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -68,8 +69,12 @@ export function RiskCategoryBreakdown({
                   <span className="min-w-0 flex-1 truncate text-xs font-medium">{row.label}</span>
                   <span className="shrink-0 font-mono text-[11px] tabular-nums text-muted-foreground">
                     {row.count}
+                    {/* "Y" is the word this count stands for, and its hue is
+                        the ladder's `high` -- --critical here would print the
+                        same rung in the top rung's colour, one card away from
+                        the map that finally stopped doing exactly that. */}
                     {row.high > 0 && (
-                      <span className="ml-1 text-critical">{row.high}Y</span>
+                      <span className={cn("ml-1", SEVERITY_LADDER.high.text)}>{row.high}Y</span>
                     )}
                   </span>
                 </span>
@@ -79,10 +84,10 @@ export function RiskCategoryBreakdown({
                   style={{ width: `${(row.count / max) * 100}%`, minWidth: "6%" }}
                 >
                   <span
-                    className="bg-critical"
+                    className={SEVERITY_LADDER.high.dot}
                     style={{ width: `${(row.high / row.count) * 100}%` }}
                   />
-                  <span className="flex-1 bg-muted-foreground/40" />
+                  <span className={cn("flex-1", SEVERITY_LADDER.low.dot)} />
                 </span>
               </button>
             </li>

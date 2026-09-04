@@ -5,6 +5,7 @@ import { useReducedMotion } from "framer-motion";
 import { useEffect, useMemo, useState } from "react";
 
 import { AirlineLogo } from "@/components/airline-logo";
+import { FilterChip, FilterChipGroup } from "@/components/ui/filter-chip";
 import { baseOption, lineGlow, useChartTheme } from "@/lib/chart-theme";
 import { ensureWorldMap, symbolSize } from "@/lib/echarts-world";
 import { airlineTabs } from "@/lib/nav";
@@ -50,16 +51,6 @@ const CARRIER_HUB: Record<string, { code: string; coord: [number, number] }> = {
 const AIRLINE_BY_CODE = new Map<string, (typeof airlineTabs)[number]>(
   airlineTabs.map((a) => [a.code, a]),
 );
-
-/** The lit-chip pattern shared with the signal ledger below and with
- * Gazete/Öneriler. */
-const chip = (active: boolean) =>
-  cn(
-    "rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
-    active
-      ? "bg-primary/12 text-primary ring-1 ring-primary/40 dark:glow-soft"
-      : "border border-border text-muted-foreground hover:bg-accent",
-  );
 
 /* --- brand hex, made legible on this particular surface -------------------
  * The arc wears the carrier's own brand color, which is the point of it. But
@@ -305,24 +296,25 @@ export function RouteSignalMap({
 
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex flex-wrap items-center gap-1.5">
-        <span className="w-16 shrink-0 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-          Taşıyıcı
-        </span>
-        <button type="button" onClick={() => onCarrierChange(null)} className={chip(!carrier)}>
+      <FilterChipGroup label="Taşıyıcı" labelClassName="w-16 text-[11px] tracking-wide">
+        <FilterChip
+          active={!carrier}
+          onClick={() => onCarrierChange(null)}
+          label="Tüm taşıyıcılar"
+        >
           Tümü
-        </button>
+        </FilterChip>
         {carriersOnMap.map((a) => (
-          <button
+          <FilterChip
             key={a.code}
-            type="button"
+            active={carrier === a.code}
             title={
               CARRIER_HUB[a.code]
                 ? `${a.name} — ${CARRIER_HUB[a.code].code} hattından`
                 : `${a.name} — ana üs kayıtlı değil, yay çizilmez`
             }
             onClick={() => onCarrierChange(carrier === a.code ? null : a.code)}
-            className={cn(chip(carrier === a.code), "flex items-center gap-1 tabular-nums")}
+            className="tabular-nums"
           >
             <span
               className={cn(
@@ -334,9 +326,9 @@ export function RouteSignalMap({
             </span>
             {a.code}
             <span className="opacity-70">{a.count}</span>
-          </button>
+          </FilterChip>
         ))}
-      </div>
+      </FilterChipGroup>
 
       {mapReady ? (
         <div className="rounded-xl border border-border bg-card p-2">

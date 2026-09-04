@@ -2,7 +2,8 @@
 
 import { motion, useReducedMotion } from "framer-motion";
 
-import { chipPop, chipStagger, reduceVariants } from "@/lib/motion";
+import { filterChipClass } from "@/components/ui/filter-chip";
+import { chipPop, chipStagger } from "@/lib/motion";
 import { CATEGORIES, CATEGORY_BY_SLUG, categoryVar, type CategoryDef } from "@/lib/taxonomy";
 import { cn } from "@/lib/utils";
 
@@ -69,8 +70,14 @@ export function CategoryChipRow({
   const reduceMotion = useReducedMotion();
   const ordered = rowCategories(slugs, pinned);
 
-  const stagger = reduceMotion ? reduceVariants(chipStagger) : chipStagger;
-  const pop = reduceMotion ? reduceVariants(chipPop) : chipPop;
+  // The variant SETS are used as written. `useReducedMotion()` disagrees with
+  // itself across the server/client boundary, so picking a different set with
+  // it strands the server's `opacity: 0` in the markup; the preference is
+  // honoured once by `<MotionConfig reducedMotion="user">`. The `transition`
+  // branches further down are a different thing -- a transition emits no
+  // markup, so it has nothing to mismatch on.
+  const stagger = chipStagger;
+  const pop = chipPop;
 
   /** A selected chip burns in its own category color rather than in the one
    * neutral primary fill every row used to share -- the whole point of having
@@ -86,12 +93,16 @@ export function CategoryChipRow({
   };
 
   if (variant === "plain") {
+    // `filterChipClass`, not a local table: this row is one of the seven chip
+    // definitions the app used to carry, and the only one that cannot render
+    // `<FilterChip>` -- each chip here burns in its own taxonomy hue through an
+    // inline style and animates individually. It composes the shared classes
+    // and overrides only the lit colour, so the measure and the focus ring stay
+    // the app's.
     const chip = (active: boolean) =>
-      cn(
-        "rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
-        active
-          ? "ring-1 ring-current/40 dark:glow-soft"
-          : "border border-border text-muted-foreground hover:bg-accent",
+      filterChipClass(
+        active,
+        active && "border-0 bg-transparent ring-1 ring-current/40 dark:glow-soft",
       );
     // Each chip drives its own entrance instead of a stagger-orchestrating
     // parent: a `motion` parent set to `display:contents` (required so this
@@ -118,6 +129,8 @@ export function CategoryChipRow({
             transition={popTransition(0)}
             type="button"
             onClick={() => onChange(null)}
+            aria-pressed={!value}
+            aria-label="Tüm kategoriler"
             className={cn(
               chip(!value),
               !value && "bg-primary/12 text-primary",
@@ -139,6 +152,7 @@ export function CategoryChipRow({
               transition={popTransition(includeAll ? i + 1 : i)}
               type="button"
               onClick={() => onChange(active ? null : c.slug)}
+              aria-pressed={active}
               style={active ? litStyle(c.slug) : undefined}
               className={cn(
                 chip(active),
@@ -175,13 +189,15 @@ export function CategoryChipRow({
           variants={pop}
           type="button"
           onClick={() => onChange(null)}
+          aria-pressed={value === null}
+          aria-label="Tüm kategoriler"
           style={
             value === null
               ? ({ "--glow-color": "var(--primary)" } as React.CSSProperties)
               : undefined
           }
           className={cn(
-            "relative flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold transition-colors",
+            "relative flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
             value === null
               ? "bg-primary/12 text-primary ring-1 ring-primary/40 dark:glow-soft"
               : "text-muted-foreground hover:bg-accent",
@@ -201,13 +217,14 @@ export function CategoryChipRow({
             variants={pop}
             type="button"
             onClick={() => onChange(c.slug)}
+            aria-pressed={active}
             style={
               active
                 ? ({ "--glow-color": categoryVar(c.slug) } as React.CSSProperties)
                 : undefined
             }
             className={cn(
-              "relative flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold transition-colors",
+              "relative flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
               active
                 ? cn(c.textClass, "ring-1 ring-current/40 dark:glow-soft")
                 : isFocus

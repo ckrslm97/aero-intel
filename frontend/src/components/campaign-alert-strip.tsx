@@ -1,44 +1,16 @@
 "use client";
 
-import { BellRing, CircleAlert, Clock, Info, TriangleAlert, type LucideIcon } from "lucide-react";
+import { BellRing, Clock } from "lucide-react";
 import { useCallback } from "react";
 
 import { useDataSource } from "@/hooks/use-data-source";
 import { apiFetch } from "@/lib/api";
 import { relativeTimeTr } from "@/lib/campaigns";
+import { priorityToSeverity, severityMeta } from "@/lib/severity";
 import type { CampaignAlert } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const ALERT_LIMIT = 10;
-
-/** Priority is icon + word + colour. CRITICAL and HIGH are the only two that
- * get a hue at all; MEDIUM and INFO stay neutral, because a strip where every
- * item is coloured tells a reader nothing about which one to read first. */
-const PRIORITY_META: Record<
-  CampaignAlert["priority"],
-  { label: string; icon: LucideIcon; className: string }
-> = {
-  CRITICAL: {
-    label: "Kritik",
-    icon: TriangleAlert,
-    className: "border-critical/40 bg-critical/10 text-critical",
-  },
-  HIGH: {
-    label: "Yüksek",
-    icon: CircleAlert,
-    className: "border-warning/40 bg-warning/10 text-warning",
-  },
-  MEDIUM: {
-    label: "Orta",
-    icon: Info,
-    className: "border-border bg-muted text-muted-foreground",
-  },
-  INFO: {
-    label: "Bilgi",
-    icon: Info,
-    className: "border-border bg-muted text-muted-foreground",
-  },
-};
 
 const TYPE_LABELS: Record<CampaignAlert["alert_type"], string> = {
   NEW: "Yeni kampanya",
@@ -91,14 +63,21 @@ export function CampaignAlertStrip({ limit = ALERT_LIMIT }: { limit?: number }) 
 
       <ul className="flex flex-col gap-1.5">
         {data.map((alert) => {
-          const meta = PRIORITY_META[alert.priority] ?? PRIORITY_META.INFO;
+          // Priority is icon + word + colour, and the table it reads from is
+          // the app's ONE severity ladder (lib/severity.ts) rather than the
+          // fifth private copy that used to live at the top of this file.
+          // `priorityToSeverity` is the single place that says which rung each
+          // of the four alert priorities is. Only the top three rungs take a
+          // hue: a strip where every item is coloured tells a reader nothing
+          // about which one to read first.
+          const meta = severityMeta(priorityToSeverity(alert.priority));
           const Icon = meta.icon;
           return (
             <li
               key={alert.id}
               className={cn(
-                "flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border px-2.5 py-1.5 text-xs",
-                meta.className,
+                "flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg px-2.5 py-1.5 text-xs",
+                meta.pill,
               )}
             >
               <Icon className="size-3.5 shrink-0" aria-hidden />

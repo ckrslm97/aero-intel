@@ -1,6 +1,6 @@
 "use client";
 
-import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import { motion } from "framer-motion";
 import { ChevronDown, Map as MapIcon, Plane, Route } from "lucide-react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
@@ -12,6 +12,7 @@ import { DataSourceError, InlineSourceError } from "@/components/data-source-err
 import { HubNetworkSignals } from "@/components/hub-network-signals";
 import { MotionItem, MotionList } from "@/components/motion/motion-list";
 import { Collapse } from "@/components/ui/collapse";
+import { FilterChip, FilterChipGroup, filterChipClass } from "@/components/ui/filter-chip";
 import { Skeleton } from "@/components/ui/skeleton";
 import { apiFetch } from "@/lib/api";
 
@@ -33,7 +34,7 @@ import {
   type HubView,
   type HubViewState,
 } from "@/lib/hubs";
-import { fadeUpItem, reduceVariants } from "@/lib/motion";
+import { fadeUpItem } from "@/lib/motion";
 import { worldRegions } from "@/lib/nav";
 import { CATEGORY_BY_SLUG, categoryVar } from "@/lib/taxonomy";
 import { CATEGORY_SLUGS } from "@/lib/taxonomy.gen";
@@ -48,15 +49,6 @@ import { cn } from "@/lib/utils";
 const REGION_NAME: Record<string, string> = Object.fromEntries(
   worldRegions.map((r) => [r.slug, r.name]),
 );
-
-/** The lit-chip pattern shared across Gazete / Öneriler / Risk Radarı. */
-const chip = (active: boolean) =>
-  cn(
-    "rounded-full px-2.5 py-1 text-xs font-medium transition-colors",
-    active
-      ? "bg-primary/12 text-primary ring-1 ring-primary/40 dark:glow-soft"
-      : "border border-border text-muted-foreground hover:bg-accent",
-  );
 
 // How many carriers/categories the panel shows before "+N daha". Five keeps
 // the sidebar scannable at a glance; the rest is one click away.
@@ -289,32 +281,26 @@ export function HubsClient() {
             Bağlantıdaki <span className="font-mono font-medium">{selected}</span> izlenen
             hub&apos;lar arasında değil; hiçbir hub seçili değil.
           </span>
-          <button
-            type="button"
-            onClick={() => selectHub(DEFAULT_HUB)}
-            className={chip(false)}
-          >
+          {/* No `active`: this is a way out of a dead deep link, not a filter
+              that can be on or off. */}
+          <FilterChip onClick={() => selectHub(DEFAULT_HUB)}>
             {DEFAULT_HUB}&apos;a dön
-          </button>
+          </FilterChip>
         </p>
       )}
 
       <div className="flex flex-wrap items-center gap-x-5 gap-y-3 rounded-xl border border-border bg-card p-5">
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-            Dönem
-          </span>
+        <FilterChipGroup label="Dönem" className="gap-2">
           {HUB_DAY_OPTIONS.map((option) => (
-            <button
+            <FilterChip
               key={option}
-              type="button"
+              active={days === option}
               onClick={() => setDays(option)}
-              className={chip(days === option)}
             >
               Son {option} gün
-            </button>
+            </FilterChip>
           ))}
-        </div>
+        </FilterChipGroup>
 
         <div className="flex items-center gap-2">
           <label
@@ -343,9 +329,12 @@ export function HubsClient() {
             ))}
           </select>
           {country && (
-            <button type="button" onClick={() => setCountry("")} className={chip(false)}>
+            <FilterChip
+              onClick={() => setCountry("")}
+              label="Ülke filtresini temizle"
+            >
               Temizle
-            </button>
+            </FilterChip>
           )}
           {/* An empty select is a control offering nothing, which reads as
               "the archive has no countries". It has to say which it is. */}
@@ -382,44 +371,50 @@ export function HubsClient() {
         <Skeleton className="h-[380px] w-full rounded-xl" />
       )}
 
-      <div className="flex flex-wrap gap-1.5">
+      <FilterChipGroup label="Hub">
         {overview?.hubs.map((hub) => (
-          <button
+          <FilterChip
             key={hub.code}
-            type="button"
+            active={selected === hub.code}
             onClick={() => selectHub(hub.code === selected ? null : hub.code)}
             className={cn(
-              chip(selected === hub.code),
-              "flex items-center gap-1.5",
+              "gap-1.5",
+              // A hub the archive has nothing on is dimmed rather than hidden:
+              // "IST has 40 articles and BRU has none" is the answer to a
+              // question a reader is actually asking.
               hub.article_count === 0 && selected !== hub.code && "opacity-60",
             )}
           >
             <span className="font-semibold">{hub.code}</span>
             <span className="opacity-70">{hub.article_count}</span>
-          </button>
+          </FilterChip>
         ))}
-      </div>
+      </FilterChipGroup>
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,20rem)_minmax(0,1fr)]">
-        {/* Keyed on the hub code so switching hubs cross-fades the panel
-            instead of silently swapping its text. */}
-        {/* The panel is the selected hub's evidence, and `detail` now belongs
-            to the selected hub by construction: the source blanks it in the
+        {/* Keyed on the hub code so switching hubs remounts the panel instead
+            of silently swapping its text.
+            The panel is the selected hub's evidence, and `detail` belongs to
+            the selected hub by construction: the source blanks it in the
             render the selection changes, so IST's carriers can no longer sit
-            under CDG's heading for the length of a round trip. */}
+            under CDG's heading for the length of a round trip.
+            NO `AnimatePresence`. It was here with `mode="wait"`, which holds
+            the incoming panel back until the outgoing one reports that its
+            exit animation finished -- and in this stack (framer-motion 12 +
+            React 19) that report never arrives. Switching hubs a second time
+            would have left the reader looking at the first hub's panel
+            forever. See components/ui/drawer-shell.tsx. */}
         <div className="flex flex-col gap-2">
-          <AnimatePresence mode="wait" initial={false}>
-            {detail && (
-              <HubDetailPanel
-                key={detail.code}
-                detail={detail}
-                selectedCategory={selectedCategory}
-                onToggleCategory={(slug) =>
-                  setState({ category: selectedCategory === slug ? null : slug })
-                }
-              />
-            )}
-          </AnimatePresence>
+          {detail && (
+            <HubDetailPanel
+              key={detail.code}
+              detail={detail}
+              selectedCategory={selectedCategory}
+              onToggleCategory={(slug) =>
+                setState({ category: selectedCategory === slug ? null : slug })
+              }
+            />
+          )}
           {hubForDetail && detailSource.error && !detail && (
             <InlineSourceError
               message={`${hubForDetail} ayrıntısı okunamadı.`}
@@ -490,7 +485,6 @@ function HubDetailPanel({
   selectedCategory: string | null;
   onToggleCategory: (slug: string) => void;
 }) {
-  const reduceMotion = useReducedMotion();
   const [noteOpen, setNoteOpen] = useState(false);
   const [carriersOpen, setCarriersOpen] = useState(false);
   const [categoriesOpen, setCategoriesOpen] = useState(false);
@@ -509,10 +503,14 @@ function HubDetailPanel({
 
   return (
     <motion.aside
-      variants={reduceMotion ? reduceVariants(fadeUpItem) : fadeUpItem}
+      // No `useReducedMotion()` branch -- `<MotionConfig reducedMotion="user">`
+      // honours the preference once, app-wide. That hook answers false on the
+      // server and true on a client that asked for stillness, so choosing a
+      // variant SET with it leaves the server's `opacity: 0` in the DOM for
+      // exactly the readers who asked for less motion (see lib/motion.ts).
+      variants={fadeUpItem}
       initial="hidden"
       animate="show"
-      exit="exit"
       style={{ "--glow-color": "var(--primary)" } as React.CSSProperties}
       /* border-gradient already layers --card-sheen as its first background
          layer, so it composes the sheen and the gradient frame in one
@@ -666,7 +664,11 @@ function CarrierRow({
 /** A topic filter, not a label: clicking narrows this hub's story list, and
  * clicking the active one clears it. The selected chip burns in its own
  * category hue -- the same lit-chip idiom as Gazete/Öneriler, inline because
- * the slug -> token transform is invisible to Tailwind's scanner. */
+ * the slug -> token transform is invisible to Tailwind's scanner, and composed
+ * off `filterChipClass` for the same reason filters/category-chip-row.tsx is:
+ * the hue is this chip's own business, the 24px measure and the focus ring are
+ * not. It was left at `px-2 py-0.5 text-[11px]` -- an 18px target with no
+ * focus ring -- while the two filter rows above it on the same card moved. */
 function CategoryChip({
   entry,
   active,
@@ -691,11 +693,9 @@ function CategoryChip({
             } as React.CSSProperties)
           : undefined
       }
-      className={cn(
-        "rounded-full px-2 py-0.5 text-[11px] transition-colors",
-        active
-          ? "font-medium ring-1 ring-current/40 dark:glow-soft"
-          : "border border-border text-muted-foreground hover:bg-accent",
+      className={filterChipClass(
+        active,
+        active && "border-0 bg-transparent font-medium ring-1 ring-current/40 dark:glow-soft",
       )}
     >
       {CATEGORY_BY_SLUG[entry.slug]?.label ?? entry.slug} · {entry.count}

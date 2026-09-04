@@ -25,8 +25,8 @@ export type MotionItemVariant = "fadeUp" | "scalePop";
 
 /* NOTE ON REDUCED MOTION -- read before adding a `useReducedMotion()` here.
  *
- * These components used to pick between `variants` and `reduceVariants(...)`
- * with `useReducedMotion()`. That hook answers false on the server and true on
+ * These components used to pick between `variants` and a flattened copy of
+ * them with `useReducedMotion()`. That hook answers false on the server and true on
  * a client that asked for stillness, so the server serialised
  * `opacity: 0; transform: scaleX(0)` while the client rendered
  * `opacity: 1; transform: none` -- a hydration mismatch React declines to

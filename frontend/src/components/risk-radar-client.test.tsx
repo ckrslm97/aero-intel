@@ -91,7 +91,10 @@ describe("RiskRadarClient", () => {
     render(<RiskRadarClient />);
     await screen.findByRole("heading", { name: "Risk Radarı" });
 
-    await user.click(screen.getByRole("button", { name: "14g" }));
+    // "14g" is what the chip PRINTS; "Son 14 gün" is what it is called. The
+    // two-character label is a space constraint on the densest filter panel in
+    // the app, not the control's name.
+    await user.click(screen.getByRole("button", { name: "Son 14 gün" }));
 
     await waitFor(() => expect(currentParams().get("days")).toBe("14"));
     expect(verificationLink()).toBe("/risk-radari/dogrulama?days=14");

@@ -1,10 +1,10 @@
 "use client";
 
-import { AnimatePresence, motion } from "framer-motion";
 import { ChevronLeft, ChevronRight, Plane, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+import { DrawerShell } from "@/components/ui/drawer-shell";
 import { primaryNav } from "@/lib/nav";
 import { cn } from "@/lib/utils";
 
@@ -171,6 +171,31 @@ export function Sidebar({
   );
 }
 
+/** The mobile navigation drawer.
+ *
+ * A REAL MODAL, and now announced as one. It was the only true modal in the
+ * app -- it covers the page, it takes a tap outside to dismiss -- and the only
+ * one with none of a modal's machinery: no `role="dialog"`, no `aria-modal`,
+ * no accessible name, no Escape, no scroll lock behind it, no focus trap, and
+ * nothing returning focus to the hamburger button that opened it. A screen
+ * reader user was handed a `<aside>` full of links with no way to know they
+ * were in an overlay; a keyboard user could Tab straight out of it into the
+ * page underneath and then had no way back.
+ *
+ * It also carried an `AnimatePresence` whose exit never completes in this
+ * stack, so the first close left the backdrop over the page -- on mobile, that
+ * is the whole viewport, and the menu read as having locked the app. All five
+ * of those are `DrawerShell`'s job now.
+ *
+ * `md:hidden` ON BOTH LAYERS, panel AND backdrop. The drawer is only ever
+ * opened by a control that is itself hidden at `md`, but `app-shell.tsx` does
+ * not close it on resize, so a phone rotated to landscape (390 -> 844px, past
+ * the 768px breakpoint) crosses the breakpoint with the menu open. Hiding only
+ * the panel there hides the close button along with it and leaves a
+ * full-viewport black-and-blur backdrop -- plus the shell's body scroll lock --
+ * over an app the reader can no longer reach. Tab does not help either: the
+ * trap pulls focus back into the panel that is now `display:none`.
+ */
 export function MobileSidebar({
   open,
   onClose,
@@ -178,37 +203,27 @@ export function MobileSidebar({
   open: boolean;
   onClose: () => void;
 }) {
+  if (!open) return null;
+
   return (
-    <AnimatePresence>
-      {open && (
-        <>
-          <motion.div
-            className="fixed inset-0 z-40 bg-black/40 md:hidden"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            onClick={onClose}
-          />
-          <motion.aside
-            className="fixed inset-y-0 left-0 z-50 flex w-72 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:hidden"
-            initial={{ x: "-100%" }}
-            animate={{ x: 0 }}
-            exit={{ x: "-100%" }}
-            transition={{ type: "spring", stiffness: 320, damping: 32 }}
-          >
-            <Brand>
-              <button
-                onClick={onClose}
-                aria-label="Menüyü kapat"
-                className="rounded-md p-2 text-sidebar-foreground/70 hover:bg-sidebar-accent"
-              >
-                <X className="size-4" />
-              </button>
-            </Brand>
-            <NavLinks onNavigate={onClose} />
-          </motion.aside>
-        </>
-      )}
-    </AnimatePresence>
+    <DrawerShell
+      onClose={onClose}
+      label="Ana menü"
+      side="left"
+      className="w-72 max-w-[85vw] border-sidebar-border bg-sidebar text-sidebar-foreground md:hidden"
+      overlayClassName="md:hidden"
+    >
+      <Brand>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Menüyü kapat"
+          className="rounded-md p-2 text-sidebar-foreground/70 hover:bg-sidebar-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+        >
+          <X className="size-4" />
+        </button>
+      </Brand>
+      <NavLinks onNavigate={onClose} />
+    </DrawerShell>
   );
 }

@@ -316,6 +316,47 @@ describe("FxBoardTable", () => {
     expect(rows[0].title).toContain("19:50 UTC");
   });
 
+  it("gives the peg row the same visible cells as a normal row, at every width", () => {
+    // The peg badge used to be one `colSpan={3}` cell marked `hidden
+    // sm:table-cell`. A display:none cell leaves the table's column grid
+    // entirely, so below `lg` the row claimed more slots than the grid had and
+    // the "Tahmin" cell was pushed a column to the left of where it belonged --
+    // the badge appeared under the "1G" heading.
+    //
+    // Counting cells per breakpoint class is how this is checkable without a
+    // layout engine: jsdom does not apply Tailwind, so a row's cells are
+    // compared by the visibility classes they carry rather than by what a
+    // browser would paint.
+    render(<FxBoardTable board={board(ALL_PAIRS)} forecasts={[]} />);
+
+    const visibleAt = (row: HTMLElement, width: "base" | "sm" | "lg") =>
+      Array.from(row.querySelectorAll("td")).filter((cell) => {
+        if (cell.className.includes("hidden lg:table-cell")) return width === "lg";
+        if (cell.className.includes("hidden sm:table-cell")) return width !== "base";
+        return true;
+      }).length;
+
+    const normal = screen.getByText("USD/TRY").closest("tr")!;
+    const peg = screen.getByText("USD/SAR").closest("tr")!;
+
+    // No cell may span more than one column: that is the mechanism that made
+    // the two rows disagree in the first place.
+    for (const cell of Array.from(peg.querySelectorAll("td"))) {
+      expect(cell.getAttribute("colspan")).toBeNull();
+    }
+
+    for (const width of ["base", "sm", "lg"] as const) {
+      expect(visibleAt(peg, width)).toBe(visibleAt(normal, width));
+    }
+
+    // And the badge itself is in the always-visible third column, not hidden
+    // away with the week delta -- the peg's own label is the one thing this
+    // row exists to say.
+    const badge = screen.getByText("Sabit · 3,75 (SAMA)").closest("td")!;
+    expect(badge.className).not.toContain("hidden");
+    expect(Array.from(peg.querySelectorAll("td")).indexOf(badge)).toBe(2);
+  });
+
   it("lets the keyboard change the charted pair", async () => {
     // The section byline promises every reader that clicking a row switches
     // the chart. The row used to be a bare <tr onClick>: not focusable, so for

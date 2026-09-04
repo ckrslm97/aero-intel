@@ -23,14 +23,8 @@ const ArticleDrawerContext = createContext<ArticleDrawerValue | null>(null);
 
 export function ArticleDrawerProvider({ children }: { children: React.ReactNode }) {
   const [selected, setSelected] = useState<ArticleOut | null>(null);
-  // Sticks once true: the drawer has to stay mounted after the first open so
-  // AnimatePresence can play its exit animation on close.
-  const [everOpened, setEverOpened] = useState(false);
 
-  const open = useCallback((article: ArticleOut) => {
-    setSelected(article);
-    setEverOpened(true);
-  }, []);
+  const open = useCallback((article: ArticleOut) => setSelected(article), []);
   const close = useCallback(() => setSelected(null), []);
 
   const value = useMemo(() => ({ selected, open, close }), [selected, open, close]);
@@ -38,7 +32,15 @@ export function ArticleDrawerProvider({ children }: { children: React.ReactNode 
   return (
     <ArticleDrawerContext.Provider value={value}>
       {children}
-      {everOpened && <ArticleAnalysisDrawer article={selected} onClose={close} />}
+      {/* `selected && ...` and nothing else. There used to be an `everOpened`
+          flag here that stuck true after the first open, keeping the drawer
+          mounted forever so `AnimatePresence` could play its exit animation --
+          and in this stack that animation never completes, so what actually
+          stayed mounted was a full-screen `fixed inset-0` backdrop that
+          swallowed every click on the page behind it. Nothing plays an exit
+          any more (components/ui/drawer-shell.tsx), so nothing has to outlive
+          the selection. */}
+      {selected && <ArticleAnalysisDrawer article={selected} onClose={close} />}
     </ArticleDrawerContext.Provider>
   );
 }
