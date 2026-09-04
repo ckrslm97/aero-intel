@@ -124,3 +124,64 @@ async def test_unrelated_stories_about_one_airline_stay_separate(db_session):
     await db_session.commit()
 
     assert await deduplicate_translated_articles(db_session) == 0
+
+
+async def test_a_pair_straddling_utc_midnight_still_merges(db_session):
+    """The bucket is a bound on the comparison set, not a claim about dates.
+
+    Two outlets covering one announcement two hours apart used to become
+    invisible to this pass whenever those two hours crossed UTC midnight --
+    permanently, not just on the run that happened to be late. The newspaper
+    then listed the same story twice, which is the one outcome this function
+    exists to prevent. This fixture pins the times either side of a midnight
+    rather than relying on when the suite runs, so it fails for the reason it
+    names and not because of the hour.
+    """
+    source = Source(name="S", url="https://example.com/f2", source_type="rss")
+    entity = Entity(entity_type="airline", name="Arajet", code="DM")
+    db_session.add_all([source, entity])
+    await db_session.flush()
+
+    midnight = datetime.now(timezone.utc).replace(hour=0, minute=30, second=0, microsecond=0)
+    await _story(
+        db_session, source, entity, "https://example.com/es-mid",
+        "Arajet incorpora nuevos servicios adicionales con tecnologia Arcube",
+        "Arajet, Arcube teknolojisi ile yolcular için yeni ek hizmetler sunmaya başladı",
+        midnight - timedelta(hours=2),
+    )
+    await _story(
+        db_session, source, entity, "https://example.com/en-mid",
+        "Arajet introduces new ancillary services for passengers with Arcube technology",
+        "Arajet, Arcube teknolojisi ile yolcular için yeni ek hizmetler tanıtıyor",
+        midnight,
+    )
+    await db_session.commit()
+
+    assert await deduplicate_translated_articles(db_session) == 1
+
+
+async def test_two_days_apart_is_still_two_stories(db_session):
+    """The negative half: widening the comparison by ONE day must not widen it
+    by two. A story and its re-telling 48 hours later are inside the 3-day
+    cutoff but outside the pair this pass is allowed to make."""
+    source = Source(name="S", url="https://example.com/f3", source_type="rss")
+    entity = Entity(entity_type="airline", name="Arajet", code="DM")
+    db_session.add_all([source, entity])
+    await db_session.flush()
+
+    anchor = datetime.now(timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0)
+    await _story(
+        db_session, source, entity, "https://example.com/es-far",
+        "Arajet incorpora nuevos servicios adicionales con tecnologia Arcube",
+        "Arajet, Arcube teknolojisi ile yolcular için yeni ek hizmetler sunmaya başladı",
+        anchor - timedelta(days=2),
+    )
+    await _story(
+        db_session, source, entity, "https://example.com/en-far",
+        "Arajet introduces new ancillary services for passengers with Arcube technology",
+        "Arajet, Arcube teknolojisi ile yolcular için yeni ek hizmetler tanıtıyor",
+        anchor,
+    )
+    await db_session.commit()
+
+    assert await deduplicate_translated_articles(db_session) == 0

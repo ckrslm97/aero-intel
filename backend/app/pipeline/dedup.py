@@ -281,9 +281,24 @@ async def deduplicate_translated_articles(db: AsyncSession) -> int:
     marked = 0
     already: set = set()
     gained_duplicates: set = set()
-    for members in groups.values():
-        if len(members) < 2:
+    # Each bucket is compared against ITSELF AND THE DAY BEFORE IT.
+    #
+    # The day in the key is a bound on the comparison set, not a claim that a
+    # story and its re-telling share a calendar date. Two outlets covering one
+    # announcement two hours apart land in different buckets whenever those two
+    # hours straddle UTC midnight, and the pair was then invisible to this pass
+    # forever -- the newspaper listed the same story twice, which is the exact
+    # thing this function exists to prevent. Measured: the repo's own
+    # cross-language fixture (Spanish + English, two hours apart) merges all day
+    # and stops merging between 00:00 and 02:00 UTC.
+    #
+    # Only members of the CURRENT bucket start a pair, so no pair is examined
+    # twice and the cost stays one bucket wider, not quadratic in the window.
+    for (key, day), members in groups.items():
+        neighbours = groups.get((key, day - timedelta(days=1)), [])
+        if len(members) + len(neighbours) < 2:
             continue
+        members = [*members, *neighbours]
         # Oldest first: the earliest version of a story stays canonical.
         members.sort(key=lambda m: m[0].published_at or m[0].fetched_at)
         for i, (canonical, canonical_tr) in enumerate(members):
