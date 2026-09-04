@@ -12,6 +12,7 @@ from datetime import date, datetime, timedelta, timezone
 import pytest
 
 from app.agents import runner as runner_module
+from app.agents.campaign_airline import STALE_AFTER_DAYS
 from app.agents.runner import run_pipeline_v2
 from app.llm.classify import CampaignExtraction, Classification, ClassificationResult, RiskAssessment
 from app.models.article import Article
@@ -456,7 +457,24 @@ async def test_clustered_articles_share_one_event_and_classification(db_session,
 
 async def test_a_validated_campaign_produces_a_promotion_row(db_session, monkeypatch):
     """Balkanlar %50'ye Varan İndirimle! -- one of only two rows in production
-    that were genuine, correctly-attributed, dated campaigns."""
+    that were genuine, correctly-attributed, dated campaigns.
+
+    THE SALE WINDOW IS RELATIVE TO TODAY, and it has to be. This test used to
+    state 25--27 August 2026 outright, and it passed for exactly as long as the
+    wall clock stayed within `campaign_airline.STALE_AFTER_DAYS` of that
+    window: it went red on 4 September 2026 with `campaigns == 0`, on a commit
+    whose only changes were in the frontend. The product was right -- a sale
+    that closed eight days ago must not be published -- and the test was
+    asserting the calendar rather than the behaviour it names.
+
+    `run_pipeline_v2` takes no clock (the guard reads `date.today()`), so the
+    fixture is what has to move. `test_campaign_airline.py` pins its own TODAY
+    and passes it in; that is the same discipline, applied where it can be.
+    """
+    # An open sale: two days in, closing tomorrow.
+    sale_starts = date.today() - timedelta(days=2)
+    sale_ends = date.today() + timedelta(days=1)
+
     async def _campaign_answer(title, content, *, topic_fragment=""):
         return ClassificationResult(
             article=Outcome.classified(
@@ -473,7 +491,7 @@ async def test_a_validated_campaign_produces_a_promotion_row(db_session, monkeyp
             campaign=Outcome.classified(
                 CampaignExtraction(
                     airline_code="PC", discount_pct=50,
-                    sale_starts=date(2026, 8, 25), sale_ends=date(2026, 8, 27),
+                    sale_starts=sale_starts, sale_ends=sale_ends,
                     travel_starts=None, travel_ends=None, markets={"regions": [], "countries": [], "cities": []},
                 ),
                 certainty=0.9,
@@ -497,10 +515,62 @@ async def test_a_validated_campaign_produces_a_promotion_row(db_session, monkeyp
     assert promotion["airline_code"] == "PC"
     assert promotion["airline_name"] == "Pegasus Airlines"
     assert promotion["discount_pct"] == 50
-    assert promotion["sale_starts"] == date(2026, 8, 25)
+    assert promotion["sale_starts"] == sale_starts
     assert promotion["validation_state"] == "valid"
     assert promotion["confidence_band"] in ("high", "medium")
     assert promotion["event_id"] is not None
+
+
+async def test_a_sale_that_closed_last_week_is_not_persisted(db_session, monkeypatch):
+    """The other half of the rule the first test now depends on.
+
+    `campaign_airline.STALE_AFTER_DAYS` is what silently turned the fixture
+    above red, so the runner should also state the rule out loud: a sale whose
+    window closed longer ago than the tolerance produces no row, and the run
+    still counts the article as published. Without this, moving the first
+    test's dates would have removed the only coverage of the boundary.
+    """
+    closed = date.today() - timedelta(days=STALE_AFTER_DAYS + 1)
+
+    async def _stale_campaign(title, content, *, topic_fragment=""):
+        return ClassificationResult(
+            article=Outcome.classified(
+                Classification(
+                    category="revenue_management", subcategory="promotion",
+                    title_tr="Balkanlar %50'ye Varan İndirimle!",
+                    summary_tr="Pegasus, Balkanlar'a vergiler hariç %50'ye varan indirim sunuyor.",
+                    confidence=0.9, airlines=[{"code": "PC", "name": "Pegasus Airlines", "role": "subject"}],
+                    airports=[], countries=[],
+                ),
+                certainty=0.9,
+            ),
+            risk=Outcome.not_applicable("not_a_risk"),
+            campaign=Outcome.classified(
+                CampaignExtraction(
+                    airline_code="PC", discount_pct=50,
+                    sale_starts=closed - timedelta(days=2), sale_ends=closed,
+                    travel_starts=None, travel_ends=None,
+                    markets={"regions": [], "countries": [], "cities": []},
+                ),
+                certainty=0.9,
+            ),
+        )
+
+    monkeypatch.setattr(runner_module, "classify_article", _stale_campaign)
+
+    source = await _source(db_session, name="Pegasus", trust=0.9)
+    await _article(
+        db_session, source, "https://a.example/balkanlar-kapandi",
+        "Balkanlar %50'ye Varan İndirimle!",
+        content="Pegasus BolBol üyelerine özel Balkanlar hattında indirim kampanyası başladı.",
+    )
+    await db_session.commit()
+
+    stats = await run_pipeline_v2(db_session, limit=10)
+
+    assert stats["campaigns"] == 0
+    assert stats["published"] == 1
+    assert (await db_session.execute(Promotion.__table__.select())).mappings().all() == []
 
 
 async def test_an_expired_titled_campaign_is_not_persisted(db_session, monkeypatch):
