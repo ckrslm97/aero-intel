@@ -1,4 +1,5 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { promotion } from "@/lib/__fixtures__/promotion";
@@ -118,5 +119,115 @@ describe("CampaignDrawer: damgalar okuyucunun saat dilimine göre kaymaz", () =>
 
     expect(cellValue("Son kontrol")).toBe("20 Ağu 2026 22:00 UTC");
     expect(cellValue("İlk tespit")).toBe("20 Ağu 2026 22:00 UTC");
+  });
+});
+
+/** "KAYNAKSIZ KAMPANYA" IS THE STRONGEST CLAIM THIS PANEL CAN MAKE.
+ *
+ * The two history requests used to end in `.catch(() => [])`, so a dead
+ * `/promotions/{id}/sources` produced the same empty array as a campaign
+ * genuinely recorded from no source -- and the section then rendered as
+ * nothing at all. An analyst auditing provenance read that as a finding. */
+describe("CampaignDrawer: geçmiş kaynakları", () => {
+  it("says the source list could not be read rather than dropping the section", async () => {
+    const user = userEvent.setup();
+    apiFetch.mockImplementation((path: string) =>
+      path.endsWith("/sources")
+        ? Promise.reject(new Error("API request failed: 500"))
+        : Promise.resolve([]),
+    );
+
+    open();
+
+    expect(
+      await screen.findByText(/Kaynak listesi okunamadı/),
+    ).toBeInTheDocument();
+
+    apiFetch.mockImplementation((path: string) =>
+      path.endsWith("/sources")
+        ? Promise.resolve([
+            { url: "https://example.test/tk", source_name: "TK", source_tier: "official" },
+          ])
+        : Promise.resolve([]),
+    );
+    await user.click(screen.getByRole("button", { name: /Yeniden dene/ }));
+
+    expect(await screen.findByRole("button", { name: /Kaynaklar/ })).toBeInTheDocument();
+    expect(screen.queryByText(/Kaynak listesi okunamadı/)).not.toBeInTheDocument();
+  });
+
+  it("lets one section fail without taking the other down", async () => {
+    // `allSettled`, not `all`: the version history failing is not a reason to
+    // hide sources that were read perfectly well.
+    apiFetch.mockImplementation((path: string) =>
+      path.endsWith("/versions")
+        ? Promise.reject(new Error("API request failed: 500"))
+        : Promise.resolve([
+            { url: "https://example.test/tk", source_name: "TK", source_tier: "official" },
+          ]),
+    );
+
+    open();
+
+    expect(await screen.findByText("Değişiklik geçmişi okunamadı.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Kaynaklar/ })).toBeInTheDocument();
+    expect(screen.queryByText(/Kaynak listesi okunamadı/)).not.toBeInTheDocument();
+  });
+
+  it("stays silent about both when both simply have nothing", async () => {
+    // The negative half: an answered request with no rows is a measurement, and
+    // the panel's existing rule (a collapsed section only when there is
+    // something to collapse) still holds. No warning is printed over it.
+    apiFetch.mockResolvedValue([]);
+
+    open();
+
+    await screen.findByRole("dialog", { name: "Kampanya ayrıntısı" });
+    await waitFor(() => expect(apiFetch).toHaveBeenCalledTimes(2));
+    expect(screen.queryByText(/okunamadı/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Kaynaklar/ })).not.toBeInTheDocument();
+  });
+
+  it("reports its retry while the retry is running", async () => {
+    // THE DEAD FLAG. `pending` was wired to `settled === null`, which is false
+    // everywhere these two error lines are drawn -- so the one control the
+    // reader has left said "Yeniden dene", stayed enabled and left the error
+    // text unchanged for the whole duration of the request it had just fired.
+    // That is precisely the state RetryButton's `pending` exists to end: the
+    // honest reading of the screen was "nothing happened", and the reader
+    // clicked again.
+    const user = userEvent.setup();
+    apiFetch.mockImplementation((path: string) =>
+      path.endsWith("/sources")
+        ? Promise.reject(new Error("API request failed: 500"))
+        : Promise.resolve([]),
+    );
+
+    open();
+    const failing = await screen.findByRole("button", { name: /Yeniden dene/ });
+
+    // The second attempt is held open: the frame under test is the one after
+    // the click and before the answer.
+    let answerSources: (rows: unknown[]) => void = () => {};
+    apiFetch.mockImplementation((path: string) =>
+      path.endsWith("/sources")
+        ? new Promise((resolve) => {
+            answerSources = resolve;
+          })
+        : Promise.resolve([]),
+    );
+    await user.click(failing);
+
+    const trying = await screen.findByRole("button", { name: /Deneniyor…/ });
+    expect(trying).toBeDisabled();
+    expect(screen.queryByRole("button", { name: /^Yeniden dene/ })).not.toBeInTheDocument();
+    // The error line stays put underneath -- the source has not been read yet,
+    // and the section must not blink out while it is being re-asked.
+    expect(screen.getByText(/Kaynak listesi okunamadı/)).toBeInTheDocument();
+
+    answerSources([
+      { url: "https://example.test/tk", source_name: "TK", source_tier: "official" },
+    ]);
+    expect(await screen.findByRole("button", { name: /Kaynaklar/ })).toBeInTheDocument();
   });
 });

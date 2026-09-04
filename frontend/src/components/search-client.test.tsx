@@ -168,4 +168,77 @@ describe("SearchClient", () => {
       "bg-primary",
     );
   });
+
+  it("keeps the lit chip and the list describing the same query when replies race", async () => {
+    // THE RACE. Two window chips pressed in a second are two requests, and the
+    // first one can answer last. Held as a bare `results`, that late reply
+    // overwrote the newer one: the "Tümü" chip stayed lit above a 7-day list,
+    // and the "N sonuç" line counted it.
+    const user = userEvent.setup();
+    const slow: Array<() => void> = [];
+    apiFetch.mockImplementation((path: string) => {
+      requested.push(path);
+      const days = new URL(path, "http://test").searchParams.get("days");
+      if (days === "7") {
+        return new Promise((resolve) => {
+          slow.push(() =>
+            resolve({ total: 1, items: [{ ...article(), id: "slow", title: "7 günlük sonuç" }] }),
+          );
+        });
+      }
+      return Promise.resolve({ total: 1, items: [article()] });
+    });
+
+    setUrl("/search?q=yak%C4%B1t&window=7d");
+    render(<SearchClient />);
+
+    await user.click(screen.getByRole("button", { name: "Tümü" }));
+    expect(await screen.findByText("Yakıt maliyeti düştü")).toBeInTheDocument();
+
+    await act(async () => {
+      slow.forEach((resolve) => resolve());
+      await Promise.resolve();
+    });
+
+    expect(screen.getByText("Yakıt maliyeti düştü")).toBeInTheDocument();
+    expect(screen.queryByText("7 günlük sonuç")).not.toBeInTheDocument();
+  });
+
+  it("clears the previous list when a search fails, and offers a retry", async () => {
+    // A failed search used to leave the last successful list on screen with a
+    // grey sentence above it -- so the page showed articles under a filter
+    // that had never returned any, which reads as a narrower result set rather
+    // than as an outage.
+    const user = userEvent.setup();
+    serve();
+    setUrl("/search?q=yak%C4%B1t");
+    render(<SearchClient />);
+    await screen.findByText("Yakıt maliyeti düştü");
+
+    apiFetch.mockImplementation((path: string) => {
+      requested.push(path);
+      return Promise.reject(new Error("API request failed: 500"));
+    });
+    await user.click(screen.getByRole("button", { name: "7 gün" }));
+
+    expect(await screen.findByText("Veri geçici olarak kullanılamıyor.")).toBeInTheDocument();
+    expect(screen.queryByText("Yakıt maliyeti düştü")).not.toBeInTheDocument();
+    // ...and no count line either: there is no answer to count.
+    expect(screen.queryByText(/sonuç$/)).not.toBeInTheDocument();
+
+    serve();
+    await user.click(screen.getByRole("button", { name: /Yeniden dene/ }));
+    expect(await screen.findByText("Yakıt maliyeti düştü")).toBeInTheDocument();
+  });
+
+  it("still reports a genuinely empty result set as one", async () => {
+    // The negative half: an answer of zero rows keeps reading as a
+    // measurement, with the Turkish-stemming note that explains it.
+    serve([]);
+    setUrl("/search?q=uydurmakelime");
+    render(<SearchClient />);
+
+    expect(await screen.findByText("Sonuç bulunamadı")).toBeInTheDocument();
+    expect(screen.queryByText("Veri geçici olarak kullanılamıyor.")).not.toBeInTheDocument();
+  });
 });

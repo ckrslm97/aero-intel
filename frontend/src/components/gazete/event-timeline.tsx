@@ -1,9 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
+import { InlineSourceError } from "@/components/data-source-error";
 import { SectionHeader } from "@/components/kokpit/section-header";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useDataSource } from "@/hooks/use-data-source";
 import { apiFetch } from "@/lib/api";
 import { layoutEvents, shiftDay } from "@/lib/event-timeline";
 import {
@@ -90,31 +92,26 @@ function reserveColumns(name: string, span: number): number {
  * about campaigns changed server-side.
  */
 export function EventTimeline({ onSelect }: { onSelect?: (event: EventOut) => void }) {
-  const [events, setEvents] = useState<EventOut[] | null>(null);
-  const [error, setError] = useState(false);
-
   // Read once per mount: the window's origin has to be stable across renders,
   // and the page is not open across a midnight boundary in any meaningful
   // sense.
   const [from] = useState(() => new Date().toISOString().slice(0, 10));
 
-  useEffect(() => {
-    const controller = new AbortController();
-    const params = new URLSearchParams({
-      date_from: from,
-      date_to: shiftDay(from, HORIZON_DAYS - 1),
-    });
-    apiFetch<EventOut[]>(`/events?${params.toString()}`, {
-      cache: "default",
-      signal: controller.signal,
-    })
-      .then(setEvents)
-      .catch((err: unknown) => {
-        if ((err as Error)?.name === "AbortError") return;
-        setError(true);
+  const fetcher = useCallback(
+    (signal: AbortSignal) => {
+      const params = new URLSearchParams({
+        date_from: from,
+        date_to: shiftDay(from, HORIZON_DAYS - 1),
       });
-    return () => controller.abort();
-  }, [from]);
+      return apiFetch<EventOut[]>(`/events?${params.toString()}`, {
+        cache: "default",
+        signal,
+      });
+    },
+    [from],
+  );
+  const source = useDataSource(fetcher, [from]);
+  const events = source.data;
 
   const layout = useMemo(
     () =>
@@ -126,13 +123,20 @@ export function EventTimeline({ onSelect }: { onSelect?: (event: EventOut) => vo
     [events, from],
   );
 
-  if (error) {
+  if (source.error && events === null) {
     return (
       <section className="flex flex-col gap-4">
         <SectionHeader title="EVENT TIMELINE" glowVar={categoryVar("events")} />
-        <p className="text-sm text-muted-foreground">
-          Etkinlik zaman çizelgesi yüklenemedi. Sunucu çalışıyor mu?
-        </p>
+        {/* The section keeps its heading and gains a way back. The rail below
+            hides itself on an empty calendar, so without this line an outage
+            and four empty months would look alike -- and unlike the empty
+            case, this one can be re-asked. */}
+        <InlineSourceError
+          message="Etkinlik zaman çizelgesi okunamadı; takvimde etkinlik olmadığı anlamına gelmez."
+          onRetry={source.retry}
+          pending={source.pending}
+          className="text-sm"
+        />
       </section>
     );
   }

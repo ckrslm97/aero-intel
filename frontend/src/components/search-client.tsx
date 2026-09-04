@@ -1,12 +1,14 @@
 "use client";
 
 import { Search as SearchIcon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ArticleCard } from "@/components/article-card";
+import { DataSourceError } from "@/components/data-source-error";
 import { CategoryChipRow } from "@/components/filters/category-chip-row";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   readEnum,
   readOptionalEnum,
@@ -89,11 +91,33 @@ export function SearchClient() {
     setLastSubmitted(submitted);
     setDraft(submitted);
   }
-  const [results, setResults] = useState<ArticleListOut | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  /** The query the results on screen actually answer. */
-  const [searchedFor, setSearchedFor] = useState<string | null>(null);
+  /** One settled search, tagged with the REQUEST it answers.
+   *
+   * Tagged rather than bare, because the answers do not arrive in the order
+   * the questions were asked. Pressing three window chips in a second fires
+   * three requests, and the reply to "son 7 gün" landing after the reply to
+   * "tümü" left the lit chip labelling another query's list -- and the "N
+   * sonuç" line counting it. The tag makes that unrepresentable: the render
+   * reads this record only while its `path` is still the path the current URL
+   * asks for, the same `sameSelection` gate `useDataSource` applies to `deps`.
+   *
+   * `failed` is carried instead of a separate error slot so an error can never
+   * coexist with a list on screen: a failed request has `data: null`, so the
+   * previous query's articles cannot sit under an error banner looking like a
+   * narrower result set. */
+  const [answer, setAnswer] = useState<{
+    path: string;
+    query: string;
+    data: ArticleListOut | null;
+    failed: boolean;
+  } | null>(null);
+  const [inFlight, setInFlight] = useState(false);
+  const [retryToken, setRetryToken] = useState(0);
+  /** The generation of the newest request; a reply from an older one applies
+   * nothing. Belt to the AbortController's braces -- abort races the promise
+   * callback it is meant to stop, and a cached response can resolve before the
+   * signal is read at all. */
+  const requestId = useRef(0);
 
   const setSearchState = useCallback(
     (next: { q?: string; category?: string | null; window?: string }) => {
@@ -129,33 +153,41 @@ export function SearchClient() {
 
   useEffect(() => {
     // An empty ?q= has nothing to ask for. The previous answer is left in
-    // state untouched and simply not rendered (every result block below is
-    // gated on `submitted`) -- clearing it here would be a setState in an
-    // effect body to produce something the render can already derive.
+    // state untouched and simply not rendered -- `current` below drops it the
+    // moment its `path` stops matching, so no state write is needed to stop
+    // describing a query the URL has left behind.
     if (!requestPath) return;
-    let cancelled = false;
+    const id = (requestId.current += 1);
     const controller = new AbortController();
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- the fetch is driven by the URL; the loading flag must flip with it
-    setLoading(true);
-    setError(null);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the fetch is driven by the URL; the in-flight flag must flip with it
+    setInFlight(true);
     apiFetch<ArticleListOut>(requestPath, { signal: controller.signal })
       .then((data) => {
-        if (cancelled) return;
-        setResults(data);
-        setSearchedFor(submitted);
+        if (id !== requestId.current) return;
+        setAnswer({ path: requestPath, query: submitted, data, failed: false });
       })
       .catch((err: unknown) => {
-        if (cancelled || (err as Error)?.name === "AbortError") return;
-        setError("Arama şu anda kullanılamıyor. Sunucu çalışıyor mu?");
+        if (id !== requestId.current || (err as Error)?.name === "AbortError") return;
+        setAnswer({ path: requestPath, query: submitted, data: null, failed: true });
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (id === requestId.current) setInFlight(false);
       });
     return () => {
-      cancelled = true;
       controller.abort();
     };
-  }, [requestPath, submitted]);
+  }, [requestPath, submitted, retryToken]);
+
+  /** The answer to the question the URL is asking, or null while none exists.
+   * Everything below reads this and never `answer` directly. */
+  const current = answer && answer.path === requestPath ? answer : null;
+  /** A request for THIS question is running, or the URL just changed and the
+   * effect has not fired yet. Without the second half, the frame between a
+   * chip press and the effect would render "Sonuç bulunamadı". */
+  const loading = requestPath !== null && (inFlight || current === null);
+  const results = current?.data ?? null;
+  /** The query the list on screen actually answers. */
+  const searchedFor = current?.query ?? null;
 
   return (
     <div className="flex flex-col gap-6">
@@ -210,25 +242,48 @@ export function SearchClient() {
         </div>
       </div>
 
-      {error && (
-        <p className="rounded-lg border border-dashed border-border p-6 text-sm text-muted-foreground">
-          {error}
-        </p>
+      {/* THE THREE BRANCHES, and nothing between them. The count line, the
+          list and the "Sonuç bulunamadı" panel are all gated on a settled
+          answer to the CURRENT question, so a search that failed can no longer
+          leave the previous query's articles on screen looking like a
+          narrower result set with a warning above them. */}
+      {/* `!current`: a retry of a failed search keeps the error block on
+          screen with its button reading "Deneniyor…", rather than stacking a
+          skeleton underneath it. The skeleton means "nothing settled for this
+          question yet", which is exactly `current === null`. */}
+      {loading && !current && (
+        <div className="flex flex-col divide-y divide-border rounded-xl border border-border bg-card">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <div key={i} className="flex flex-col gap-2 p-4">
+              <Skeleton className="h-4 w-24 rounded-full" />
+              <Skeleton className="h-4 w-3/4" />
+              <Skeleton className="h-3 w-full" />
+            </div>
+          ))}
+        </div>
       )}
 
-      {submitted && searchedFor && !error && (
+      {current?.failed && (
+        <DataSourceError
+          onRetry={() => setRetryToken((token) => token + 1)}
+          lastUpdated={null}
+          pending={inFlight}
+        />
+      )}
+
+      {searchedFor && results && (
         <p className="text-sm text-muted-foreground">
           {/* A real count now: this used to be the page size, so any search
               with more hits than the limit reported exactly the limit. */}
           &ldquo;{searchedFor}&rdquo; için{" "}
-          <span className="tabular-nums">{results?.total ?? 0}</span> sonuç
-          {results && results.items.length < (results.total ?? 0) && (
+          <span className="tabular-nums">{results.total ?? 0}</span> sonuç
+          {results.items.length < (results.total ?? 0) && (
             <span> — ilk {results.items.length} tanesi gösteriliyor</span>
           )}
         </p>
       )}
 
-      {submitted && results && results.items.length > 0 && (
+      {results && results.items.length > 0 && (
         <div className="flex flex-col divide-y divide-border rounded-xl border border-border bg-card">
           {results.items.map((article) => (
             <ArticleCard key={article.id} article={article} />
@@ -236,7 +291,7 @@ export function SearchClient() {
         </div>
       )}
 
-      {submitted && searchedFor && !error && !loading && results?.items.length === 0 && (
+      {results?.items.length === 0 && (
         <div className="rounded-lg border border-dashed border-border p-10 text-center">
           <p className="text-sm font-medium text-foreground">Sonuç bulunamadı</p>
           <p className="mt-1 text-sm text-muted-foreground">

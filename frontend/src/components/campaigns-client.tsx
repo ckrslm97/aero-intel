@@ -13,6 +13,7 @@ import { CampaignFilterBar } from "@/components/campaign-filters";
 import { CampaignSummary, summarise, summaryCaption } from "@/components/campaign-summary";
 import {
   DataSourceError,
+  InlineSourceError,
   LastUpdatedStamp,
   StaleDataBanner,
 } from "@/components/data-source-error";
@@ -181,7 +182,7 @@ export function CampaignsClient() {
     ]);
     return { rows, fresh };
   }, []);
-  const { data, error, loaded, lastUpdated, stale, retry } = useDataSource(fetcher, []);
+  const { data, error, loaded, lastUpdated, pending, stale, retry } = useDataSource(fetcher, []);
 
   // Its own source, so the band failing thins the page by one section rather
   // than blanking the feed under it. Faz 12's per-source contract.
@@ -237,6 +238,11 @@ export function CampaignsClient() {
   // stopped selling is the single most misleading thing this page could print,
   // and a rule that costly should be false in two places before it reaches a
   // reader, not one.
+  /** The expiring source did not answer, and has no earlier answer to fall
+   * back on. Kept apart from `expiring` because the two mean opposite things
+   * and used to be the same empty array. */
+  const expiringUnread = expiringSource.error !== null && expiringSource.data === null;
+
   const expiring = useMemo(
     () =>
       (expiringSource.data ?? []).filter(
@@ -247,7 +253,14 @@ export function CampaignsClient() {
     [expiringSource.data, filters, today],
   );
 
-  const counts = useMemo(() => summarise(filtered, expiring), [filtered, expiring]);
+  // `null`, not `0`, when the band's own source is unread -- see
+  // CampaignSummaryCounts.expiring. "Bitmek üzere: 0" is the single most
+  // actionable sentence this page can print and the one it must never
+  // manufacture from an outage.
+  const counts = useMemo(
+    () => summarise(filtered, expiringUnread ? null : expiring),
+    [filtered, expiring, expiringUnread],
+  );
   const active = hasActiveCampaignFilter(filters);
 
   const feedRows = dated.slice(0, feedLimit);
@@ -279,10 +292,10 @@ export function CampaignsClient() {
       {!loaded ? (
         <Skeleton className="h-96 w-full rounded-lg" />
       ) : error && !promotions ? (
-        <DataSourceError onRetry={retry} lastUpdated={lastUpdated} />
+        <DataSourceError onRetry={retry} lastUpdated={lastUpdated} pending={pending} />
       ) : (
         <>
-          {stale && <StaleDataBanner onRetry={retry} lastUpdated={lastUpdated} />}
+          {stale && <StaleDataBanner onRetry={retry} lastUpdated={lastUpdated} pending={pending} />}
 
           <div className="flex flex-col gap-1.5">
             <CampaignSummary counts={counts} filtered={active} />
@@ -291,7 +304,19 @@ export function CampaignsClient() {
             </p>
           </div>
 
-          <CampaignExpiring rows={expiring} today={today} onSelect={setSelected} />
+          {/* The band hides itself when nothing is closing -- an urgency
+              strip that is empty most days trains a reader to stop looking at
+              it. That rule only holds when "empty" is a measurement, so an
+              unread source gets a line of its own instead of the same silence. */}
+          {expiringUnread ? (
+            <InlineSourceError
+              message="Bitmek üzere olan kampanyalar okunamadı; bu hafta kapanan kampanya olmadığı anlamına gelmez."
+              onRetry={expiringSource.retry}
+              pending={expiringSource.pending}
+            />
+          ) : (
+            <CampaignExpiring rows={expiring} today={today} onSelect={setSelected} />
+          )}
 
           {/* Renders nothing at all when the alerts endpoint is missing or
               down -- see campaign-alert-strip.tsx. */}

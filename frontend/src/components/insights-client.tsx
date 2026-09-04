@@ -2,9 +2,11 @@
 
 import { ArrowRight, Lightbulb, Route } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useCallback } from "react";
 
+import { DataSourceError, StaleDataBanner } from "@/components/data-source-error";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useDataSource } from "@/hooks/use-data-source";
 import { apiFetch } from "@/lib/api";
 import type { InsightsOut } from "@/lib/types";
 
@@ -40,29 +42,21 @@ const NETWORK_SIGNALS_HREF = "/hublar?view=network-signals";
  * competitive-pulse.tsx reads the momentum); nothing here re-draws them.
  */
 export function InsightsClient() {
-  const [data, setData] = useState<InsightsOut | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // On `useDataSource` rather than a hand-rolled fetch, for the retry alone:
+  // the failure branch here was a sentence and nothing else, so a reader who
+  // hit a five-second outage had no way back to the page short of reloading
+  // the route and losing the tab they were on.
+  const { data, error, lastUpdated, pending, stale, retry } = useDataSource(
+    useCallback(
+      (signal: AbortSignal) =>
+        apiFetch<InsightsOut>("/insights", { cache: "default", signal }),
+      [],
+    ),
+    [],
+  );
 
-  useEffect(() => {
-    let cancelled = false;
-    apiFetch<InsightsOut>("/insights", { cache: "default" })
-      .then((d) => {
-        if (!cancelled) setData(d);
-      })
-      .catch(() => {
-        if (!cancelled) setError("İçgörüler yüklenemedi. Sunucu çalışıyor mu?");
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  if (error) {
-    return (
-      <p className="rounded-lg border border-dashed border-border p-6 text-sm text-muted-foreground">
-        {error}
-      </p>
-    );
+  if (error && !data) {
+    return <DataSourceError onRetry={retry} lastUpdated={lastUpdated} pending={pending} />;
   }
   if (!data) {
     return (
@@ -85,6 +79,8 @@ export function InsightsClient() {
           satırlara kadar izlenebilir.
         </p>
       </div>
+
+      {stale && <StaleDataBanner onRetry={retry} lastUpdated={lastUpdated} pending={pending} />}
 
       {data.digest ? (
         <div

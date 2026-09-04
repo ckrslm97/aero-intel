@@ -246,4 +246,67 @@ describe("CampaignsClient", () => {
     expect(seen).toEqual([...seen].sort((a, b) => a - b));
     expect(seen.every((index) => index >= 0)).toBe(true);
   });
+
+  it("refuses to print 'Bitmek üzere: 0' when that source did not answer", async () => {
+    // THE MOST EXPENSIVE ZERO ON THE PAGE. `/promotions/expiring` is its own
+    // request, and its failure used to be caught into `[]` -- so a revenue desk
+    // was told nothing closes this week by the one counter whose entire job is
+    // urgency, and the band under it disappeared to agree.
+    const user = userEvent.setup();
+    searchParams.current = new URLSearchParams();
+    apiFetch.mockImplementation((path: string) => {
+      if (path.startsWith("/promotions/expiring")) {
+        return Promise.reject(new Error("API request failed: 500"));
+      }
+      if (path.startsWith("/promotions/new-count")) return Promise.reject(new Error("404"));
+      if (path.startsWith("/campaign-alerts")) return Promise.reject(new Error("404"));
+      if (path.startsWith("/promotions")) return Promise.resolve([active()]);
+      return Promise.reject(new Error(`unexpected ${path}`));
+    });
+    render(<CampaignsClient />);
+
+    const summary = await screen.findByLabelText("Kampanya özeti");
+    await waitFor(() =>
+      expect(within(summary).getByText("Bitmek üzere").parentElement).toHaveTextContent(
+        "okunamadı",
+      ),
+    );
+    expect(within(summary).getByText("Bitmek üzere").parentElement).not.toHaveTextContent(
+      "Bitmek üzere0",
+    );
+    // ...and the band says so in the reader's own words, with a way to re-ask.
+    expect(
+      screen.getByText(/Bitmek üzere olan kampanyalar okunamadı/),
+    ).toBeInTheDocument();
+
+    apiFetch.mockImplementation((path: string) => {
+      if (path.startsWith("/promotions/expiring")) {
+        return Promise.resolve([
+          active({ id: "soon", title_tr: "Bu hafta kapanıyor", sale_ends: "2026-09-05" }),
+        ]);
+      }
+      if (path.startsWith("/promotions/new-count")) return Promise.reject(new Error("404"));
+      if (path.startsWith("/campaign-alerts")) return Promise.reject(new Error("404"));
+      if (path.startsWith("/promotions")) return Promise.resolve([active()]);
+      return Promise.reject(new Error(`unexpected ${path}`));
+    });
+    await user.click(screen.getByRole("button", { name: /Yeniden dene/ }));
+
+    expect(
+      await screen.findByLabelText("Bitmek üzere olan kampanyalar"),
+    ).toBeInTheDocument();
+  });
+
+  it("still prints a real zero when nothing is actually closing", async () => {
+    // The negative half: an answered `/promotions/expiring` with no rows is a
+    // measurement, and the counter must keep saying "0" for it. Reading
+    // "okunamadı" over a quiet week would be this round's own sin, mirrored.
+    await renderPage({ promotions: [active()], expiring: [] });
+
+    const summary = await screen.findByLabelText("Kampanya özeti");
+    expect(within(summary).getByText("Bitmek üzere").parentElement).toHaveTextContent(
+      "Bitmek üzere0",
+    );
+    expect(screen.queryByText(/kampanyalar okunamadı/)).not.toBeInTheDocument();
+  });
 });

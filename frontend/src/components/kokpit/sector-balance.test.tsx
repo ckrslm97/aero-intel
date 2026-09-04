@@ -112,3 +112,37 @@ describe("SectorBalance", () => {
     expect(screen.getByText("Birim marj (RASK−CASK)")).toBeInTheDocument();
   });
 });
+
+describe("buildBalanceRows: neden boş olduğunu doğru söyler", () => {
+  it("does not blame the two series for having no common year when neither was read", () => {
+    // THE WRONG REASON. One sentence -- "RASK ve CASK'ın ortak bir yılı yok" --
+    // used to be printed over every dash, including the case where the annual
+    // board never answered. It is specific enough that a reader believes it,
+    // and it is a finding about the data invented out of an outage.
+    const margin = buildBalanceRows(null, true)[0];
+    expect(margin.value).toBe("—");
+    expect(margin.title).toBe("IATA yıllık serisi okunamadı; birim marj hesaplanamadı");
+  });
+
+  it("names the series that is actually absent", () => {
+    const onlyRask = buildBalanceRows(
+      board([series("rask", [point(2026, 10.08)], "¢/ASK")]),
+    )[0];
+    expect(onlyRask.title).toBe("CASK serisi bu yanıtta yok");
+
+    const neither = buildBalanceRows(board([]))[0];
+    expect(neither.title).toBe("RASK ve CASK serileri bu yanıtta yok");
+  });
+
+  it("still gives the real reason when both series are present and share no year", () => {
+    // The negative half: the original sentence survives for the case it was
+    // written about, and only for that case.
+    const margin = buildBalanceRows(
+      board([
+        series("rask", [point(2026, 10.08)], "¢/ASK"),
+        series("cask", [point(2024, 9.55)], "¢/ASK"),
+      ]),
+    )[0];
+    expect(margin.title).toBe("RASK ve CASK'ın ortak bir yılı yok");
+  });
+});

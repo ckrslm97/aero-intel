@@ -4,10 +4,11 @@ import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { ChevronDown, Map as MapIcon, Plane, Route } from "lucide-react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import { AirlineLogo } from "@/components/airline-logo";
 import { ArticleCard } from "@/components/article-card";
+import { DataSourceError, InlineSourceError } from "@/components/data-source-error";
 import { HubNetworkSignals } from "@/components/hub-network-signals";
 import { MotionItem, MotionList } from "@/components/motion/motion-list";
 import { Collapse } from "@/components/ui/collapse";
@@ -21,6 +22,7 @@ const HubMap = dynamic(
   () => import("@/components/hub-map").then((m) => m.HubMap),
   { ssr: false, loading: () => <Skeleton className="h-[380px] w-full rounded-xl" /> },
 );
+import { useDataSource } from "@/hooks/use-data-source";
 import { useUrlState } from "@/hooks/use-url-state";
 import {
   DEFAULT_HUB,
@@ -89,49 +91,65 @@ export function HubsClient() {
     [setState],
   );
 
-  const [overview, setOverview] = useState<HubOverviewOut | null>(null);
-  const [detail, setDetail] = useState<HubDetailOut | null>(null);
-  const [countries, setCountries] = useState<CountryOut[]>([]);
-  const [articles, setArticles] = useState<ArticleListOut | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // FOUR SOURCES, FOUR CONTRACTS, EACH KEYED ON THE SELECTION IT ANSWERS.
+  //
+  // These were three hand-rolled effects writing into one shared `error`
+  // string and four state slots that outlived the selection that filled them,
+  // which produced all three of this page's failures at once: switching IST to
+  // CDG left IST's panel and IST's story list under a CDG heading until the
+  // new requests landed; a failed overview left `overview` null forever, so
+  // the map skeleton shimmered with nothing on the way; and every failure was
+  // a dead-end sentence with no retry, blaming the server in the one voice
+  // available for all four sources.
+  //
+  // `useDataSource` blanks each source's data IN THE RENDER its deps change
+  // (see the hook's `sameSelection`), so no heading can ever sit above another
+  // selection's evidence, and every branch below has its own retry.
+  //
+  // Each fetcher is gated on the tab that draws it. Ağ Sinyalleri renders none
+  // of this state and is a landing URL of its own -- İçgörüler links straight
+  // to /hublar?view=network-signals -- so ungated, every reader following that
+  // link paid for /hubs, /taxonomy/countries, /articles and /hubs/IST on first
+  // paint and saw the results of none of them. Resolving `null` rather than
+  // skipping the hook keeps the gate inside the source, where the deps that
+  // re-open it are already listed.
+  const overviewSource = useDataSource(
+    useCallback(
+      (signal: AbortSignal) =>
+        view === "hubs"
+          ? apiFetch<HubOverviewOut | null>(`/hubs?days=${days}`, {
+              cache: "default",
+              signal,
+            })
+          : Promise.resolve(null),
+      [view, days],
+    ),
+    [view, days],
+  );
+  const overview = overviewSource.data;
 
-  // All three request effects below are gated on the tab that draws them.
-  // Ağ Sinyalleri renders none of this state (see the `view` branch in the
-  // JSX), and it is now a landing URL, not a place you arrive at after the
-  // overview has already loaded: İçgörüler links straight to
-  // /hublar?view=network-signals. Ungated, every reader following that link
-  // paid for /hubs, /taxonomy/countries, /articles and /hubs/IST on first
-  // paint and saw the results of none of them. `view` is in the deps, so
-  // switching back to Genel Bakış fetches then.
-  useEffect(() => {
-    if (view !== "hubs") return;
-    let cancelled = false;
-    const controller = new AbortController();
-    Promise.all([
-      apiFetch<HubOverviewOut>(`/hubs?days=${days}`, {
-        cache: "default",
-        signal: controller.signal,
-      }),
-      apiFetch<CountryOut[]>(`/taxonomy/countries?days=${days}`, {
-        cache: "default",
-        signal: controller.signal,
-      }),
-    ])
-      .then(([hubData, countryData]) => {
-        if (cancelled) return;
-        setOverview(hubData);
-        setCountries(countryData);
-        setError(null);
-      })
-      .catch((err: unknown) => {
-        if (cancelled || (err as Error)?.name === "AbortError") return;
-        setError("Hub verisi yüklenemedi. Sunucu çalışıyor mu?");
-      });
-    return () => {
-      cancelled = true;
-      controller.abort();
-    };
-  }, [days, view]);
+  // Its own source, not half of a `Promise.all` with the overview: the country
+  // select and the hub map answer different questions, and one of them going
+  // down should cost its own control rather than the map as well.
+  const countriesSource = useDataSource(
+    useCallback(
+      (signal: AbortSignal) =>
+        view === "hubs"
+          ? apiFetch<CountryOut[] | null>(`/taxonomy/countries?days=${days}`, {
+              cache: "default",
+              signal,
+            })
+          : Promise.resolve(null),
+      [view, days],
+    ),
+    [view, days],
+  );
+  // Memoised so the `?? []` does not hand `countriesByRegion` a fresh array
+  // identity on every render and re-group the whole list for nothing.
+  const countries: CountryOut[] = useMemo(
+    () => countriesSource.data ?? [],
+    [countriesSource.data],
+  );
 
   /** Does the overview list the hub the URL is asking for?
    *
@@ -156,71 +174,52 @@ export function HubsClient() {
    * actively disowned is dropped. */
   const hubForArticles = hubIsKnown === false ? null : selected;
 
-  // The story list. Its own effect and its own request: it answers a question
+  // The story list. Its own source and its own request: it answers a question
   // (`airport` + `country` + `category`) that stays answerable even when the
   // hub panel has nothing to show, so it must not wait on the overview.
-  useEffect(() => {
-    if (view !== "hubs") return;
-    let cancelled = false;
-    const controller = new AbortController();
-
-    // `query`, not `params` -- the hook's `params` is the address bar and this
-    // is the request. They carry different things (the request has `limit`,
-    // the URL has `view`) and one name for both is how they start drifting.
-    const query = new URLSearchParams({ limit: "12" });
-    if (hubForArticles) query.set("airport", hubForArticles);
-    if (country) query.set("country", country);
-    if (selectedCategory) query.set("category", selectedCategory);
-
-    apiFetch<ArticleListOut>(`/articles?${query.toString()}`, {
-      cache: "default",
-      signal: controller.signal,
-    })
-      .then((articleData) => {
-        if (cancelled) return;
-        setArticles(articleData);
-      })
-      .catch((err: unknown) => {
-        if (cancelled || (err as Error)?.name === "AbortError") return;
-        setError("Haberler yüklenemedi.");
-      });
-
-    return () => {
-      cancelled = true;
-      controller.abort();
-    };
-  }, [hubForArticles, country, selectedCategory, view]);
+  const articlesSource = useDataSource(
+    useCallback(
+      (signal: AbortSignal) => {
+        if (view !== "hubs") return Promise.resolve(null);
+        // `query`, not `params` -- the hook's `params` is the address bar and
+        // this is the request. They carry different things (the request has
+        // `limit`, the URL has `view`) and one name for both is how they start
+        // drifting.
+        const query = new URLSearchParams({ limit: "12" });
+        if (hubForArticles) query.set("airport", hubForArticles);
+        if (country) query.set("country", country);
+        if (selectedCategory) query.set("category", selectedCategory);
+        return apiFetch<ArticleListOut | null>(`/articles?${query.toString()}`, {
+          cache: "default",
+          signal,
+        });
+      },
+      [view, hubForArticles, country, selectedCategory],
+    ),
+    [view, hubForArticles, country, selectedCategory],
+  );
+  const articles = articlesSource.data;
 
   // The hub panel. Gated on the overview so an unrecognised `?hub=` never
   // becomes a request: waiting one hop costs a panel that fades in slightly
   // later, and buys a bad deep link an honest sentence instead of a server
-  // error it did not cause.
-  useEffect(() => {
-    if (view !== "hubs") return;
-    if (!hubForDetail) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- clearing a panel whose subject is gone; there is nothing to fetch
-      setDetail(null);
-      return;
-    }
-    let cancelled = false;
-    const controller = new AbortController();
-    apiFetch<HubDetailOut>(`/hubs/${hubForDetail}?days=${days}`, {
-      cache: "default",
-      signal: controller.signal,
-    })
-      .then((hubDetail) => {
-        if (cancelled) return;
-        setDetail(hubDetail);
-      })
-      .catch((err: unknown) => {
-        if (cancelled || (err as Error)?.name === "AbortError") return;
-        setError("Hub ayrıntısı yüklenemedi.");
-      });
-    return () => {
-      cancelled = true;
-      controller.abort();
-    };
-  }, [hubForDetail, days, view]);
+  // error it did not cause. `hubForDetail === null` resolves without asking,
+  // which is also how the panel is cleared when its subject is gone -- no
+  // setState in an effect body for that any more.
+  const detailSource = useDataSource(
+    useCallback(
+      (signal: AbortSignal) =>
+        view === "hubs" && hubForDetail
+          ? apiFetch<HubDetailOut | null>(`/hubs/${hubForDetail}?days=${days}`, {
+              cache: "default",
+              signal,
+            })
+          : Promise.resolve(null),
+      [view, hubForDetail, days],
+    ),
+    [view, hubForDetail, days],
+  );
+  const detail = detailSource.data;
 
   /** Hub selection resets the category: the chips are that hub's own topic
    * mix, so carrying one into a newly-picked hub would silently over-filter
@@ -281,12 +280,6 @@ export function HubsClient() {
         <HubNetworkSignals />
       ) : (
         <>
-      {error && (
-        <p className="rounded-lg border border-critical/40 bg-critical/10 p-3 text-sm text-critical">
-          {error}
-        </p>
-      )}
-
       {/* A deep link naming a hub we do not track. Said plainly and with a way
           out: the alternative is a page that looks filtered to something and
           shows nothing, with no clue that the link is the problem. */}
@@ -354,9 +347,22 @@ export function HubsClient() {
               Temizle
             </button>
           )}
+          {/* An empty select is a control offering nothing, which reads as
+              "the archive has no countries". It has to say which it is. */}
+          {countriesSource.error && !countriesSource.data && (
+            <InlineSourceError
+              message="Ülke listesi okunamadı."
+              onRetry={countriesSource.retry}
+              pending={countriesSource.pending}
+            />
+          )}
         </div>
       </div>
 
+      {/* The map's three branches. The middle one is new: a failed overview
+          left this skeleton shimmering forever, because the only thing that
+          ever replaced it was a successful response that was no longer
+          coming. */}
       {overview ? (
         <div className="overflow-hidden rounded-xl shadow-elev-1">
           <HubMap
@@ -366,6 +372,12 @@ export function HubsClient() {
             onSelect={selectHub}
           />
         </div>
+      ) : overviewSource.error ? (
+        <DataSourceError
+          onRetry={overviewSource.retry}
+          lastUpdated={overviewSource.lastUpdated}
+          pending={overviewSource.pending}
+        />
       ) : (
         <Skeleton className="h-[380px] w-full rounded-xl" />
       )}
@@ -391,18 +403,34 @@ export function HubsClient() {
       <div className="grid gap-6 lg:grid-cols-[minmax(0,20rem)_minmax(0,1fr)]">
         {/* Keyed on the hub code so switching hubs cross-fades the panel
             instead of silently swapping its text. */}
-        <AnimatePresence mode="wait" initial={false}>
-          {detail && (
-            <HubDetailPanel
-              key={detail.code}
-              detail={detail}
-              selectedCategory={selectedCategory}
-              onToggleCategory={(slug) =>
-                setState({ category: selectedCategory === slug ? null : slug })
-              }
+        {/* The panel is the selected hub's evidence, and `detail` now belongs
+            to the selected hub by construction: the source blanks it in the
+            render the selection changes, so IST's carriers can no longer sit
+            under CDG's heading for the length of a round trip. */}
+        <div className="flex flex-col gap-2">
+          <AnimatePresence mode="wait" initial={false}>
+            {detail && (
+              <HubDetailPanel
+                key={detail.code}
+                detail={detail}
+                selectedCategory={selectedCategory}
+                onToggleCategory={(slug) =>
+                  setState({ category: selectedCategory === slug ? null : slug })
+                }
+              />
+            )}
+          </AnimatePresence>
+          {hubForDetail && detailSource.error && !detail && (
+            <InlineSourceError
+              message={`${hubForDetail} ayrıntısı okunamadı.`}
+              onRetry={detailSource.retry}
+              pending={detailSource.pending}
             />
           )}
-        </AnimatePresence>
+          {hubForDetail && !detail && !detailSource.error && (
+            <Skeleton className="h-64 w-full rounded-xl" />
+          )}
+        </div>
 
         <section className="flex flex-col gap-3">
           <h2 className="flex items-center gap-2 text-sm font-semibold">
@@ -413,7 +441,18 @@ export function HubsClient() {
             {country && <span className="text-muted-foreground">· {country}</span>}
           </h2>
 
-          {articles ? (
+          {/* "Bu seçim için haber yok" is a statement about the archive, so it
+              is reachable only from a request that answered THIS selection.
+              The list used to keep the previous hub's stories while the new
+              request was out, and to print the empty sentence when one
+              failed. */}
+          {articlesSource.error && !articles ? (
+            <DataSourceError
+              onRetry={articlesSource.retry}
+              lastUpdated={articlesSource.lastUpdated}
+              pending={articlesSource.pending}
+            />
+          ) : articles ? (
             articles.items.length > 0 ? (
               <MotionList className="divide-y divide-border rounded-xl border border-border bg-card">
                 {articles.items.map((article) => (

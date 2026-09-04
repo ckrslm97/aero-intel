@@ -243,14 +243,27 @@ export function RiskVerificationClient() {
         )}
       </header>
 
-      {(quality.stale || rejected.stale) && (
-        <StaleDataBanner onRetry={quality.retry} lastUpdated={quality.lastUpdated} />
-      )}
-
+      {/* ONE BANNER PER SOURCE, EACH OVER THE SECTION IT IS ABOUT.
+          The two used to share a single banner carrying the funnel's retry and
+          the funnel's "son başarılı" time. When it was the TABLE that had
+          failed, that banner printed a success time belonging to the other
+          endpoint and its button re-fetched the source that was working --
+          a stale badge vouching for a freshness nobody had measured. */}
       <section className="flex flex-col gap-2">
         <h2 className="text-sm font-semibold">Huni</h2>
+        {quality.stale && (
+          <StaleDataBanner
+            onRetry={quality.retry}
+            lastUpdated={quality.lastUpdated}
+            pending={quality.pending}
+          />
+        )}
         {quality.error && !data ? (
-          <DataSourceError onRetry={quality.retry} lastUpdated={quality.lastUpdated} />
+          <DataSourceError
+            onRetry={quality.retry}
+            lastUpdated={quality.lastUpdated}
+            pending={quality.pending}
+          />
         ) : !data ? (
           <Skeleton className="h-80 w-full rounded-xl" />
         ) : (
@@ -298,8 +311,20 @@ export function RiskVerificationClient() {
           ))}
         </div>
 
+        {rejected.stale && (
+          <StaleDataBanner
+            onRetry={rejected.retry}
+            lastUpdated={rejected.lastUpdated}
+            pending={rejected.pending}
+          />
+        )}
+
         {rejected.error && rejected.data === null ? (
-          <DataSourceError onRetry={rejected.retry} lastUpdated={rejected.lastUpdated} />
+          <DataSourceError
+            onRetry={rejected.retry}
+            lastUpdated={rejected.lastUpdated}
+            pending={rejected.pending}
+          />
         ) : !rejected.loaded ? (
           <Skeleton className="h-64 w-full rounded-xl" />
         ) : rows.length === 0 ? (

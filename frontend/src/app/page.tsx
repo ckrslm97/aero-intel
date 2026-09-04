@@ -9,6 +9,7 @@ import { MarketPulseRow } from "@/components/kokpit/market-pulse-row";
 import { SectionHeader } from "@/components/kokpit/section-header";
 import { SectorBalance } from "@/components/kokpit/sector-balance";
 import { SignalStream } from "@/components/kokpit/signal-stream";
+import { ServerSourceError } from "@/components/server-source-error";
 import { apiFetch } from "@/lib/api";
 import type {
   AnnualSeriesBoardOut,
@@ -26,16 +27,51 @@ const LIVE = { cache: "force-cache", next: { revalidate: 60 } } as const;
  * seed file, not between requests. */
 const CURATED = { cache: "force-cache", next: { revalidate: 3600 } } as const;
 
-/** Fetch or fall back to `empty`. Kokpit is nine sections over eleven
- * endpoints, and one of them being down must thin the page, never blank it --
- * the same per-source degradation contract `useDataSource` gives the client
- * components further down, applied to the server-rendered half. */
-async function load<T>(path: string, init: RequestInit & { next?: { revalidate?: number } }, empty: T): Promise<T> {
+/** One server-side source: what it answered, and whether it answered at all.
+ *
+ * `failed` is not derivable from `data`. `/kokpit/fx-forecasts` returning `[]`
+ * and `/kokpit/fx-forecasts` returning 503 produce the same `data` and mean
+ * opposite things -- "no institution published a forecast" versus "we did not
+ * find out". The flag is the only place that difference survives. */
+interface Source<T> {
+  data: T | null;
+  failed: boolean;
+}
+
+/** Fetch, and remember a failure AS a failure.
+ *
+ * Kokpit is nine sections over eleven endpoints, and one of them being down
+ * must thin the page, never blank it -- the same per-source degradation
+ * contract `useDataSource` gives the client components further down, applied
+ * to the server-rendered half.
+ *
+ * This used to swallow the error and return an `empty` value the caller
+ * supplied: `null` for the boards, `[]` for the lists. Downstream that is
+ * indistinguishable from a real answer, so a dead `/kokpit/fx-forecasts`
+ * printed a TAHMİN column with no forecasts in it and a dead
+ * `/kokpit/annual-series` printed "IATA serisi henüz yüklenmedi" -- a sentence
+ * about seeding, over an outage. Nothing here invents a value any more; the
+ * render decides what an unread source looks like, per section. */
+async function load<T>(
+  path: string,
+  init: RequestInit & { next?: { revalidate?: number } },
+): Promise<Source<T>> {
   try {
-    return await apiFetch<T>(path, init);
+    return { data: await apiFetch<T>(path, init), failed: false };
   } catch {
-    return empty;
+    return { data: null, failed: true };
   }
+}
+
+/** The sources a section wanted and did not get, named for the reader.
+ *
+ * A section whose every source failed renders no content at all -- there is
+ * nothing to draw and a skeleton would be a lie about a request that is not
+ * coming. A section that lost SOME of its sources still draws, with this line
+ * above it saying which cells are missing rather than letting the reader read
+ * their absence as a measurement. */
+function missing(entries: readonly (readonly [string, Source<unknown>])[]): string[] {
+  return entries.filter(([, source]) => source.failed).map(([label]) => label);
 }
 
 /**
@@ -154,16 +190,26 @@ export default async function KokpitPage() {
   // and `/kpis` carries only a "vs previous measurement" delta. `/kokpit/pulse`
   // is deliberately NOT fetched -- this page prints no generated prose.
   const [board, energy, signalsOut, annual, forecasts, indicators] = await Promise.all([
-    load<KokpitFxBoardOut | null>("/kokpit/fx", LIVE, null),
-    load<EnergyBoardOut | null>("/kokpit/energy", LIVE, null),
-    load<CockpitSignalsOut | null>("/kokpit/signals", LIVE, null),
-    load<AnnualSeriesBoardOut | null>("/kokpit/annual-series", CURATED, null),
-    load<FxForecastOut[]>("/kokpit/fx-forecasts", CURATED, []),
-    load<IataIndicatorOut[]>("/kokpit/iata?kind=forecast", CURATED, []),
+    load<KokpitFxBoardOut>("/kokpit/fx", LIVE),
+    load<EnergyBoardOut>("/kokpit/energy", LIVE),
+    load<CockpitSignalsOut>("/kokpit/signals", LIVE),
+    load<AnnualSeriesBoardOut>("/kokpit/annual-series", CURATED),
+    load<FxForecastOut[]>("/kokpit/fx-forecasts", CURATED),
+    load<IataIndicatorOut[]>("/kokpit/iata?kind=forecast", CURATED),
   ]);
 
-  const signals = signalsOut?.signals ?? [];
-  const annualSeries = annual?.series ?? [];
+  // The names below are what the ServerSourceError lines print. They are the
+  // reader's words for the source, not the endpoint path: "/kokpit/energy"
+  // tells an RM analyst nothing about which cell went missing.
+  const FX = ["Kur panosu", board] as const;
+  const ENERGY = ["Enerji panosu", energy] as const;
+  const SIGNALS = ["Kokpit sinyalleri", signalsOut] as const;
+  const ANNUAL = ["IATA yıllık serisi", annual] as const;
+  const FORECASTS = ["Kurum kur tahminleri", forecasts] as const;
+  const INDICATORS = ["IATA göstergeleri", indicators] as const;
+
+  const signals = signalsOut.data?.signals ?? [];
+  const annualSeries = annual.data?.series ?? [];
 
   return (
     // 1680 rather than full width: at 2560 a twelve-column row stretches past
@@ -171,7 +217,18 @@ export default async function KokpitPage() {
     // of a 900px screen on nothing, 16 erased the section boundary.
     <div className="mx-auto flex max-w-[1680px] flex-col gap-5">
       {/* 1 --------------------------------------------------------------- */}
-      <CockpitHeader board={board} />
+      {/* The header's "Canlı" badge is earned from the board's own oldest
+          reading, and with no board it does not merely fall silent: it prints
+          an amber "Veri yok" in the top right corner of the product's first
+          screen. That sentence is fine over an empty board and false over a
+          dead endpoint, so the flag goes with the data -- `unavailable` turns
+          it into "Kur panosu okunamadı".
+
+          It still gets no ServerSourceError line of its own: Market Pulse's
+          line, twenty pixels below and naming the same "Kur panosu", already
+          offers the retry, and two identical warnings that close together
+          stop being read as one. */}
+      <CockpitHeader board={board.data} unavailable={board.failed} />
 
       {/* 2 --------------------------------------------------------------- */}
       <section className="flex flex-col gap-2">
@@ -184,11 +241,24 @@ export default async function KokpitPage() {
           // "Haziran 2026" here would go on claiming the old edition after
           // every one of them had moved.
           caption={`Sol üç hücre: ${
-            annual?.scope_tr ?? "IATA Küresel Görünüm · sektör geneli · yıllık"
+            annual.data?.scope_tr ?? "IATA Küresel Görünüm · sektör geneli · yıllık"
           }. Sağ iki hücre: Yahoo, ~15 dk. Yakıt küresel Brent’tir, şirket yakıt maliyeti değildir.`}
           glowVar="var(--signal)"
         />
-        <MarketPulseRow annual={annual} board={board} energy={energy} signals={signals} />
+        {/* Five cells over four sources. Losing one source costs the cells it
+            feeds and no others -- but a cell that is simply absent from the
+            row is read as "there is no such measurement", so the line above
+            names what went missing. All four gone means no cells at all, and
+            an empty five-cell row would be the loudest lie on the page. */}
+        <ServerSourceError sources={missing([ANNUAL, FX, ENERGY, SIGNALS])} />
+        {(annual.data || board.data || energy.data || signalsOut.data) && (
+          <MarketPulseRow
+            annual={annual.data}
+            board={board.data}
+            energy={energy.data}
+            signals={signals}
+          />
+        )}
       </section>
 
       {/* 3 --------------------------------------------------------------- */}
@@ -196,18 +266,30 @@ export default async function KokpitPage() {
         <SectionHeader
           title="Genel KPI"
           caption={`${
-            annual?.scope_tr ?? "IATA Küresel Görünüm · sektör geneli · yıllık"
+            annual.data?.scope_tr ?? "IATA Küresel Görünüm · sektör geneli · yıllık"
           } · TK verisi değil. Tek bileşik sağlık skoru üretilmez.`}
           glowVar="var(--chart-2)"
-          action={annual ? { href: annual.source_url, label: "IATA kaynağı" } : undefined}
+          action={
+            annual.data ? { href: annual.data.source_url, label: "IATA kaynağı" } : undefined
+          }
         />
+        <ServerSourceError sources={missing([ANNUAL])} />
         {/* Six cells in ONE strip, where this was a five-cell strip plus a
             four-column "Sektör Dengesi" panel. Three of that panel's four rows
             were arithmetic on two numbers already printed within two hundred
             pixels of it (see sector-balance.tsx); the fourth, the unit margin,
             is the one figure the page cannot state anywhere else, so it became
             the sixth cell. The section fell from 287px to ~130px. */}
-        <KpiStrip series={annualSeries} trailing={<SectorBalance annual={annual} />} />
+        {/* `unavailable` is the whole point of the flag reaching this far: an
+            empty strip says "IATA serisi henüz yüklenmedi" and an unread one
+            must not, because nothing is going to load. Same for the margin
+            cell, which otherwise blames RASK and CASK for having no common
+            year when the truth is that neither series was read. */}
+        <KpiStrip
+          series={annualSeries}
+          unavailable={annual.failed}
+          trailing={<SectorBalance annual={annual.data} unavailable={annual.failed} />}
+        />
       </section>
 
       {/* 4 --------------------------------------------------------------- */}
@@ -217,7 +299,15 @@ export default async function KokpitPage() {
           caption="Eşiği aşan sürücüler; bileşik skor değil. Kur ve yakıt bantları kendi Market Pulse hücrelerinde. Sayı, eşik ve yöntem karonun üzerine gelince görünür."
           glowVar="var(--chart-4)"
         />
-        <DailySummary signals={signals} />
+        {/* DailySummary's own empty state ("eşiği aşan sürücü yok") is a
+            measurement: the service ran and nothing crossed a threshold. It
+            must never stand in for a request that did not return, so with the
+            source unread the tile is replaced by the line saying so. */}
+        {signalsOut.failed ? (
+          <ServerSourceError sources={missing([SIGNALS])} />
+        ) : (
+          <DailySummary signals={signals} />
+        )}
       </section>
 
       {/* 5 --------------------------------------------------------------- */}
@@ -232,7 +322,13 @@ export default async function KokpitPage() {
           caption="Spot kur ve kurumların kendi tahminleri; asla ortalanmaz. Bir satır seçince sağdaki grafik o pariteye geçer."
           glowVar="var(--primary)"
         />
-        <FxBoardTable board={board} forecasts={forecasts} />
+        {/* The TAHMİN column is the forecasts source; the rows are the board.
+            An unread forecast set leaves every TAHMİN cell empty, which on a
+            table whose whole right half is forecasts reads as "no institution
+            has published one" -- so it is named above rather than inferred
+            from the blanks. */}
+        <ServerSourceError sources={missing([FX, FORECASTS])} />
+        {board.data && <FxBoardTable board={board.data} forecasts={forecasts.data ?? []} />}
       </section>
 
       {/* 6 --------------------------------------------------------------- */}
@@ -240,12 +336,29 @@ export default async function KokpitPage() {
         <SectionHeader
           title="IATA Görünümü"
           caption={`Kaynak: ${
-            annual?.scope_tr ?? "IATA Küresel Görünüm · sektör geneli · yıllık"
+            annual.data?.scope_tr ?? "IATA Küresel Görünüm · sektör geneli · yıllık"
           } · bölgesel kırılım yok.`}
           glowVar="var(--chart-2)"
-          action={annual ? { href: annual.source_url, label: "IATA kaynağı" } : undefined}
+          action={
+            annual.data ? { href: annual.data.source_url, label: "IATA kaynağı" } : undefined
+          }
         />
-        <IataOutlook series={annualSeries} indicators={indicators} />
+        <ServerSourceError sources={missing([ANNUAL, INDICATORS])} />
+        {/* Both flags, for the same reason `KpiStrip` and `SectorBalance` take
+            theirs one section up. This section reads two sources and either
+            can fail alone: an unread series left the panel printing "IATA
+            gelir serisi yüklenmedi" and unread indicators left it printing
+            "Kâr göstergeleri henüz seed edilmedi" -- two confident statements
+            about the DATABASE, manufactured from an HTTP failure, sitting
+            directly under the line above saying the source was not read. */}
+        {(annual.data || indicators.data) && (
+          <IataOutlook
+            series={annualSeries}
+            seriesUnavailable={annual.failed}
+            indicators={indicators.data ?? []}
+            indicatorsUnavailable={indicators.failed}
+          />
+        )}
       </section>
 
       {/* 7 --------------------------------------------------------------- */}

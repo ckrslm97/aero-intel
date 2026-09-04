@@ -1,8 +1,10 @@
 "use client";
 
 import { ExternalLink, Newspaper } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback } from "react";
 
+import { InlineSourceError } from "@/components/data-source-error";
+import { useDataSource } from "@/hooks/use-data-source";
 import { apiFetch } from "@/lib/api";
 import { DISPLAY_TIME_ZONE_TR, formatShortDateTr } from "@/lib/format";
 import { sourceTierLabelTr } from "@/lib/gazete";
@@ -30,34 +32,41 @@ function stamp(iso: string | null): string {
  * thirty joins to serve the one story anyone actually opens.
  *
  * A failure empties the section rather than breaking the drawer -- the article
- * is already on screen, and the corroboration is an elaboration on it.
+ * is already on screen, and the corroboration is an elaboration on it. It says
+ * so, though, and it offers a way back: an unread source list is not a story
+ * nobody else picked up.
+ *
+ * `useDataSource` RATHER THAN TWO HAND-ROLLED FLAGS. The rows were already
+ * keyed by article id -- "could this be another article's sources" had to be
+ * unaskable -- but the failure flag was not, and it was never cleared. One
+ * failed request therefore followed the reader from article to article: the
+ * next story's sources arrived, were held in state, and were hidden behind the
+ * previous story's error, which is the same "another question's answer" bug
+ * the hook's `sameSelection` gate exists to prevent, seen from the other side.
+ * The hook keys BOTH, and brings the retry with it.
  */
 export function ArticleSourcesList({ articleId }: { articleId: string }) {
-  /** Keyed by article id rather than cleared on change: a synchronous reset in
-   * an effect body is a cascading render (and a lint error), and keying makes
-   * "could this be another article's sources" unaskable. */
-  const [loaded, setLoaded] = useState<{ id: string; rows: ArticleSourceOut[] } | null>(null);
-  const [failed, setFailed] = useState(false);
+  const fetcher = useCallback(
+    (signal: AbortSignal) =>
+      apiFetch<ArticleSourceOut[]>(`/articles/${articleId}/sources`, {
+        cache: "default",
+        signal,
+      }),
+    [articleId],
+  );
+  const source = useDataSource(fetcher, [articleId]);
+  const rows = source.data;
 
-  useEffect(() => {
-    let cancelled = false;
-    apiFetch<ArticleSourceOut[]>(`/articles/${articleId}/sources`, { cache: "default" })
-      .then((rows) => {
-        if (!cancelled) setLoaded({ id: articleId, rows });
-      })
-      .catch(() => {
-        if (!cancelled) setFailed(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [articleId]);
-
-  const rows = loaded?.id === articleId ? loaded.rows : null;
-
-  if (failed) {
+  // `error && !data` is the full-error branch: a failed refresh that still has
+  // this article's rows keeps showing them (hooks/use-data-source.ts).
+  if (source.error && rows === null) {
     return (
-      <p className="text-[11px] text-muted-foreground">Kaynak listesi yüklenemedi.</p>
+      <InlineSourceError
+        message="Kaynak listesi okunamadı; bu haberi başka kaynağın işlemediği anlamına gelmez."
+        onRetry={source.retry}
+        pending={source.pending}
+        className="text-[11px]"
+      />
     );
   }
   if (rows === null) {

@@ -44,7 +44,7 @@ export function SignalsClient() {
       apiFetch<SignalsOut>("/signals", { cache: "default", signal }),
     [],
   );
-  const { data, error, loaded, lastUpdated, stale, retry } = useDataSource(fetcher, []);
+  const { data, error, loaded, lastUpdated, pending, stale, retry } = useDataSource(fetcher, []);
 
   // Both chips are URL-owned. This page's whole output is "look at this" --
   // a severity chip that evaporates on reload cannot be sent to the person who
@@ -80,7 +80,7 @@ export function SignalsClient() {
   }
 
   if (error && !data) {
-    return <DataSourceError onRetry={retry} lastUpdated={lastUpdated} />;
+    return <DataSourceError onRetry={retry} lastUpdated={lastUpdated} pending={pending} />;
   }
   if (!data) return null;
 
@@ -104,26 +104,53 @@ export function SignalsClient() {
         </p>
       </header>
 
-      {stale && <StaleDataBanner onRetry={retry} lastUpdated={lastUpdated} />}
+      {stale && <StaleDataBanner onRetry={retry} lastUpdated={lastUpdated} pending={pending} />}
 
       {/* Stream tally. Every contributing stream is listed whether or not it
-          produced anything, so a reader can tell "nothing happened" from "it
-          broke" -- the same structural no-filler rule the Biz sections use. */}
-      <div className="flex flex-wrap gap-x-4 gap-y-1.5 rounded-xl border border-border bg-card p-3 text-[11px]">
+          produced anything -- the same structural no-filler rule the Biz
+          sections use.
+
+          THE EMPTY STATE IS ON SCREEN, NOT IN A TOOLTIP. This block used to
+          claim in a comment that a reader could tell "nothing happened" from
+          "it broke", and then draw the quiet streams as a dim `0`: the only
+          thing separating that from any other zero was a `title` attribute,
+          which a skimming reader never opens and a touch reader cannot reach.
+          So a stream that measured nothing now says "sinyal yok" in words.
+
+          It says "sinyal yok" and NOT "okunamadı" because that is what the
+          field means: `available` is the server's `bool(count)` -- whether the
+          stream produced rows -- not whether it could be read
+          (backend/app/services/signals_service.py:506, pinned by
+          test_every_stream_is_listed_even_when_it_produced_nothing). A stream
+          cannot fail on its own here: `unified_signals` composes all seven in
+          one request, so an unreadable stream is an unreadable RESPONSE, and
+          that is the DataSourceError / StaleDataBanner branch above -- where
+          it can be said once, about the whole band, truthfully. Printing
+          "okunamadı" on a chip that means "zero" would be this round's own
+          sin, mirrored: an outage invented out of a measurement. */}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 rounded-xl border border-border bg-card p-3 text-[11px]">
         <span className="font-semibold uppercase tracking-wider text-muted-foreground">
           {data.total} sinyal · {data.days} gün
         </span>
         {data.streams.map((stream) => (
           <span
             key={stream.key}
-            title={stream.available ? undefined : (stream.empty_message ?? undefined)}
             className={cn(
               "flex items-center gap-1 tabular-nums",
-              stream.available ? "text-foreground" : "text-muted-foreground/70",
+              stream.available ? "text-foreground" : "text-muted-foreground",
             )}
           >
             {stream.label_tr}
-            <span className="font-semibold">{stream.count}</span>
+            {stream.available ? (
+              <span className="font-semibold">{stream.count}</span>
+            ) : (
+              <span
+                title={stream.empty_message ?? undefined}
+                className="rounded-full border border-dashed border-border px-1.5 font-medium"
+              >
+                sinyal yok
+              </span>
+            )}
           </span>
         ))}
       </div>

@@ -5,8 +5,14 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { ArticleCard } from "@/components/article-card";
+import {
+  DataSourceError,
+  InlineSourceError,
+  StaleDataBanner,
+} from "@/components/data-source-error";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useDataSource } from "@/hooks/use-data-source";
 import { useUrlState, writeParam } from "@/hooks/use-url-state";
 import { API_BASE_URL, apiFetch } from "@/lib/api";
 import { DISPLAY_TIME_ZONE, formatDayMonthTr } from "@/lib/format";
@@ -107,17 +113,60 @@ export function ArchiveClient() {
   const category = readCategory(params);
   const urlDate = readDate(params, days);
 
-  const [counts, setCounts] = useState<Record<string, number> | null>(null);
   /** Where the strip landed on its own, for as long as the URL names no day.
    * The URL always wins when it names one -- this is the fallback, not a
    * second source of truth. */
   const [fallbackDay, setFallbackDay] = useState(days[0]);
+
+  // THREE SOURCES, THREE CONTRACTS. Every one of them used to swallow its own
+  // failure into an empty value: the counts into `{}`, which drew a seven-day
+  // strip of honest-looking zeroes; the day's list into a bare sentence with
+  // no way to ask again; the edition list into nothing at all, so "Günlük
+  // Sayılar" simply was not on the page. `useDataSource` is the repo's one
+  // answer to that -- loading / unread / measured, per source, with a retry
+  // that re-asks the CURRENT question and never the previous one.
+  const countsFetcher = useCallback(
+    (signal: AbortSignal) => {
+      const query = new URLSearchParams({ days: String(DAYS) });
+      if (category) query.set("category", category);
+      return apiFetch<Record<string, number>>(
+        `/articles/daily-counts?${query.toString()}`,
+        { cache: "default", signal },
+      );
+    },
+    [category],
+  );
+  // Counts re-fetch when the beat changes, because they are counts OF that
+  // beat. `days` is derived from the clock once per mount and is stable.
+  const countsSource = useDataSource(countsFetcher, [category]);
+  const counts = countsSource.data;
+
   const selected = urlDate ?? fallbackDay;
 
-  const [items, setItems] = useState<ArticleOut[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [editions, setEditions] = useState<EditionSummaryOut[]>([]);
+  const listFetcher = useCallback(
+    (signal: AbortSignal) => {
+      const query = new URLSearchParams({ date: selected, limit: "100" });
+      if (category) query.set("category", category);
+      return apiFetch<ArticleListOut>(`/articles?${query.toString()}`, {
+        cache: "default",
+        signal,
+      });
+    },
+    [selected, category],
+  );
+  const listSource = useDataSource(listFetcher, [selected, category]);
+  const items: ArticleOut[] = listSource.data?.items ?? [];
+
+  // The edition list is a bonus section and never narrows: an edition is the
+  // whole day's paper, so filtering it by beat would print a headline whose
+  // story the filtered page cannot show.
+  const editionsFetcher = useCallback(
+    (signal: AbortSignal) =>
+      apiFetch<EditionSummaryOut[]>("/editions", { cache: "default", signal }),
+    [],
+  );
+  const editionsSource = useDataSource(editionsFetcher, []);
+  const editions: EditionSummaryOut[] = editionsSource.data ?? [];
 
   const setFilters = useCallback(
     (next: { category?: string | null; date?: string | null }) => {
@@ -137,87 +186,25 @@ export function ArchiveClient() {
     [params, replaceParams],
   );
 
-  // The edition list is a bonus section and never narrows: an edition is the
-  // whole day's paper, so filtering it by beat would print a headline whose
-  // story the filtered page cannot show.
+  // The strip's own landing rule, applied to whatever the counts came back
+  // with. It runs on the counts DATA rather than inside the fetch callback so
+  // that a failed counts request moves nothing: a fetch that answered `{}` and
+  // one that answered nothing at all used to be the same value here, and the
+  // second one would have walked the reader to a different day on the strength
+  // of an outage.
   useEffect(() => {
-    let cancelled = false;
-    apiFetch<EditionSummaryOut[]>("/editions", { cache: "default" })
-      .then((data) => {
-        if (!cancelled) setEditions(data);
-      })
-      .catch(() => {
-        /* the edition list is a bonus section -- don't break the page */
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  // Counts re-fetch when the beat changes, because they are counts OF that
-  // beat. `days` is derived from the clock once per mount and is stable.
-  useEffect(() => {
-    let cancelled = false;
-    const controller = new AbortController();
-    const query = new URLSearchParams({ days: String(DAYS) });
-    if (category) query.set("category", category);
-
-    apiFetch<Record<string, number>>(`/articles/daily-counts?${query.toString()}`, {
-      cache: "default",
-      signal: controller.signal,
-    })
-      .then((data) => {
-        if (cancelled) return;
-        setCounts(data);
-        // If the day in view is empty in this beat, open on the newest day
-        // that isn't. Only the fallback moves: a day the reader put in the URL
-        // is a day they asked for, and silently walking away from it would
-        // make the address bar disagree with the page.
-        setFallbackDay((current) =>
-          (data[current] ?? 0) > 0
-            ? current
-            : (days.find((day) => (data[day] ?? 0) > 0) ?? current),
-        );
-      })
-      .catch(() => {
-        if (cancelled || controller.signal.aborted) return;
-        setCounts({});
-      });
-    return () => {
-      cancelled = true;
-      controller.abort();
-    };
-  }, [category, days]);
-
-  useEffect(() => {
-    let cancelled = false;
-    const controller = new AbortController();
-    const query = new URLSearchParams({ date: selected, limit: "100" });
-    if (category) query.set("category", category);
-
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch driven by day/beat selection; the loading flag must flip with it
-    setLoading(true);
-    apiFetch<ArticleListOut>(`/articles?${query.toString()}`, {
-      cache: "default",
-      signal: controller.signal,
-    })
-      .then((data) => {
-        if (cancelled) return;
-        setItems(data.items);
-        setError(null);
-      })
-      .catch((error: unknown) => {
-        if (cancelled || (error as Error)?.name === "AbortError") return;
-        setError("Haberler yüklenemedi. Sunucu çalışıyor mu?");
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-      controller.abort();
-    };
-  }, [selected, category]);
+    if (!counts) return;
+    // If the day in view is empty in this beat, open on the newest day that
+    // isn't. Only the fallback moves: a day the reader put in the URL is a day
+    // they asked for, and silently walking away from it would make the address
+    // bar disagree with the page.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- the landing day is accumulated state, not derivable: it must survive the NEXT counts response (see the "clear the filter and stay put" case in the tests)
+    setFallbackDay((current) =>
+      (counts[current] ?? 0) > 0
+        ? current
+        : (days.find((day) => (counts[day] ?? 0) > 0) ?? current),
+    );
+  }, [counts, days]);
 
   const edition = editions.find((e) => e.edition_date === selected);
   const categoryLabel = category ? (CATEGORY_BY_SLUG[category]?.label ?? category) : null;
@@ -255,12 +242,29 @@ export function ArchiveClient() {
         </div>
       )}
 
+      {/* A DAY BADGE IS A COUNT OR IT IS NOTHING. The counts endpoint failing
+          used to be caught into `{}`, so all seven chips read "0" and the
+          strip stated, in the product's own voice, that a week of the archive
+          was empty. Now the badge shows "—" and this line says why, with a way
+          to ask again. */}
+      {countsSource.error && !counts && (
+        <InlineSourceError
+          message="Gün sayaçları okunamadı; gün rozetleri bu yüzden boş."
+          onRetry={countsSource.retry}
+          pending={countsSource.pending}
+        />
+      )}
+
       {/* Date strip */}
       <div className="flex gap-2 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {days.map((iso) => {
           const { weekday, date } = dayLabel(iso);
           const count = counts?.[iso] ?? 0;
           const active = iso === selected;
+          // Three states, three glyphs: a pending count is "…", an unread one
+          // is "—", and a real one is the number. Only the third is a claim
+          // about the archive.
+          const badge = counts ? String(count) : countsSource.pending ? "…" : "—";
           return (
             <button
               key={iso}
@@ -283,16 +287,27 @@ export function ArchiveClient() {
               </span>
               <span className="text-sm font-semibold">{date}</span>
               <span
+                // The tooltip splits the same three ways the glyph does. It
+                // used to ask only whether `counts` had arrived, so a request
+                // still in flight drew "…" under the words "okunamadı" -- an
+                // error claimed about an answer nobody had yet.
+                title={
+                  counts
+                    ? undefined
+                    : countsSource.pending
+                      ? "Gün sayacı yükleniyor"
+                      : "Bu güne ait haber sayısı okunamadı"
+                }
                 className={cn(
                   "rounded-full px-1.5 text-[10px] font-semibold tabular-nums",
                   active
                     ? "bg-primary-foreground/20"
-                    : counts === null
-                      ? "text-transparent"
-                      : "bg-muted text-muted-foreground",
+                    : counts
+                      ? "bg-muted text-muted-foreground"
+                      : "text-muted-foreground",
                 )}
               >
-                {counts === null ? "…" : count}
+                {badge}
               </span>
             </button>
           );
@@ -324,12 +339,25 @@ export function ArchiveClient() {
         </div>
       )}
 
-      {/* The day's collected articles */}
-      {error ? (
-        <p className="rounded-lg border border-dashed border-border p-6 text-sm text-muted-foreground">
-          {error}
-        </p>
-      ) : loading && items.length === 0 ? (
+      {listSource.stale && (
+        <StaleDataBanner
+          onRetry={listSource.retry}
+          lastUpdated={listSource.lastUpdated}
+          pending={listSource.pending}
+        />
+      )}
+
+      {/* The day's collected articles, in the three branches. The middle one
+          used to be a dead-end sentence with no retry; the last one is the
+          only branch allowed to say the archive collected nothing, and it is
+          now reachable only from a request that actually answered. */}
+      {listSource.error && !listSource.data ? (
+        <DataSourceError
+          onRetry={listSource.retry}
+          lastUpdated={listSource.lastUpdated}
+          pending={listSource.pending}
+        />
+      ) : listSource.loading ? (
         <div className="flex flex-col divide-y divide-border rounded-xl border border-border bg-card">
           {Array.from({ length: 6 }).map((_, i) => (
             <div key={i} className="flex flex-col gap-2 p-4">
@@ -360,7 +388,19 @@ export function ArchiveClient() {
         </div>
       )}
 
-      {/* Full edition archive (PDF list) -- carried over from the old page */}
+      {/* Full edition archive (PDF list) -- carried over from the old page.
+          A failure here used to be swallowed on the grounds that the section
+          is a bonus: the heading and the list both vanished, and a reader who
+          knew the archive had editions saw a page that said otherwise. It is
+          still a bonus -- it does not take the page down -- but it says so. */}
+      {editionsSource.error && !editionsSource.data && (
+        <InlineSourceError
+          message="Günlük sayılar listesi okunamadı."
+          onRetry={editionsSource.retry}
+          pending={editionsSource.pending}
+        />
+      )}
+
       {editions.length > 0 && (
         <div className="flex flex-col gap-2">
           <h2 className="text-sm font-semibold">Günlük Sayılar</h2>

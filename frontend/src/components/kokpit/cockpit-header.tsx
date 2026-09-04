@@ -36,8 +36,25 @@ import { cn } from "@/lib/utils";
  *     can only describe the worst of them, so it is `oldestAsOf` -- the only
  *     board-wide stamp lib/cockpit.ts still exports; the per-pair detail lives
  *     on the rows (fx-board-table.tsx).
+ *
+ * AND ONE THING THE BAND MAY NOT SAY. `board === null` has two causes -- a
+ * board with no pairs on it, and `/kokpit/fx` not answering -- and
+ * `freshnessOf(null)` collapses both into "Veri yok", in amber, in the top
+ * right corner of the product's first screen. To an RM desk that reads as "no
+ * exchange-rate data exists", which is a claim about the world assembled out
+ * of an HTTP failure. `unavailable` is the caller's statement that the request
+ * failed (app/page.tsx passes `board.failed`), and it buys the one honest
+ * sentence available: the board was not read.
  */
-export function CockpitHeader({ board }: { board: KokpitFxBoardOut | null }) {
+export function CockpitHeader({
+  board,
+  /** The FX board request failed, as opposed to answering with an empty board.
+   * Same `board === null` prop, opposite facts -- see the badge below. */
+  unavailable = false,
+}: {
+  board: KokpitFxBoardOut | null;
+  unavailable?: boolean;
+}) {
   const now = useNow();
   const asOf = board ? oldestAsOf(board.pairs) : null;
   const freshness = freshnessOf(asOf, now);
@@ -113,7 +130,9 @@ export function CockpitHeader({ board }: { board: KokpitFxBoardOut | null }) {
               )}
             </>
           ) : (
-            <span className="font-medium text-warning">{freshness.label}</span>
+            <span className="font-medium text-warning">
+              {unavailable ? "Kur panosu okunamadı" : freshness.label}
+            </span>
           )}
         </div>
       </div>

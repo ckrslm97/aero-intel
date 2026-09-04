@@ -143,12 +143,16 @@ describe("NewsSection", () => {
     expect(url.searchParams.get("airline")).toBe("RIVALS");
   });
 
-  it("says the section failed rather than showing it as empty", async () => {
+  it("says the section could not be read, and offers to ask again", async () => {
     // "Nothing happened" and "we could not ask" are different statements, and
-    // a down backend must not be reported as a quiet news day.
+    // a down backend must not be reported as a quiet news day. The retry is
+    // the other half: the old line diagnosed the outage and then left a page
+    // reload as the only move, which discards every filter the reader set to
+    // get to this section.
     apiFetch.mockRejectedValue(new Error("boom"));
     render(<NewsSection categorySlug="airport" filters={DEFAULT_FILTERS} />);
 
-    expect(await screen.findByText(/yüklenemedi/)).toBeInTheDocument();
+    expect(await screen.findByText(/haberleri okunamadı/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Yeniden dene/ })).toBeInTheDocument();
   });
 });

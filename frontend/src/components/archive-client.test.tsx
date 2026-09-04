@@ -258,4 +258,130 @@ describe("ArchiveClient", () => {
     expect(listPaths().every((path) => !path.includes("category"))).toBe(true);
     expect(screen.queryByText("Filtre")).not.toBeInTheDocument();
   });
+
+  it("shows no day counts at all rather than a week of zeroes when the tally fails", async () => {
+    // THE FAILURE THIS ROUND IS NAMED FOR. The counts request used to be caught
+    // into `{}`, so all seven chips read "0" and the strip stated, in the
+    // product's own voice, that a week of the archive was empty. A revenue desk
+    // reading that stops looking.
+    const user = userEvent.setup();
+    apiFetch.mockImplementation((path: string) => {
+      requested.push(path);
+      if (path.startsWith("/articles/daily-counts")) {
+        return Promise.reject(new Error("API request failed: 500"));
+      }
+      if (path.startsWith("/articles")) {
+        return Promise.resolve({ total: 1, items: [article()] });
+      }
+      return Promise.resolve([]);
+    });
+
+    render(<ArchiveClient />);
+
+    expect(
+      await screen.findByText("Gün sayaçları okunamadı; gün rozetleri bu yüzden boş."),
+    ).toBeInTheDocument();
+    // Not one zero anywhere on the strip -- "—" is the only honest badge.
+    const strip = screen.getByText("2 Eyl").closest("button")!;
+    expect(strip).toHaveTextContent("—");
+    expect(strip).not.toHaveTextContent("0");
+
+    // ...and it can be asked again without leaving the day in view.
+    apiFetch.mockImplementation((path: string) => {
+      requested.push(path);
+      if (path.startsWith("/articles/daily-counts")) return Promise.resolve({ [TODAY]: 4 });
+      if (path.startsWith("/articles")) return Promise.resolve({ total: 1, items: [article()] });
+      return Promise.resolve([]);
+    });
+    await user.click(screen.getByRole("button", { name: /Yeniden dene/ }));
+    await waitFor(() => expect(strip).toHaveTextContent("4"));
+  });
+
+  it("does not call an unanswered day counter unreadable", async () => {
+    // The third branch, and the one the tooltip used to swallow. The badge
+    // already drew "…" for a request in flight and "—" for one that failed,
+    // but the accessible text asked only whether `counts` had arrived -- so a
+    // reader hovering a still-loading badge was told the day's count could not
+    // be read, an error asserted about an answer nobody had yet.
+    apiFetch.mockImplementation((path: string) => {
+      requested.push(path);
+      if (path.startsWith("/articles/daily-counts")) return new Promise(() => {});
+      if (path.startsWith("/articles")) {
+        return Promise.resolve({ total: 1, items: [article()] });
+      }
+      return Promise.resolve([]);
+    });
+
+    render(<ArchiveClient />);
+
+    const badge = (await screen.findByText("2 Eyl")).closest("button")!;
+    await waitFor(() => expect(badge).toHaveTextContent("…"));
+    expect(screen.queryByTitle(/okunamadı/)).not.toBeInTheDocument();
+    // All seven day badges, not just the one -- the whole strip is waiting.
+    expect(screen.getAllByTitle("Gün sayacı yükleniyor")).toHaveLength(7);
+    // And nothing anywhere on the strip has yet claimed the tally failed.
+    expect(
+      screen.queryByText("Gün sayaçları okunamadı; gün rozetleri bu yüzden boş."),
+    ).not.toBeInTheDocument();
+  });
+
+  it("never says a day collected nothing when the day's request failed", async () => {
+    const user = userEvent.setup();
+    apiFetch.mockImplementation((path: string) => {
+      requested.push(path);
+      if (path.startsWith("/articles/daily-counts")) return Promise.resolve({ [TODAY]: 4 });
+      if (path.startsWith("/articles")) {
+        return Promise.reject(new Error("API request failed: 500"));
+      }
+      return Promise.resolve([]);
+    });
+
+    render(<ArchiveClient />);
+
+    expect(
+      await screen.findByText("Veri geçici olarak kullanılamıyor."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Bu günde haber toplanmamış")).not.toBeInTheDocument();
+
+    serve({ counts: { "": { [TODAY]: 4 } }, byDay: { [TODAY]: [article()] } });
+    await user.click(screen.getByRole("button", { name: /Yeniden dene/ }));
+    expect(
+      await screen.findByText("Rakip Atlantik ötesi ücretleri düşürdü"),
+    ).toBeInTheDocument();
+  });
+
+  it("still says a day collected nothing when it genuinely did", async () => {
+    // The negative half. An answered request with no rows is a measurement and
+    // keeps its own sentence -- the error branch must not swallow it.
+    serve({ counts: { "": { [TODAY]: 0 } }, byDay: {} });
+
+    render(<ArchiveClient />);
+
+    expect(await screen.findByText("Bu günde haber toplanmamış")).toBeInTheDocument();
+    expect(
+      screen.queryByText("Veri geçici olarak kullanılamıyor."),
+    ).not.toBeInTheDocument();
+  });
+
+  it("says the edition list could not be read rather than dropping the section", async () => {
+    // It is still a bonus section -- it does not take the page down -- but a
+    // silently absent "Günlük Sayılar" is the page asserting there are no
+    // editions.
+    apiFetch.mockImplementation((path: string) => {
+      requested.push(path);
+      if (path.startsWith("/articles/daily-counts")) return Promise.resolve({ [TODAY]: 1 });
+      if (path.startsWith("/articles")) return Promise.resolve({ total: 1, items: [article()] });
+      return Promise.reject(new Error("API request failed: 500"));
+    });
+
+    render(<ArchiveClient />);
+
+    expect(
+      await screen.findByText("Günlük sayılar listesi okunamadı."),
+    ).toBeInTheDocument();
+    // The day's news is untouched: one source down thins the page, never blanks it.
+    expect(
+      screen.getByText("Rakip Atlantik ötesi ücretleri düşürdü"),
+    ).toBeInTheDocument();
+  });
 });

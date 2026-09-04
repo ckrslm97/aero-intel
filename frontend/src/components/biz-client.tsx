@@ -14,12 +14,14 @@ import {
   Star,
 } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useCallback } from "react";
 
 import { ArticleCard } from "@/components/article-card";
+import { DataSourceError } from "@/components/data-source-error";
 import { CountUp } from "@/components/motion/count-up";
 import { MotionItem, MotionList } from "@/components/motion/motion-list";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useDataSource } from "@/hooks/use-data-source";
 import { apiFetch } from "@/lib/api";
 import { formatDateTr } from "@/lib/format";
 import type { ArticleListOut, ArticleOut } from "@/lib/types";
@@ -153,36 +155,41 @@ function PointerCard({
 
 export function BizClient() {
   const reduceMotion = useReducedMotion();
-  const [data, setData] = useState<TkOut | null>(null);
-  const [articles, setArticles] = useState<ArticleOut[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    apiFetch<TkOut>("/tk", { cache: "default" })
-      .then((d) => {
-        if (!cancelled) setData(d);
-      })
-      .catch(() => {
-        if (!cancelled) setError("TK masası yüklenemedi. Sunucu çalışıyor mu?");
-      });
-    apiFetch<ArticleListOut>("/articles?airline=TK&days=60&limit=10", { cache: "default" })
-      .then((d) => {
-        if (!cancelled) setArticles(d.items);
-      })
-      .catch(() => {
-        if (!cancelled) setArticles([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  // TWO SOURCES, TWO CONTRACTS. They used to share one `cancelled` flag and
+  // one error slot, and the news half caught its failure into `[]` -- which
+  // this page then printed as "Son 60 günde TK ile ilişkilendirilmiş haber
+  // yok", a sixty-day claim about the archive manufactured out of one HTTP
+  // error. The review corpus failing left a dead-end sentence with no retry.
+  const tkSource = useDataSource(
+    useCallback(
+      (signal: AbortSignal) => apiFetch<TkOut>("/tk", { cache: "default", signal }),
+      [],
+    ),
+    [],
+  );
+  const newsSource = useDataSource(
+    useCallback(
+      (signal: AbortSignal) =>
+        apiFetch<ArticleListOut>("/articles?airline=TK&days=60&limit=10", {
+          cache: "default",
+          signal,
+        }),
+      [],
+    ),
+    [],
+  );
 
-  if (error) {
+  const data = tkSource.data;
+  const articles: ArticleOut[] | null = newsSource.data?.items ?? null;
+
+  if (tkSource.error && !data) {
     return (
-      <p className="rounded-lg border border-dashed border-border p-6 text-sm text-muted-foreground">
-        {error}
-      </p>
+      <DataSourceError
+        onRetry={tkSource.retry}
+        lastUpdated={tkSource.lastUpdated}
+        pending={tkSource.pending}
+      />
     );
   }
   if (!data) {
@@ -501,7 +508,15 @@ export function BizClient() {
           TK Haberleri{" "}
           <span className="font-normal text-muted-foreground">(son 60 gün)</span>
         </h2>
-        {articles === null ? (
+        {/* The three branches. Only the third is entitled to make the sixty-day
+            claim, and it is now reachable only from a request that answered. */}
+        {newsSource.error && !articles ? (
+          <DataSourceError
+            onRetry={newsSource.retry}
+            lastUpdated={newsSource.lastUpdated}
+            pending={newsSource.pending}
+          />
+        ) : articles === null ? (
           <Skeleton className="h-40 w-full rounded-xl" />
         ) : articles.length === 0 ? (
           <p className="rounded-lg border border-dashed border-border p-6 text-sm text-muted-foreground">

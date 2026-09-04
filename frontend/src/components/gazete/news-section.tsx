@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { ArticleCard } from "@/components/article-card";
+import { InlineSourceError } from "@/components/data-source-error";
 import { SectionHeader } from "@/components/kokpit/section-header";
 import { MotionItem, MotionList } from "@/components/motion/motion-list";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -54,6 +55,8 @@ export function NewsSection({
   const [items, setItems] = useState<ArticleOut[]>([]);
   const [total, setTotal] = useState(0);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
+  /** Bumped by the retry, so the effect below re-runs the SAME query. */
+  const [retryToken, setRetryToken] = useState(0);
 
   const activeWindow = windowOption(filters.window);
   const { subcategory, region, country, airline } = filters;
@@ -99,7 +102,7 @@ export function NewsSection({
       cancelled = true;
       controller.abort();
     };
-  }, [query]);
+  }, [query, retryToken]);
 
   // "3 kritik gelişme", from the server's filtered total rather than from
   // `items.length` -- the two differ exactly when the cap fired, and a caption
@@ -122,9 +125,20 @@ export function NewsSection({
       {state === "loading" ? (
         <SectionSkeleton />
       ) : state === "error" ? (
-        <p className="text-sm text-muted-foreground">
-          {category.label} haberleri yüklenemedi. Sunucu çalışıyor mu?
-        </p>
+        // A WAY BACK, not just a diagnosis. The sentence already told the two
+        // cases apart -- an unread section is not an empty beat -- but it left
+        // the reader with nothing to do about it and a page reload as the only
+        // move, which throws away every filter they set to get here.
+        <InlineSourceError
+          message={`${category.label} haberleri okunamadı; bu dönemde gelişme olmadığı anlamına gelmez.`}
+          onRetry={() => setRetryToken((token) => token + 1)}
+          // No `pending`: the effect flips `state` back to "loading" in the
+          // same commit as the retry, so this line is replaced by the section
+          // skeleton for exactly as long as the request runs. The in-flight
+          // report is the skeleton itself, not a label on a button that is no
+          // longer on screen.
+          className="text-sm"
+        />
       ) : items.length === 0 ? (
         <p className="text-sm text-muted-foreground">
           {activeWindow.unbounded

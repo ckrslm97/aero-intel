@@ -51,7 +51,7 @@ export function HubNetworkSignals() {
       }),
     [],
   );
-  const { data, error, loaded, lastUpdated, stale, retry } = useDataSource(fetcher, []);
+  const { data, error, loaded, lastUpdated, pending, stale, retry } = useDataSource(fetcher, []);
   // Not `data.regions` directly: for up to ~30 minutes after a deploy the edge
   // can still be serving the pre-envelope array body to this new code. See
   // lib/network-signals.ts -- reading it as an envelope only would draw "sinyal
@@ -73,7 +73,7 @@ export function HubNetworkSignals() {
   }
 
   if (error && !groups) {
-    return <DataSourceError onRetry={retry} lastUpdated={lastUpdated} />;
+    return <DataSourceError onRetry={retry} lastUpdated={lastUpdated} pending={pending} />;
   }
 
   if (!groups) return null;
@@ -88,7 +88,7 @@ export function HubNetworkSignals() {
 
   return (
     <div className="flex flex-col gap-6">
-      {stale && <StaleDataBanner onRetry={retry} lastUpdated={lastUpdated} />}
+      {stale && <StaleDataBanner onRetry={retry} lastUpdated={lastUpdated} pending={pending} />}
       <div className="overflow-hidden rounded-xl shadow-elev-1">
         <RouteSignalMap
           signals={flatSignals}

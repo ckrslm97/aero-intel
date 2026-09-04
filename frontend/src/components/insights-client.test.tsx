@@ -1,4 +1,5 @@
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { InsightsClient } from "./insights-client";
@@ -129,15 +130,25 @@ describe("InsightsClient", () => {
     ).toBeInTheDocument();
   });
 
-  it("surfaces a failed load instead of an empty page", async () => {
-    apiFetch.mockRejectedValue(new Error("API request failed: 500"));
+  it("surfaces a failed load instead of an empty page, and offers a way back", async () => {
+    // The failure branch used to be a sentence and nothing else: a reader who
+    // hit a five-second outage could only reload the route. It is now the
+    // house error block, whose retry re-runs the same fetch -- so a second
+    // attempt is one click, and a page that comes back stays on this tab.
+    apiFetch.mockRejectedValueOnce(new Error("API request failed: 500"));
 
     render(<InsightsClient />);
 
     await waitFor(() =>
-      expect(
-        screen.getByText("İçgörüler yüklenemedi. Sunucu çalışıyor mu?"),
-      ).toBeInTheDocument(),
+      expect(screen.getByText("Veri geçici olarak kullanılamıyor.")).toBeInTheDocument(),
     );
+    // No digest sentence, no signpost, no gap pretending to be an answer.
+    expect(screen.queryByText(digest.body)).not.toBeInTheDocument();
+    expect(screen.queryByText("Günün örüntü özeti henüz derlenmedi.")).not.toBeInTheDocument();
+
+    apiFetch.mockResolvedValue(insights());
+    await userEvent.click(screen.getByRole("button", { name: /Yeniden dene/ }));
+
+    expect(await screen.findByText(digest.body)).toBeInTheDocument();
   });
 });

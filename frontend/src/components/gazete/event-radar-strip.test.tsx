@@ -125,6 +125,8 @@ describe("EventRadarStrip", () => {
   });
 
   it("renders nothing at all when there are no events", async () => {
+    // Silence is the honest answer to an ANSWERED request with nothing in it:
+    // a labelled empty rail is a heading over nothing.
     apiFetch.mockResolvedValue([]);
     const { container } = render(<EventRadarStrip />);
 
@@ -132,12 +134,25 @@ describe("EventRadarStrip", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("renders nothing when the request fails", async () => {
+  it("says the radar was not read rather than falling silent", async () => {
+    // THE OTHER HALF, AND THE ONE THAT WAS WRONG. `/events` failing was caught
+    // into a comment and the strip then hid itself on `events.length === 0`,
+    // so an outage and an empty sixty-day calendar were the same pixels: none.
+    // On the paper's only forward-looking surface that costs the reader the
+    // urgency signal the strip exists to carry.
+    const user = userEvent.setup();
     apiFetch.mockRejectedValue(new Error("boom"));
-    const { container } = render(<EventRadarStrip />);
+    render(<EventRadarStrip />);
 
-    await waitFor(() => expect(apiFetch).toHaveBeenCalled());
-    expect(container).toBeEmptyDOMElement();
+    expect(await screen.findByText(/Etkinlik radarı okunamadı/)).toBeInTheDocument();
+    // And it must not turn into a claim about the calendar in the process.
+    expect(screen.queryByText(/etkinlik yok/)).not.toBeInTheDocument();
+
+    apiFetch.mockResolvedValue([event("e1", "IFA Berlin")]);
+    await user.click(screen.getByRole("button", { name: /Yeniden dene/ }));
+
+    expect(await screen.findByText(/1 etkinlik/)).toBeInTheDocument();
+    expect(screen.queryByText(/okunamadı/)).not.toBeInTheDocument();
   });
 
   it("shows an airport chip only when the event has curated airports", async () => {

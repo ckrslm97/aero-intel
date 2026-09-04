@@ -17,7 +17,13 @@ import type { PromotionOut } from "@/lib/types";
 export interface CampaignSummaryCounts {
   active: number;
   upcoming: number;
-  expiring: number;
+  /** NULL WHEN `/promotions/expiring` DID NOT ANSWER, and that is the whole
+   * reason this field is nullable while the other four are not. The four are
+   * computed from rows already on screen, so they cannot fail independently;
+   * this one is its own request. Caught into `[]`, its failure printed
+   * "Bitmek üzere: 0" -- a revenue desk being told that nothing closes this
+   * week by the one number on the page whose entire job is urgency. */
+  expiring: number | null;
   carriers: number;
   routes: number;
 }
@@ -31,7 +37,8 @@ export interface CampaignSummaryCounts {
  * route and is not counted. */
 export function summarise(
   rows: readonly PromotionOut[],
-  expiring: readonly PromotionOut[],
+  /** The expiring rows, or `null` when that source could not be read. */
+  expiring: readonly PromotionOut[] | null,
 ): CampaignSummaryCounts {
   const carriers = new Set<string>();
   const routes = new Set<string>();
@@ -47,7 +54,7 @@ export function summarise(
   return {
     active,
     upcoming,
-    expiring: expiring.length,
+    expiring: expiring === null ? null : expiring.length,
     carriers: carriers.size,
     routes: routes.size,
   };
@@ -61,7 +68,7 @@ export function CampaignSummary({
   /** Whether any filter is lit, so the band can say what it is counting. */
   filtered: boolean;
 }) {
-  const items: { label: string; value: number; hint: string }[] = [
+  const items: { label: string; value: number | null; hint: string }[] = [
     {
       label: "Satıştaki kampanya",
       value: counts.active,
@@ -71,7 +78,10 @@ export function CampaignSummary({
     {
       label: "Bitmek üzere",
       value: counts.expiring,
-      hint: "Satışı 7 gün içinde kapanacak kampanyalar",
+      hint:
+        counts.expiring === null
+          ? "Bu sayaç okunamadı — bu hafta kapanan kampanya olmadığı anlamına gelmez"
+          : "Satışı 7 gün içinde kapanacak kampanyalar",
     },
     { label: "Taşıyıcı", value: counts.carriers, hint: "Listede kampanyası olan havayolu" },
     {
@@ -95,7 +105,14 @@ export function CampaignSummary({
           <dt className="truncate text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
             {item.label}
           </dt>
-          <dd className="text-xl font-semibold leading-none tabular-nums">{item.value}</dd>
+          {/* A count, or the word for "we did not read it". Never a zero
+              standing in for the second one: on this band zero is an
+              instruction to stop worrying. */}
+          {item.value === null ? (
+            <dd className="text-xs font-semibold leading-none text-warning">okunamadı</dd>
+          ) : (
+            <dd className="text-xl font-semibold leading-none tabular-nums">{item.value}</dd>
+          )}
         </div>
       ))}
     </dl>

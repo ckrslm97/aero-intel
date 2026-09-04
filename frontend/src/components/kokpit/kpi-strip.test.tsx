@@ -115,4 +115,27 @@ describe("KpiStrip", () => {
     render(<KpiStrip series={[]} />);
     expect(screen.getByText(/IATA serisi henüz yüklenmedi/)).toBeInTheDocument();
   });
+
+  it("keeps a build command out of the product surface", async () => {
+    // "IATA serisi henüz yüklenmedi. make seed-ingest" was an operator's shell
+    // command printed inside an executive dashboard: nothing the reader can
+    // act on, and an assertion about the DATABASE over what is far more often
+    // a five-second outage.
+    render(<KpiStrip series={[]} />);
+    expect(screen.queryByText(/seed-ingest/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/make /)).not.toBeInTheDocument();
+  });
+
+  it("separates a series that was not read from one that is genuinely empty", async () => {
+    // Same empty `series` prop, opposite facts. Only the second is entitled to
+    // say the series has not been loaded yet.
+    const { unmount } = render(<KpiStrip series={[]} unavailable />);
+    expect(screen.getByText(/IATA yıllık serisi okunamadı/)).toBeInTheDocument();
+    expect(screen.queryByText(/henüz yüklenmedi/)).not.toBeInTheDocument();
+    unmount();
+
+    render(<KpiStrip series={[]} />);
+    expect(screen.getByText(/IATA serisi henüz yüklenmedi/)).toBeInTheDocument();
+    expect(screen.queryByText(/okunamadı/)).not.toBeInTheDocument();
+  });
 });
