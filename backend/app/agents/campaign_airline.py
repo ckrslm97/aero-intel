@@ -276,6 +276,22 @@ LOYALTY_TERMS: tuple[str, ...] = (
     # Transfers: the currency moving between programmes, never a fare.
     "transfer bonus", "bonus transfer", "point transfer", "points transfer",
     "transferable points", "transfer edilebilir", "puan aktarimi",
+    # --- named programmes of the tracked rivals ------------------------------
+    # A programme name alone is enough: "Qatar Airways, Privilege Club
+    # üyelerine 10% indirim sunuyor" was live on the site as a QR fare
+    # campaign, because the list above knew Skywards and BolBol but not the
+    # programmes QR, EY and SQ actually run. Kept to carriers this surface
+    # tracks -- a global airline-programme registry would be maintenance
+    # theatre for feeds that never mention those carriers.
+    "privilege club", "qmiles", "etihad guest", "krisflyer", "kris flyer",
+    # --- the member-audience family ------------------------------------------
+    # A discount gated on programme membership is loyalty content whatever its
+    # dates say: it prices the membership, not the market fare a rival desk
+    # tracks. Exact dative-plural forms only ("üyelerine" = "to its members"),
+    # never a "uye" stem -- "Star Alliance üyesi Lufthansa" is alliance prose
+    # that appears on genuine fare campaigns, and a stem would swallow it.
+    "uyelerine", "uyelere", "uyelerimize",
+    "members only", "member only", "member exclusive", "member discount",
 )
 _LOYALTY = _keyword_pattern(LOYALTY_TERMS)
 
